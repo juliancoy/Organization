@@ -1,0 +1,14 @@
+# Only workspace tooling belongs here; applications are independent clones.
+/*
+!/.gitignore
+!/README.md
+!/repositories.txt
+!/requirements.txt
+!/run.py
+!/local-login
+!/pull-all
+!/pull-all.sh
+!/push-all.sh
+!/tests/
+/tests/*
+!/tests/test_pull_all.py
