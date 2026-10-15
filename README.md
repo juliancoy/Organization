@@ -37,6 +37,7 @@ An optional directory argument chooses another existing checkout parent.
 ./run.py                       # start or refresh the local stack
 ./local-login                  # sign in as a local member
 ./local-login --admin          # sign in as a synthetic local administrator
+./local-login-guest            # local administrator in Chrome Guest mode
 ./run.py --port 9443 --login admin
 ./run.py --login admin --no-open  # print a one-use browser link
 ```

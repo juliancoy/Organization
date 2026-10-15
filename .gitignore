@@ -6,6 +6,7 @@
 !/requirements.txt
 !/run.py
 !/local-login
+!/local-login-guest
 !/pull-all
 !/pull-all.sh
 !/push-all.sh

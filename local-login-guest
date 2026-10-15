@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+"""Sign in as a local administrator in Chrome Guest mode."""
+from pathlib import Path
+import runpy
+import shutil
+import subprocess
+import sys
+import webbrowser
+
+
+def main():
+    helper = Path(__file__).resolve().parent / 'OrgPortal' / 'scripts' / 'local-login.py'
+    if not helper.is_file():
+        sys.exit('Run ./pull-all first to clone OrgPortal.')
+    chrome = next((path for name in ('google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser')
+                   if (path := shutil.which(name))), None)
+    if chrome is None:
+        sys.exit('Install Google Chrome or Chromium to use Guest mode.')
+
+    class GuestBrowser:
+        def open(self, url, new=0, autoraise=True):
+            subprocess.Popen([chrome, '--guest', '--new-window', url],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+
+    webbrowser.register('local-chrome-guest', None, GuestBrowser(), preferred=True)
+    sys.argv = [str(helper), '--admin', *sys.argv[1:]]
+    runpy.run_path(str(helper), run_name='__main__')
+
+
+if __name__ == '__main__':
+    main()
