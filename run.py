@@ -2,6 +2,7 @@
 """Start the shared local portal stack from the Organization directory."""
 import argparse
 import importlib.util
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -35,9 +36,11 @@ def main(argv=None):
     context = subprocess.run(['docker','context','inspect','--format','{{json .Endpoints.docker.Host}}'], capture_output=True, text=True, check=True)
     if not (os.getenv('DOCKER_HOST') or json.loads(context.stdout)).startswith('unix://'):
         raise RuntimeError('Use a local Docker context for this local deployment.')
-    base = (os.getenv('ORGPORTAL_LOCAL_PUBLIC_BASE_URL') or f'https://localhost:{args.port}').rstrip('/')
-    if urlsplit(base).hostname not in {'localhost', '127.0.0.1', '::1'}:
-        raise RuntimeError('The local deployment requires a loopback public URL.')
+    base = (os.getenv('ORGPORTAL_LOCAL_PUBLIC_BASE_URL') or f'https://192.168.50.141:{args.port}').rstrip('/')
+    host = urlsplit(base).hostname
+    if host != 'localhost' and not ipaddress.ip_address(host).is_private:
+        raise RuntimeError('Use a private network address for this deployment.')
+    os.environ.setdefault('ORGPORTAL_LOCAL_BIND_ADDRESS', '192.168.50.141')
     os.environ['ORGPORTAL_LOCAL_GATEWAY_PORT'] = str(args.port)
     os.environ.setdefault('ORGPORTAL_LOCAL_PUBLIC_BASE_URL', base)
     portal = ROOT / 'OrgPortal'
