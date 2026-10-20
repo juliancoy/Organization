@@ -5,3 +5,5 @@ OrgPortal https://github.com/juliancoy/OrgPortal.git
 PIdP https://github.com/juliancoy/PIdP.git
 UBI-Central https://github.com/juliancoy/UBI-Central.git
 bmoremedtech https://github.com/juliancoy/BmoreMedTech.git
+rea https://github.com/morluto/rea.git
+JSec https://github.com/juliancoy/JSec.git

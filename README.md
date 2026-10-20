@@ -1,7 +1,7 @@
 # Organization workspace
 
 Clone and run the Organization ecosystem from one directory. This repository
-contains launcher scripts only. The six applications listed in
+contains launcher scripts and development-tool setup. The repositories listed in
 [repositories.txt](repositories.txt) are ordinary independent Git checkouts,
 ignored by this repository. There are no submodules.
 
@@ -51,6 +51,26 @@ Application changes belong in their respective repositories. Local credentials,
 certificates, databases, dependency directories, and application checkouts are
 excluded from this launcher repository. `push-all.sh` delegates to the existing
 CodeCollective helper; review its behavior there before using it.
+
+## Reverse engineering tools
+
+`./pull-all` also clones or updates the official [REA](https://github.com/morluto/rea)
+source into `rea/`. To prepare the CLI, run:
+
+```bash
+./setup-rea
+./rea-tool --help
+./rea-tool inspect-artifact /absolute/path/to/package.zip --json
+```
+
+Setup requires Git and npm. It caches REA 6.5.0 and its supported Node 24.18.0
+runtime through npm, without changing the system Node installation. The source
+checkout follows upstream through `pull-all`; the executable stays pinned until
+the versions in `rea-tool` are deliberately updated. Native decompilation needs
+a separately configured provider such as Ghidra. CLI use needs no agent restart.
+To configure the Codex integration, first review
+`./rea-tool setup --client codex --dry-run --json`, then apply the reviewed scope
+with `./rea-tool setup --client codex --yes` and reconnect the agent.
 
 ## Verify the workspace scripts
 

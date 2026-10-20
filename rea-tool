@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Use a supported, isolated Node runtime without changing the system default.
+set -euo pipefail
+exec npm exec --yes --package=node@24.18.0 --package=rea-agents@6.5.0 -- rea "$@"

@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Clone the official source and cache the pinned REA CLI/runtime.
+set -euo pipefail
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+if (( $# != 0 )); then
+  printf 'Usage: %s\n' "$0" >&2
+  exit 2
+fi
+command -v git >/dev/null
+command -v npm >/dev/null
+if [[ ! -e "$root/rea" ]]; then
+  git clone -- https://github.com/morluto/rea.git "$root/rea"
+elif [[ ! -d "$root/rea/.git" ]]; then
+  printf 'Refusing to replace non-repository: %s\n' "$root/rea" >&2
+  exit 1
+elif [[ "$(git -C "$root/rea" remote get-url origin)" != https://github.com/morluto/rea.git ]]; then
+  printf 'Expected the official morluto/rea origin in %s\n' "$root/rea" >&2
+  exit 1
+fi
+"$root/rea-tool" --version
+printf '\nREA is ready through %s/rea-tool. Source: %s/rea\n' "$root" "$root"
+printf 'For agent registration, review: ./rea-tool setup --client codex --dry-run --json\n'
