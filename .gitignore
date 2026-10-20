@@ -5,6 +5,9 @@
 !/repositories.txt
 !/requirements.txt
 !/run.py
+!/vm_runner.py
+!/vm/
+/vm/__pycache__/
 !/setup-rea
 !/rea-tool
 !/local-login
@@ -15,3 +18,4 @@
 !/tests/
 /tests/*
 !/tests/test_pull_all.py
+!/tests/test_vm_runner.py

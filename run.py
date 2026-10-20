@@ -20,16 +20,28 @@ def parse_args(argv=None):
     parser.add_argument('--port', type=int, default=os.getenv('ORGPORTAL_LOCAL_GATEWAY_PORT', '8443'), help='Local HTTPS port (default: 8443).')
     parser.add_argument('--login', choices=['member', 'admin'], help='Sign your browser in after startup.')
     parser.add_argument('--no-open', action='store_true', help='Print the one-use login link instead of opening a browser.')
+    parser.add_argument('--vm', action='store_true', help='Run the stack and test suite in a disposable Multipass VM.')
+    parser.add_argument('--vm-cpus', type=int, default=4, help='Multipass virtual CPUs (default: 4).')
+    parser.add_argument('--vm-memory', default='8G', help='Multipass RAM (default: 8G).')
+    parser.add_argument('--vm-disk', default='40G', help='Multipass disk (default: 40G).')
+    parser.add_argument('--vm-timeout', type=int, default=5400, help='Total VM run timeout in seconds (default: 5400).')
     args = parser.parse_args(argv)
     if not 1024 <= args.port <= 65535:
         parser.error('--port must be between 1024 and 65535')
     if args.no_open and not args.login:
         parser.error('--no-open requires --login')
+    if args.vm_cpus < 1 or args.vm_timeout < 1:
+        parser.error('--vm-cpus and --vm-timeout must be positive')
+    if args.vm and (args.login or args.port != 8443 or args.prefix != 'bmoremedtech-' or args.network != 'bmoremedtech'):
+        parser.error('--vm uses its own fixed test namespace and port; omit --login, --port, --prefix and --network overrides')
     return args
 
 
 def main(argv=None):
     args = parse_args(argv)
+    if args.vm:
+        from vm_runner import run_vm
+        return run_vm(ROOT, args)
     if not (ROOT / 'OrgPortal' / 'run.py').is_file() or not (ROOT / 'PIdP' / 'run.py').is_file():
         raise RuntimeError('Missing application repositories. Run ./pull-all first.')
     sys.stdout.reconfigure(line_buffering=True)

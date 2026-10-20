@@ -77,3 +77,38 @@ with `./rea-tool setup --client codex --yes` and reconnect the agent.
 ```bash
 python3 -m unittest discover -s tests
 ```
+
+## Disposable VM test run
+
+Install [Multipass](https://canonical.com/multipass/install), then run:
+
+```bash
+python3 run.py --vm
+# Optional resource limits (default: 4 CPUs, 8 GB RAM, 40 GB disk, 90 minutes):
+python3 run.py --vm --vm-cpus 6 --vm-memory 12G --vm-disk 60G --vm-timeout 7200
+```
+
+This creates a uniquely named Ubuntu 24.04 VM with Docker, Python, Node 24,
+and headless Chromium. It copies the current source from this checkout and its
+`OrgPortal/` and `PIdP/` siblings, including uncommitted, nonignored source files.
+Host directories are never mounted into the VM. Git metadata, ignored files,
+dependency caches, local state, `.env`/`.dev.vars` credentials, `pidp_editme.py`,
+and symlinks are excluded. The guest generates fresh local configuration and
+databases; changes inside the VM do not change host application data.
+
+The guest runs workspace and launcher unit tests, PIdP Python tests, OrgPortal
+frontend tests/build, both Worker test suites/type checks, and PIdP serverless
+tests/type checks. It runs the full launcher twice, exercises member and admin
+`--login --no-open` browser handoffs, then checks local browser-bound
+SSO, brand themes, poster editing, and session persistence across browser and
+container restarts. Synthetic fixture tests run with remote organization
+replication, journal sync, and email delivery disabled. The VM uses localhost
+port 8443 and its own Docker namespace; omit host `--login`, port, and namespace
+overrides. Internet access is needed for Ubuntu, packages, and container images.
+
+Test logs and `summary.json` are copied to `.local-reports/organization-test-*/`.
+The command returns nonzero on a failed check, timeout, or cleanup failure.
+It deletes and purges **only its own VM** after success, failure, Ctrl-C, or
+SIGTERM, using [Multipass's per-instance deletion](https://canonical.com/multipass/docs/latest/reference/command-line-interface/delete/).
+An uncatchable kill or host shutdown can prevent cleanup; the printed VM name
+can then be removed with `multipass delete --purge <name>`.
