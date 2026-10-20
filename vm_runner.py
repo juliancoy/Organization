@@ -63,11 +63,11 @@ def run_vm(root, args):
     launched = False
     status = 1
 
-    def command(*parts):
+    def command(*parts, input=None):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise subprocess.TimeoutExpired(parts, args.vm_timeout)
-        subprocess.run(['multipass', *map(str, parts)], check=True, timeout=remaining)
+        subprocess.run(['multipass', *map(str, parts)], check=True, timeout=remaining, input=input, text=True)
 
     def interrupted(signum, frame):
         raise KeyboardInterrupt
@@ -75,20 +75,29 @@ def run_vm(root, args):
     previous = signal.signal(signal.SIGTERM, interrupted)
     print(f'VM: {name}\nReports: {report}', flush=True)
     try:
-        with tempfile.TemporaryDirectory(prefix='organization-vm-') as temporary:
+        # Snap-packaged Multipass has a private /tmp; keep transfer files in the
+        # workspace and stream cloud-init so both clients can access the inputs.
+        with tempfile.TemporaryDirectory(prefix='organization-vm-', dir=root) as temporary:
             temporary = Path(temporary)
             bundle = temporary / 'source.tar.gz'
             snapshot(root, bundle)
-            cloud = temporary / 'cloud-init.yaml'
-            cloud.write_text(CLOUD_INIT)
             # Mark before launch so partially created VMs are cleaned up too.
             launched = True
             command('launch', '24.04', '--name', name, '--cpus', args.vm_cpus,
-                    '--memory', args.vm_memory, '--disk', args.vm_disk, '--cloud-init', cloud)
+                    '--memory', args.vm_memory, '--disk', args.vm_disk, '--timeout', args.vm_timeout,
+                    '--cloud-init', '-', input=CLOUD_INIT)
             command('exec', name, '--', 'sudo', 'cloud-init', 'status', '--wait')
+            image_archive = getattr(args, 'vm_image_archive', None)
+            if image_archive:
+                # Keep the transfer input visible to snap-packaged Multipass.
+                images = temporary / 'runtime-images.tar'
+                shutil.copyfile(image_archive, images)
+                command('transfer', images, f'{name}:/home/ubuntu/runtime-images.tar')
+                command('exec', name, '--', 'bash', '-c',
+                        'docker load -i /home/ubuntu/runtime-images.tar && rm /home/ubuntu/runtime-images.tar')
             command('transfer', bundle, f'{name}:/home/ubuntu/source.tar.gz')
             command('exec', name, '--', 'bash', '-c',
-                    'mkdir -p /home/ubuntu/Organization && tar -xzf /home/ubuntu/source.tar.gz -C /home/ubuntu/Organization && rm /home/ubuntu/source.tar.gz')
+                    'mkdir -p /home/ubuntu/Organization && tar --touch -xzf /home/ubuntu/source.tar.gz -C /home/ubuntu/Organization && rm /home/ubuntu/source.tar.gz')
             command('exec', name, '--', 'bash', '/home/ubuntu/Organization/vm/bootstrap.sh')
             command('exec', name, '--', '/home/ubuntu/Organization/.venv/bin/python', '/home/ubuntu/Organization/vm/guest_tests.py')
             status = 0

@@ -19,13 +19,20 @@ for repo in . OrgPortal PIdP; do
   git -C "$repo" config user.name 'Disposable VM Test'
   git -C "$repo" config user.email 'vm-test@example.invalid'
   git -C "$repo" add .
-  git -C "$repo" commit -m 'Current source snapshot for disposable VM tests'
+  git -C "$repo" commit --quiet -m 'Current source snapshot for disposable VM tests'
 done
 for package in OrgPortal/web OrgPortal/org-worker OrgPortal/chat-worker PIdP/serverless; do
-  npm --prefix "$package" ci
+  npm --prefix "$package" ci --prefer-offline --no-audit --no-fund
+done
+# Seed only the guest's freshly downloaded package content into its runtime
+# caches. Container recreation then reuses these downloads as well.
+for cache in ORGPORTAL_DEV_NPM_CACHE ORGPORTAL_ORG_WORKER_NPM_CACHE ORGPORTAL_CHAT_WORKER_NPM_CACHE; do
+  docker run --rm -v /home/ubuntu/.npm/_cacache:/seed:ro \
+    -v "bmoremedtech-${cache}:/target" busybox:latest \
+    sh -ec 'mkdir -p /target/_cacache; cp -a /seed/. /target/_cacache/'
 done
 # Both the existing Python and JavaScript checks expect this browser path.
-.venv/bin/python -m playwright install --with-deps chromium
+.venv/bin/python -m playwright install --with-deps --no-shell chromium
 browser=$(.venv/bin/python -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()')
 sudo ln -s "$browser" /usr/local/bin/google-chrome
 sudo ln -s "$browser" /usr/bin/google-chrome

@@ -25,6 +25,7 @@ def parse_args(argv=None):
     parser.add_argument('--vm-memory', default='8G', help='Multipass RAM (default: 8G).')
     parser.add_argument('--vm-disk', default='40G', help='Multipass disk (default: 40G).')
     parser.add_argument('--vm-timeout', type=int, default=5400, help='Total VM run timeout in seconds (default: 5400).')
+    parser.add_argument('--vm-image-archive', type=Path, help='Optional docker-save archive to preload inside the VM.')
     args = parser.parse_args(argv)
     if not 1024 <= args.port <= 65535:
         parser.error('--port must be between 1024 and 65535')
@@ -34,6 +35,8 @@ def parse_args(argv=None):
         parser.error('--vm-cpus and --vm-timeout must be positive')
     if args.vm and (args.login or args.port != 8443 or args.prefix != 'bmoremedtech-' or args.network != 'bmoremedtech'):
         parser.error('--vm uses its own fixed test namespace and port; omit --login, --port, --prefix and --network overrides')
+    if args.vm_image_archive and (not args.vm or not args.vm_image_archive.is_file()):
+        parser.error('--vm-image-archive requires --vm and an existing docker-save archive')
     return args
 
 
