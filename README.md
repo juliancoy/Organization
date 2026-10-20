@@ -11,7 +11,10 @@ Give your AI agent this prompt:
 > everything. Reuse it if it already exists. Do not require a project-specific
 > virtual environment.
 >
-> If you make substantial code improvements, commit and push them to my fork
+> If Docker or other requirements of this project are not installed, guide me to install them
+> Run "python run.py" until it works, and tell me how to open the local deployment in my browser
+>
+> If you make code improvements, commit to your own fork, then submit a pull request
 > and submit a pull request to the appropriate upstream repository. For changes
 > in an application repository pulled by the script, fork that repository before
 > pushing and submit its pull request separately. Verify that the application
