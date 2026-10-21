@@ -86,6 +86,9 @@ Install [Multipass](https://canonical.com/multipass/install), then run:
 python3 run.py --vm
 # Optional resource limits (default: 4 CPUs, 8 GB RAM, 40 GB disk, 90 minutes):
 python3 run.py --vm --vm-cpus 6 --vm-memory 12G --vm-disk 60G --vm-timeout 7200
+# Reuse downloaded public runtime images instead of pulling them again:
+docker save -o /path/to/runtimes.tar postgres:15-alpine node:22-bookworm-slim node:24-alpine python:3.11-slim nginx:alpine busybox:latest curlimages/curl:8.4.0
+python3 run.py --vm --vm-image-archive /path/to/runtimes.tar
 ```
 
 This creates a uniquely named Ubuntu 24.04 VM with Docker, Python, Node 24,
@@ -96,7 +99,8 @@ dependency caches, local state, `.env`/`.dev.vars` credentials, `pidp_editme.py`
 and symlinks are excluded. The guest generates fresh local configuration and
 databases; changes inside the VM do not change host application data.
 
-The guest runs workspace and launcher unit tests, PIdP Python tests, OrgPortal
+The guest runs workspace and launcher unit tests, PIdP Python tests (including
+the real PostgreSQL OAuth checks in a separate disposable test database), OrgPortal
 frontend tests/build, both Worker test suites/type checks, and PIdP serverless
 tests/type checks. It runs the full launcher twice, exercises member and admin
 `--login --no-open` browser handoffs, then checks local browser-bound

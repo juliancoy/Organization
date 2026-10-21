@@ -22,6 +22,7 @@ def main():
                ORGPORTAL_LOCAL_EMAIL_SENDING_ENABLED='false',
                ORGPORTAL_SESSION_TEST_PREFIX='bmoremedtech-',
                ORGPORTAL_SESSION_TEST_NETWORK='bmoremedtech',
+               PIDP_OAUTH_TEST_DATABASE_URL='postgresql+asyncpg://test:vm-test@127.0.0.1:5432/oauth_test',
                BROWSER_BINARY='/usr/bin/google-chrome', CHROME_BIN='/usr/bin/google-chrome')
     checks = []
 
@@ -39,11 +40,22 @@ def main():
         checks.append({'check': label, 'exitCode': code, 'seconds': round(time.monotonic() - start, 1)})
         (RESULTS / 'summary.json').write_text(json.dumps(checks, indent=2) + '\n')
         print(f'{label}: {"PASS" if code == 0 else "FAIL"} (see {label}.log)', flush=True)
+        if code and label.startswith(('stack-', 'launcher-')):
+            # Capture runtime failures before another startup recreates containers.
+            for service in ['identity-api', 'community-api', 'chat-api', 'community-web', 'nginx-gateway']:
+                with (RESULTS / f'{label}-{service}.log').open('w') as log:
+                    subprocess.run(['docker', 'logs', '--tail', '200', f'lifetech-{service}'],
+                                   stdout=log, stderr=subprocess.STDOUT, timeout=30)
         return code == 0
 
     run('workspace-unit', [sys.executable, '-m', 'unittest', 'discover', '-s', 'tests'])
     run('portal-launcher-unit', [sys.executable, '-m', 'unittest', 'discover', '-s', 'scripts', '-p', 'test_local_*.py'], 'OrgPortal')
     run('service-names-unit', [sys.executable, '-m', 'unittest', 'discover', '-s', 'nginx/service-directory', '-p', 'test_names.py'], 'OrgPortal')
+    run('identity-postgres-start', ['docker', 'run', '--detach', '--name', 'organization-oauth-test',
+        '--publish', '127.0.0.1:5432:5432', '--env', 'POSTGRES_DB=oauth_test',
+        '--env', 'POSTGRES_USER=test', '--env', 'POSTGRES_PASSWORD=vm-test', 'postgres:15-alpine'])
+    run('identity-postgres-ready', ['bash', '-c',
+        'for attempt in {1..60}; do docker exec organization-oauth-test pg_isready -U test -d oauth_test && exit 0; sleep 1; done; exit 1'])
     run('identity-python', [sys.executable, '-m', 'unittest', 'discover', '-s', 'tests'], 'PIdP')
     for package in ['OrgPortal/web', 'OrgPortal/org-worker', 'OrgPortal/chat-worker', 'PIdP/serverless']:
         label = package.replace('/', '-')

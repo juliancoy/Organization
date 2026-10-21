@@ -51,15 +51,20 @@ class SnapshotTests(unittest.TestCase):
 
 
 class LifecycleTests(unittest.TestCase):
-    def exercise(self, failure=None, cleanup_failure=False):
+    def exercise(self, failure=None, cleanup_failure=False, with_image_archive=False):
         args = SimpleNamespace(vm_timeout=3600, vm_cpus=2, vm_memory='4G', vm_disk='30G')
         calls = []
 
         def execute(command, **kwargs):
             calls.append(command)
+            if command[1] == 'launch':
+                self.assertEqual(command[-2:], ['--cloud-init', '-'])
+                self.assertEqual(kwargs.get('input'), vm.CLOUD_INIT)
             if command[1] == 'delete':
                 return SimpleNamespace(returncode=int(cleanup_failure))
             if failure == 'launch' and command[1] == 'launch':
+                raise subprocess.CalledProcessError(1, command)
+            if failure == 'image-load' and command[1] == 'exec' and command[-1].startswith('docker load'):
                 raise subprocess.CalledProcessError(1, command)
             if command[1] == 'exec' and command[-1].endswith('guest_tests.py'):
                 if failure == 'test':
@@ -73,6 +78,9 @@ class LifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.object(vm.shutil, 'which', return_value='/bin/multipass'), \
                 patch.object(vm, 'snapshot'), patch.object(vm.subprocess, 'run', side_effect=execute), \
                 contextlib.redirect_stdout(io.StringIO()):
+            if with_image_archive:
+                args.vm_image_archive = Path(directory) / 'images.tar'
+                args.vm_image_archive.write_bytes(b'fixture archive')
             result = vm.run_vm(Path(directory), args)
         return result, calls
 
@@ -94,6 +102,14 @@ class LifecycleTests(unittest.TestCase):
 
     def test_cleanup_failure_cannot_report_success(self):
         self.assertEqual(self.exercise(cleanup_failure=True)[0], 1)
+
+    def test_image_archive_is_loaded_and_a_load_failure_still_deletes_vm(self):
+        status, calls = self.exercise(with_image_archive=True)
+        self.assertEqual(status, 0)
+        self.assertTrue(any(call[-1].startswith('docker load') for call in calls))
+        status, calls = self.exercise(failure='image-load', with_image_archive=True)
+        self.assertNotEqual(status, 0)
+        self.assertEqual(calls[-1][1:3], ['delete', '--purge'])
 
     def test_missing_multipass_does_not_touch_docker_or_create_a_vm(self):
         with patch.object(vm.shutil, 'which', return_value=None), patch.object(vm.subprocess, 'run') as command:
