@@ -15,6 +15,9 @@ ROOT = Path(__file__).resolve().parent
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--release', choices=['runtime', 'check', 'build', 'deploy', 'verify'], help='Run a release action in the pinned Bookworm container.')
+    parser.add_argument('--target', choices=['all', 'web', 'api'], default='all')
+    parser.add_argument('--release-checkout', type=Path, help='Clean OrgPortal checkout to release.')
     parser.add_argument('--prefix', default='bmoremedtech-', help='Existing local volume namespace (default: bmoremedtech-).')
     parser.add_argument('--network', default='bmoremedtech', help='Docker network (default: bmoremedtech).')
     parser.add_argument('--port', type=int, default=os.getenv('ORGPORTAL_LOCAL_GATEWAY_PORT', '8443'), help='Local HTTPS port (default: 8443).')
@@ -27,6 +30,10 @@ def parse_args(argv=None):
     parser.add_argument('--vm-timeout', type=int, default=5400, help='Total VM run timeout in seconds (default: 5400).')
     parser.add_argument('--vm-image-archive', type=Path, help='Optional docker-save archive to preload inside the VM.')
     args = parser.parse_args(argv)
+    if args.release_checkout and not args.release:
+        parser.error('--release-checkout requires --release')
+    if args.release and (args.vm or args.login):
+        parser.error('--release cannot be combined with --vm or --login')
     if not 1024 <= args.port <= 65535:
         parser.error('--port must be between 1024 and 65535')
     if args.no_open and not args.login:
@@ -42,6 +49,13 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
+    if args.release:
+        portal = ROOT / 'OrgPortal'
+        sys.path.insert(0, str(portal))
+        spec = importlib.util.spec_from_file_location('orgportal_release_run', portal / 'run.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.run_release(args.release, args.target, args.release_checkout)
     if args.vm:
         from vm_runner import run_vm
         return run_vm(ROOT, args)
