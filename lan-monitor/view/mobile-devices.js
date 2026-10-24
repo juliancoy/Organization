@@ -1,3 +1,4 @@
+import {snapshotFetch} from './snapshot-fetch.js';
 import {pollVisible} from './visible-poll.js';
 const panel=document.getElementById('mobile-devices');
 const node=(tag,text='',cls='')=>{const el=document.createElement(tag);el.textContent=text;el.className=cls;return el;};
@@ -5,7 +6,7 @@ let requesting=false,queued=false;
 async function refresh(){
  if(!panel)return;
  try{
-  const response=await fetch('/api/mobile-tests',{cache:'no-store',signal:AbortSignal.timeout(12000)});
+  const response=await snapshotFetch('/api/mobile-tests',{cache:'no-store',signal:AbortSignal.timeout(12000)});
   if(!response.ok)throw Error('Mobile worker discovery unavailable');
   const data=await response.json(),device=data.devices?.[0],host=data.latest?.host,job=host?.jobs?.mobile;
   const running=job?.status==='running',connected=device?.connected;
@@ -37,7 +38,7 @@ async function refresh(){
   card.append(phone,body);
   const screenshot=job?.artifacts?.find(a=>a.name==='submission-touch.png')||job?.artifacts?.find(a=>a.name.endsWith('.png'));
   if(screenshot){const url=new URL(screenshot.url,location.origin);if(url.origin===location.origin&&url.pathname==='/api/distributed-tests/artifacts'){
-   const link=node('a','','mobile-preview');link.href=url.href;link.target='_blank';link.rel='noopener';const img=node('img');img.src=url.href;img.alt='Latest screenshot from the real Pixel 3';img.loading='lazy';link.append(img);card.append(link);
+   const link=node('a','','mobile-preview');link.href=url.href;link.target='_blank';link.rel='noopener';const previous=panel.querySelector('.mobile-preview img');const img=previous?.src===url.href?previous:node('img');if(img.src!==url.href)img.src=url.href;img.alt='Latest screenshot from the real Pixel 3';img.loading='lazy';link.append(img);card.append(link);
   }}
   panel.replaceChildren(card);
  }catch(error){panel.replaceChildren(node('p',error.message,'mobile-error'));}

@@ -1,3 +1,4 @@
+import {snapshotFetch} from './snapshot-fetch.js';
 import './breadcrumbs.js';
 import './host-terminal.js';
 const total=document.getElementById('cpu-total'),coverage=document.getElementById('cpu-coverage'),hosts=document.getElementById('cpu-hosts');
@@ -5,7 +6,7 @@ let busy=false;
 async function refresh(){
  if(busy)return;busy=true;
  try{
-  const response=await fetch('/api/cpu',{cache:'no-store'});
+  const response=await snapshotFetch('/api/cpu',{cache:'no-store'});
   if(!response.ok)throw Error('CPU monitoring unavailable');
   const data=await response.json();
   document.dispatchEvent(new CustomEvent('cpu-sample',{detail:data}));

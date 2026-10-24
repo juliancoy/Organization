@@ -1,3 +1,4 @@
+import {snapshotFetch} from './snapshot-fetch.js';
 import {containerWebsites} from './container-websites.js';
 import {breadcrumbNav,setBreadcrumbs} from './breadcrumbs.js';
 import {cpuColor} from './cpu-colors.js';
@@ -35,7 +36,7 @@ function render(){
 }
 async function refresh(){
  if(!host||busy)return;busy=true;
- const results=await Promise.allSettled(['/api/distributed-tests','/api/cpu'].map(async url=>{const response=await fetch(url,{cache:'no-store'});if(!response.ok)throw Error();return response.json();}));
+ const results=await Promise.allSettled(['/api/distributed-tests','/api/cpu'].map(async url=>{const response=await snapshotFetch(url,{cache:'no-store'});if(!response.ok)throw Error();return response.json();}));
  report=results[0].status==='fulfilled'?results[0].value:null;
  cpuReport=results[1].status==='fulfilled'?results[1].value:null;
  render();if(results[0].status==='rejected')status.textContent='Disconnected · could not refresh terminal output';busy=false;

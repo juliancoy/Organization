@@ -1,3 +1,4 @@
+import {snapshotFetch} from './snapshot-fetch.js';
 import {deviceLevels,deviceColor} from './levels-model.js';
 import {renderDockerDownloads} from './docker-downloads.js';
 const root=document.getElementById('device-levels');
@@ -62,7 +63,7 @@ function update(data,metrics,record=true){
  document.getElementById('levels-coverage').textContent=count+' / '+latest.length+(mode==='network'&&split?' directional series measured. ':' devices measured. ')+(mode==='network'?'Hosts with telemetry report physical-interface totals; other devices use gateway-visible traffic, which excludes switched traffic. These scopes differ; values are not additive.':'CPU, disk, and RAM require live host telemetry. Devices without telemetry remain listed as “No data”.')+' History is kept in this tab for five minutes.';
  document.getElementById('levels-status').textContent='Updated '+new Date().toLocaleTimeString();draw();
 }
-async function refresh(){if(busy||document.hidden)return;busy=true;try{const responses=await Promise.all(['/api/devices?resolve=0','/api/cpu'].map(async url=>{const r=await fetch(url,{cache:'no-store',signal:AbortSignal.timeout(6000)});if(!r.ok)throw Error();return r.json();}));update(...responses);}catch{if(lastData)update({...lastData[0],link_traffic:null,docker_downloads:{status:'unavailable'}}, {hosts:lastData[1].hosts.map(h=>({...h,status:'unavailable'}))});document.getElementById('levels-status').textContent='Disconnected · retrying';}finally{busy=false;}}
+async function refresh(){if(busy||document.hidden)return;busy=true;try{const responses=await Promise.all(['/api/devices?resolve=0','/api/cpu'].map(async url=>{const r=await snapshotFetch(url,{cache:'no-store',signal:AbortSignal.timeout(6000)});if(!r.ok)throw Error();return r.json();}));update(...responses);}catch{if(lastData)update({...lastData[0],link_traffic:null,docker_downloads:{status:'unavailable'}}, {hosts:lastData[1].hosts.map(h=>({...h,status:'unavailable'}))});document.getElementById('levels-status').textContent='Disconnected · retrying';}finally{busy=false;}}
 setInterval(refresh,3000);document.addEventListener('visibilitychange',refresh);void refresh();
 
 new ResizeObserver(()=>{if(lastData)draw();}).observe(document.getElementById("levels-plot"));

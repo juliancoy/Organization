@@ -1,3 +1,4 @@
+import {snapshotFetch} from './snapshot-fetch.js';
 import {renderVisualArtifacts} from './visual-artifacts.js';
 import {renderActivity} from './run-activity.js';
 import './machine-heat.js';
@@ -152,7 +153,7 @@ async function refresh(){
  if(polling)return;
  polling=true;const requested=chosen;
  try{
-  const response=await fetch('/api/distributed-tests'+(requested?'?id='+encodeURIComponent(requested):''),{cache:'no-store'});
+  const response=await snapshotFetch('/api/distributed-tests'+(requested?'?id='+encodeURIComponent(requested):''),{cache:'no-store'});
   if(!response.ok)throw Error('Could not load distributed test results ('+response.status+')');
   const result=await response.json();
   if(requested===chosen){data=result;render();}

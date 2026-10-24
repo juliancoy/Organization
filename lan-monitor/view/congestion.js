@@ -1,3 +1,4 @@
+import {snapshotFetch} from './snapshot-fetch.js';
 import {linkSample,topPeers} from './congestion-model.js';
 const root=document.getElementById('congestion');
 const series=new Map(), rtts=[];
@@ -45,7 +46,7 @@ function render(data,rtt){
 async function refresh(){
  if(busy||document.hidden)return;busy=true;
  try{
-  const request=fetch('/api/devices?resolve=0',{cache:'no-store',signal:AbortSignal.timeout(5000)}).then(r=>{if(!r.ok)throw Error('Traffic unavailable');return r.json();}).then(data=>({data}),error=>({error}));
+  const request=snapshotFetch('/api/devices?resolve=0',{cache:'no-store',signal:AbortSignal.timeout(5000)}).then(r=>{if(!r.ok)throw Error('Traffic unavailable');return r.json();}).then(data=>({data}),error=>({error}));
   const start=performance.now();let rtt=null;
   try{const r=await fetch('/api/health',{cache:'no-store',signal:AbortSignal.timeout(4000)});await r.arrayBuffer();if(r.ok)rtt=performance.now()-start;}catch{}
   const result=await request;if(result.error)throw result.error;render(result.data,rtt);

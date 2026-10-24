@@ -1,3 +1,4 @@
+import {snapshotFetch} from './snapshot-fetch.js';
 import {pollVisible} from './visible-poll.js';
 import {EdgeLines} from './edge-lines.js';
 const edgeLines=new EdgeLines();
@@ -689,7 +690,7 @@ $('web-checks').onclick = () => post('/api/web-checks', $('web-checks'));
 $('refresh').onclick = () => post('/api/refresh', $('refresh'));
 async function poll() {
   try {
-    const response = await fetch('/api/devices?resolve='+(resolveNames?'1':'0'), {signal: AbortSignal.timeout(7000)});
+    const response = await snapshotFetch('/api/devices?resolve='+(resolveNames?'1':'0'), {signal: AbortSignal.timeout(7000)});
     if (!response.ok) throw Error('HTTP ' + response.status);
     const firstLoad=!data;
     data = await response.json(); sync();
@@ -698,9 +699,9 @@ async function poll() {
 
 }
 async function pollArtefactContext(){
-  if(!document.hidden){try{const r=await fetch('/api/distributed-tests',{cache:'no-store',signal:AbortSignal.timeout(4000)});if(!r.ok)throw Error();const result=await r.json();coordinatorContext={run:result.run,received:Date.now()};}catch{coordinatorContext=null;}}
+  if(!document.hidden){try{const r=await snapshotFetch('/api/distributed-tests',{cache:'no-store',signal:AbortSignal.timeout(4000)});if(!r.ok)throw Error();const result=await r.json();coordinatorContext={run:result.run,received:Date.now()};}catch{coordinatorContext=null;}}
 
 }
-pollVisible(pollArtefactContext,5000);pollVisible(poll,1000); requestAnimationFrame(frame);
+pollVisible(pollArtefactContext,5000);pollVisible(poll,3000); requestAnimationFrame(frame);
 
 $('lan-only').onchange=event=>{lanOnly=event.target.checked;persistSettings();clearEdgeHover();if(data)sync();};

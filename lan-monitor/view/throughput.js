@@ -1,3 +1,4 @@
+import {snapshotFetch} from './snapshot-fetch.js';
 import {throughputSources} from './throughput-model.js';
 import {deviceColor} from './levels-model.js';
 import {processLabel,renderResources,attributionLabel} from './resource-context.js';
@@ -47,5 +48,5 @@ function render(){
 }
 $('flow-group').onchange=()=>{group=$('flow-group').value;save();render();};
 $('flow-direction').onchange=()=>{direction=$('flow-direction').value;save();render();};$('flow-device').onchange=()=>{device=$('flow-device').value;save();render();};
-async function refresh(){if(busy||document.hidden)return;busy=true;try{const r=await fetch('/api/devices?resolve=0',{cache:'no-store',signal:AbortSignal.timeout(5000)});if(!r.ok)throw Error();data=await r.json();render();}catch{if(data){data={...data,link_traffic:null,process_resources:{status:'unavailable'}};render();}$('flow-status').textContent='Disconnected · retrying';}finally{busy=false;}}
+async function refresh(){if(busy||document.hidden)return;busy=true;try{const r=await snapshotFetch('/api/devices?resolve=0',{cache:'no-store',signal:AbortSignal.timeout(5000)});if(!r.ok)throw Error();data=await r.json();render();}catch{if(data){data={...data,link_traffic:null,process_resources:{status:'unavailable'}};render();}$('flow-status').textContent='Disconnected · retrying';}finally{busy=false;}}
 setInterval(refresh,3000);document.addEventListener('visibilitychange',refresh);void refresh();
