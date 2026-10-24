@@ -4,6 +4,7 @@ import hmac
 import json
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import unittest
 
@@ -13,6 +14,24 @@ import public_data
 
 
 class PeerArchiveTests(unittest.TestCase):
+    def test_synthetic_packaging_needs_only_standard_library(self):
+        # The coordinator must not need recovery/DB dependencies for P2P fixtures.
+        code = """
+import sys, tempfile
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from peer_archive import ticket, package_file
+assert 'recovery' not in sys.modules
+assert 'testing_copy' not in sys.modules
+with tempfile.TemporaryDirectory() as folder:
+    source = Path(folder) / 'fixture.json'
+    source.write_text('{"synthetic":true}')
+    room = package_file(source, Path(folder) / 'package', 'testing')
+    claims, token = ticket('synthetic-signing-key-with-32-characters', room, 60)
+    assert claims['room'] == room
+"""
+        subprocess.run([sys.executable, '-S', '-c', code, str(Path(__file__).resolve().parents[1]/'scripts')], check=True)
+
     def test_public_packages_reject_private_projections_and_extra_manifest_metadata(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);source=root/'public.json'

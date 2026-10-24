@@ -13,8 +13,6 @@ import time
 import urllib.parse
 import uuid
 
-from recovery import DEFAULT_STORE, digest, private_json, resolve_snapshot
-from testing_copy import archive_payload
 
 CHUNK_SIZE=256*1024
 DEFAULT_KEY=Path.home()/'.config/organization-peers/signing.key'
@@ -65,6 +63,9 @@ def package_file(source,output,kind,expires=None,source_manifest=None):
 
 
 def main():
+    from recovery import DEFAULT_STORE, digest, private_json, resolve_snapshot
+    from testing_copy import archive_payload
+
     os.umask(0o077)
     parser=argparse.ArgumentParser(description=__doc__);sub=parser.add_subparsers(dest='action',required=True)
     test=sub.add_parser('prepare-test');test.add_argument('--store',type=Path,default=DEFAULT_STORE)
