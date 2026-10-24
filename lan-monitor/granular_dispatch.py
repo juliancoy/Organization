@@ -7,6 +7,8 @@ from agent_client import AgentClient, wait_for_events
 from distributed_worker import SUITES, PYTHON
 from suite_cache import SuiteCache
 from work_queue import catalog, pending, claim
+from worker_preparation import execution_capacity
+from early_p2p import EarlyP2P
 
 
 def execute(service, hosts, images):
@@ -26,7 +28,10 @@ def execute(service, hosts, images):
             host['active_tasks'] = []
         service.save()
 
+    network=EarlyP2P(service,hosts,images,include_p2p)
+
     if not tasks:
+        network.join()
         with service.lock:
             for host in hosts:host['status']='passed'
             service.save()
@@ -45,6 +50,9 @@ def execute(service, hosts, images):
         closed = False
         close_sent = False
         ready = False
+        ready_bases=set()
+        preparing=True
+        p2p_released=False
         started = time.monotonic()
         cache = SuiteCache(service.root, service.folder, SUITES)
         baselines = cache.baselines(run)
@@ -67,7 +75,7 @@ def execute(service, hosts, images):
                 host.pop('preparation', None)
                 # Keep the agent request bounded even if another worker already
                 # produced thousands of log lines while this machine initialized.
-                manifest = {'id':ident,'granular':True,'task_catalog':tasks,
+                manifest = {'id':ident,'granular':True,'task_catalog':tasks,'p2p_parallel':not network.done.is_set(),
                             'source_sha256':run['source_sha256'],
                             'repositories':{name:{key:repo[key] for key in ('url','commit')} for name,repo in run['repositories'].items()},
                             'hosts':[{'host':h['host'],'suites':bases if h is host else [],
@@ -95,6 +103,10 @@ def execute(service, hosts, images):
                             ready = True
                             changed = True
                     else:
+                        if event.get('kind')=='dependencies':
+                            if event.get('status') in ('ready','failed'):ready_bases.add(event['base'])
+                            if event.get('status')=='complete':preparing=False
+                            changed=True
                         service.update(host, event)
                     if event.get('kind') == 'suite' and event.get('status') in ('passed', 'failed', 'timed_out'):
                         active.discard(event['suite'])
@@ -105,10 +117,13 @@ def execute(service, hosts, images):
                         raise RuntimeError(result.get('error') or ('Worker ended before its tasks completed: '+''.join(host.get('logs',[])[-3:])))
                     break
                 outgoing = []
+                release_p2p=network.done.is_set() and not p2p_released
                 with service.lock:
                     if ready and not closed:
+                        budget=execution_capacity(host['capacity'],preparing=preparing,p2p=not network.done.is_set())
+                        host['execution_capacity']=budget
                         while len(outgoing)<128:
-                            task = claim(run['pending_tasks'], SUITES, host['capacity'], active)
+                            task = claim(run['pending_tasks'], SUITES, budget, active, ready_bases=ready_bases)
                             if task is None:break
                             changed = True
                             job = {'name': SUITES[task]['name'], 'suite': SUITES[task].get('base', task),
@@ -131,8 +146,10 @@ def execute(service, hosts, images):
                                 and not any(claim(list(run['pending_tasks']),SUITES,h['capacity'],set()) is not None for h in available)):
                             raise RuntimeError('Remaining tasks exceed every available worker CPU/memory budget')
                         if changed or (closed and not close_sent):service.save()
-                if outgoing or (closed and not close_sent):
-                    client.call('job.feed', {'id': ident, 'tasks': outgoing, 'close': closed})
+                if outgoing or (closed and not close_sent) or release_p2p:
+                    p2p_finished=network.done.is_set()
+                    client.call('job.feed', {'id': ident, 'tasks': outgoing, 'close': closed,'p2p_finished':p2p_finished})
+                    p2p_released=p2p_finished
                     close_sent = closed
             else:
                 raise RuntimeError('Persistent worker exceeded its deadline')
@@ -152,8 +169,11 @@ def execute(service, hosts, images):
                 host.update(active_tasks=[], finished=now(), duration_seconds=round(time.monotonic() - started, 2))
                 service.save()
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(hosts)) as pool:
-        futures = [pool.submit(worker, index, host) for index, host in enumerate(hosts)]
-        for future in concurrent.futures.as_completed(futures):future.result()
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(hosts)) as pool:
+            futures = [pool.submit(worker, index, host) for index, host in enumerate(hosts)]
+            for future in concurrent.futures.as_completed(futures):future.result()
+    finally:
+        network.join()
     if run['pending_tasks'] and not run.get('stop_requested'):
         raise RuntimeError('No worker could execute the remaining ' + str(len(run['pending_tasks'])) + ' test jobs')

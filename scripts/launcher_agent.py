@@ -196,6 +196,7 @@ class Agent:
                     # Identifiers are catalog hashes, never shell commands or paths.
                     if not re.fullmatch('[a-z0-9-]{1,80}',task):raise ValueError('Invalid task identifier')
                     (inbox/task).touch(exist_ok=True)
+                if args.get('p2p_finished') is True:(folder/'P2P_FINISHED').touch()
                 if args.get('close'):(inbox/'CLOSED').touch()
                 return {'accepted':tasks,'closed':bool(args.get('close'))}
         if op == 'job.poll':

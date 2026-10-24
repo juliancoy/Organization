@@ -1,3 +1,5 @@
+import {NodeLines} from './node-lines.js';
+const nodeLines=new NodeLines();
 import {selectHostTerminal} from './host-terminal.js';
 import {networkView, label, edgeStyle, nodeVisual, trafficParticles} from './model.js';
 import {loadSettings,saveSettings} from './settings.js';
@@ -152,6 +154,7 @@ function sync() {
   }
   edges = view.edges;
   edgeHistory.update(edges,nodes,data);
+  nodeLines.update(nodes,data);
   if (gesture?.node) gesture.node = nodes.find(node => node.id === gesture.node.id);
   document.body.dataset.ready = 'true';
   document.body.dataset.viewer = data.viewer.id;
@@ -607,21 +610,8 @@ function frame(time) {
   for (const node of nodes.filter(node=>!geographic||node.geographic).sort((a, b) => Number(b.perspective) - Number(a.perspective) || Number(b.you) - Number(a.you))) {
     const p = screen(node), radius = nodeScreenRadius(node);
     const alpha = !matches(node) ? .12 : node.visibility === 'inventory' ? .5 : 1;
-    ctx.globalAlpha = alpha; ctx.fillStyle = color(node); ctx.shadowColor = color(node); ctx.shadowBlur = node.perspective ? 25 : 10;
-    ctx.beginPath(); ctx.arc(p.x, p.y, radius, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0;
-    ctx.strokeStyle = node.visual.ring; ctx.globalAlpha = alpha * .9; ctx.lineWidth = 2.5;
-    ctx.setLineDash(node.visual.health === 'unknown' ? [3,4] : []);
-    ctx.beginPath(); ctx.arc(p.x, p.y, radius + 5, 0, Math.PI * 2); ctx.stroke();
-    ctx.setLineDash([]); ctx.lineWidth = 1;
-    if (node.perspective) {
-      ctx.strokeStyle = '#ecf1f5'; ctx.globalAlpha = alpha * .75;
-      ctx.beginPath(); ctx.arc(p.x, p.y, radius + 10, 0, Math.PI * 2); ctx.stroke();
-    }
     ctx.globalAlpha = alpha;
-    if (node.test?.transfer) {
-      ctx.strokeStyle = '#73d6ff'; ctx.lineWidth = 3; ctx.beginPath();
-      ctx.arc(p.x, p.y, radius + 12, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.min(1, node.test.transfer.mbps / 1000)); ctx.stroke(); ctx.lineWidth = 1;
-    }
+    nodeLines.draw(ctx,node,p,radius);
     if ((labels && matches(node)) || node.perspective || node.you) {
       ctx.font = '14px system-ui';
       const important = node.perspective || node.you;

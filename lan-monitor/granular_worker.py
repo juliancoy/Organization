@@ -85,6 +85,9 @@ def execute(work, manifest, target, env, specs):
     seen = set()
     active = {}
     allowed = set(manifest.get('task_catalog',target['suites']))
+    from worker_preparation import Preparation, execution_capacity
+    preparation=Preparation(work,manifest,target,dependencies,limits) if manifest.get('granular') else None
+    if preparation:preparation.start()
 
     def task_run(task):
         started = time.monotonic()
@@ -94,7 +97,7 @@ def execute(work, manifest, target, env, specs):
         code = 125
         timings={'waiting_for_dependencies':0.0,'prepare':0.0}
         try:
-            code = dependencies.ensure(task, spec, timings)
+            code = preparation.results[spec.get('base',task)] if preparation else dependencies.ensure(task, spec, timings)
             if not code:
                 if spec.get('base') == 'web' and spec.get('file'):
                     # Vitest CLI paths are substring filters; an exact include
@@ -120,28 +123,33 @@ def execute(work, manifest, target, env, specs):
              exit_code=code, duration_seconds=round(time.monotonic() - started, 3),
              phase_seconds={key:round(value,6) for key,value in timings.items()},timing_source='worker_monotonic')
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=limits['cpus']) as pool:
-        while not (work.parent / 'STOP').exists():
-            for task, future in list(active.items()):
-                if future.done():
-                    future.result()
-                    del active[task]
-            for path in sorted(inbox.iterdir()):
-                task = path.name
-                if task == 'CLOSED' or task in seen:
-                    continue
-                if task not in allowed or task not in SUITES:
-                    raise ValueError('Unknown pinned task: ' + task)
-                spec = SUITES[task]
-                cpu = sum(SUITES[t].get('cpus', 1) for t in active)
-                memory = sum(SUITES[t].get('memory_mb', 1536) for t in active)
-                if cpu + spec.get('cpus', 1) > limits['cpus'] or memory + spec.get('memory_mb', 1536) > limits['memory_mb']:
-                    continue
-                seen.add(task)
-                active[task] = pool.submit(task_run, task)
-            if (inbox / 'CLOSED').exists() and not active and all(p.name in seen or p.name == 'CLOSED' for p in inbox.iterdir()):
-                break
-            time.sleep(.1)
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=limits['cpus']) as pool:
+            while not (work.parent / 'STOP').exists():
+                for task, future in list(active.items()):
+                    if future.done():
+                        future.result()
+                        del active[task]
+                for path in sorted(inbox.iterdir()):
+                    task = path.name
+                    if task == 'CLOSED' or task in seen:
+                        continue
+                    if task not in allowed or task not in SUITES:
+                        raise ValueError('Unknown pinned task: ' + task)
+                    spec = SUITES[task]
+                    if preparation and spec.get('base',task) not in preparation.ready:continue
+                    available=execution_capacity(limits,preparing=bool(preparation and preparation.running),p2p=bool(preparation and preparation.p2p()))
+                    cpu = sum(SUITES[t].get('cpus', 1) for t in active)
+                    memory = sum(SUITES[t].get('memory_mb', 1536) for t in active)
+                    if cpu + spec.get('cpus', 1) > available['cpus'] or memory + spec.get('memory_mb', 1536) > available['memory_mb']:
+                        continue
+                    seen.add(task)
+                    active[task] = pool.submit(task_run, task)
+                if (inbox / 'CLOSED').exists() and not active and all(p.name in seen or p.name == 'CLOSED' for p in inbox.iterdir()):
+                    break
+                time.sleep(.1)
+    finally:
+        if preparation:preparation.close()
     emit('complete')
 
 

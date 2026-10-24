@@ -40,6 +40,7 @@ def outcome(run, hosts, excluded):
         # Idle workers that lose a race to another coordinator are not failed
         # tests. Every selected task must still have a verified final result.
         return 'passed' if jobs and not run.get('pending_tasks') and all(job['status'] in SUCCESS for job in jobs) else 'failed'
+    if any(job.get('status') not in SUCCESS for host in hosts for job in host.get('jobs',{}).values()):return 'failed'
     return ('failed' if any(host['status'] not in ('passed','partial') for host in hosts) else
             'partial' if (excluded and run.get('targeted')) or any(host['status']=='partial' for host in hosts) else 'passed')
 
@@ -186,7 +187,9 @@ class DistributedTests:
             if kind=='source':
                 host.setdefault('source_sync',{})[event['repository']]={key:event[key] for key in ('commit','status') if key in event}
                 host['status']='running' if len(host['source_sync'])==len(self.run['repositories']) and all(row.get('status')=='verified' for row in host['source_sync'].values()) else 'preparing'
-            if kind == 'log' and not event.get('suite'):
+            if kind=='dependencies':
+                host.setdefault('dependency_preparation',{})[event.get('base','overall')]={key:value for key,value in event.items() if key in ('status','exit_code','duration_seconds')}
+            if kind == 'log' and event.get('suite') not in host.get('jobs',{}):
                 host.setdefault('logs',[]).append(str(event.get('line',''))[:2000])
                 host['logs']=host['logs'][-80:]
             suite = event.get('suite')
@@ -408,7 +411,7 @@ class DistributedTests:
             else:
                 from granular_dispatch import execute
                 execute(self,hosts,images)
-            if not run.get('stop_requested'):
+            if not run.get('stop_requested') and not run.get('p2p_early'):
                 if not run.get('targeted') and not run.get('force'):
                     with self.lock:
                         peer_plan=copy.deepcopy(run)
@@ -469,7 +472,7 @@ class DistributedTests:
                     threading.Thread(target=post_deployment,daemon=True).start()
 
 
-    def network(self,run,images=None):
+    def network(self,run,images=None,parallel=False):
         from p2p_network import NetworkP2P
         hosts=[host for host in run['hosts'] if not host.get('excluded') and host.get('session',{}).get('verified')
                and host.get('status')!='unavailable' and 'p2p' in host.get('jobs',{})]
@@ -485,14 +488,14 @@ class DistributedTests:
                 for host in hosts:
                     host['jobs']['p2p'].update(status='unavailable',not_executed=True,phase='coverage')
                     host['jobs']['p2p']['logs'].append(reason)
-                    host['status']='partial' if all(j['status'] in SUCCESS for key,j in host['jobs'].items() if key!='p2p') else 'failed'
+                    if not parallel:host['status']='partial' if all(j['status'] in SUCCESS for key,j in host['jobs'].items() if key!='p2p') else 'failed'
                 self.save()
             return
         started=time.monotonic()
         with self.lock:
             for host in hosts:
                 host['jobs']['p2p'].update(status='running',phase='network',started=now())
-                host['status']='running'
+                if not parallel:host['status']='running'
             self.save()
         result=NetworkP2P(hosts,run['id'],emit=self.update,
                           stopped=lambda:bool(run.get('stop_requested')),source_commit=run['repositories']['.']['commit'],images=images).run()
@@ -509,6 +512,7 @@ class DistributedTests:
                     for receiver in check.get('receivers',[]):routes.extend(receiver['routes'])
                     for route in routes:
                         pair=route['pair'];job['logs'].append(check['name']+': '+json.dumps(pair,separators=(',',':')))
-                host['status']='passed' if all(j['status'] in SUCCESS for j in host['jobs'].values()) else 'failed'
-                host['finished']=now()
+                if not parallel:
+                    host['status']='passed' if all(j['status'] in SUCCESS for j in host['jobs'].values()) else 'failed'
+                    host['finished']=now()
             self.save()

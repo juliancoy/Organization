@@ -18,6 +18,8 @@ class DispatchLifecycleTests(unittest.TestCase):
             if operation=='status':return {'ready':True,'machine':'machine','source_revision':'source'}
             if operation=='job.start':
                 events.append({'kind':'capacity','cpus':4,'memory_mb':4096})
+                events.append({'kind':'dependencies','base':'monitor','status':'ready'})
+                events.append({'kind':'dependencies','status':'complete'})
                 return {'status':'running'}
             if operation=='job.poll':
                 cursor=args['cursor']

@@ -91,12 +91,13 @@ def pending(folder, tasks):
     return sorted(tasks, key=estimate, reverse=True)
 
 
-def claim(queue, specs, capacity, active):
+def claim(queue, specs, capacity, active, ready_bases=None):
     """Reserve both CPU and memory; there is no suite-to-machine ownership."""
     cpu = capacity['cpus'] - sum(specs[t].get('cpus', 1) for t in active)
     memory = capacity['memory_mb'] - sum(specs[t].get('memory_mb', 1536) for t in active)
     for index, task in enumerate(queue):
         spec = specs[task]
+        if ready_bases is not None and spec.get('base',task) not in ready_bases:continue
         if spec.get('cpus', 1) <= cpu and spec.get('memory_mb', 1536) <= memory:
             return queue.pop(index)
     return None
