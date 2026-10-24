@@ -17,7 +17,7 @@ FILES = {
     'identity-python': ('PIdP', '', ('tests/**/test_*.py','tests/**/*_test.py')),
 }
 CHECKS = {'org-api': ('typecheck', 'check:bundle'), 'chat': ('typecheck',),
-          'web': ('build',), 'identity': ('typecheck',)}
+          'web': ('build:bundle', 'typecheck'), 'identity': ('typecheck',)}
 
 
 def matches(path, pattern):
@@ -60,7 +60,7 @@ def catalog(root, specs, repositories=None, bases=None):
             ident = base + '--' + check.replace(':', '-')
             specs[ident] = {**specs[base], 'base': base, 'check': check,
                             'test': ['npm', 'run', check], 'name': specs[base]['name'] + ' · ' + check,
-                            'cpus': 2, 'memory_mb': 3072}
+                            'cpus': 2, 'memory_mb': 1536 if base == 'web' and check == 'typecheck' else 3072}
             tasks.append(ident)
     specs['visual'].update(base='visual', cpus=2, memory_mb=3072)
     return tasks + ['visual']
@@ -83,7 +83,7 @@ def pending(folder, tasks):
     defaults={'visual':75,'org-api':160,'identity-python':40,'identity':60,'web':30,'monitor':15,'map':10,'workspace':3,'chat':3}
     def estimate(task):
         if samples[task]:return statistics.median(samples[task])
-        if task.endswith('--build'):return 45
+        if task.endswith(('--build', '--build-bundle')):return 45
         if task.endswith('--typecheck'):return 15
         if task.endswith('--check-bundle'):return 10
         base=task.split('--',1)[0]
