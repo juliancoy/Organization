@@ -25,6 +25,8 @@ docker compose up -d
 
 The nginx container uses host networking and two **read-only bind mounts**: `./view` for HTML/CSS/JS, and `./nginx.conf` for its configuration. Editing view files takes effect on reload without rebuilding. No SSH keys, Docker socket, or credentials are mounted in the container. It has only the `NET_BIND_SERVICE` capability needed for port 80, with a read-only root filesystem. IPv4 binds only `10.42.0.1:80`; IPv6 listens on port 80 with access restricted to link-local sources. nginx overwrites the viewer-address header before proxying to the loopback collector.
 
+Dashboard JSON, scripts, styles, and SVGs use negotiated gzip compression; response fields and retained history are unchanged. Network-map, mobile-card, and website polling pauses while the page is hidden, keeps the last displayed snapshot, and refreshes immediately when visible again. Reload existing pages to load the polling changes. After editing nginx configuration, validate and reload it with `docker exec lan-monitor-view nginx -t` and `docker exec lan-monitor-view nginx -s reload`.
+
 Docker restarts the view unless stopped. The host collector starts with the user's systemd session; unattended boot before user login is not configured. Health:
 
 ```bash

@@ -23,6 +23,32 @@ VERSION = 'lifetech-agent.v1'
 LIMIT = 1024 * 1024
 
 
+def worker_policy(config, power_root=Path('/sys/class/power_supply')):
+    """Local owner policy; unknown laptop power fails closed in automatic mode."""
+    path=Path(config).parent/'worker-policy.json'
+    try:
+        mode=json.loads(path.read_text()).get('mode','auto') if path.exists() else 'auto'
+        if mode not in ('auto','always','paused'):raise ValueError('Invalid worker mode')
+    except (OSError,ValueError,TypeError):
+        return {'mode':'invalid','accepting_jobs':False,'reason':'Worker policy is unreadable'}
+    batteries=[];online=[]
+    try:
+        for device in power_root.iterdir():
+            kind=(device/'type').read_text().strip()
+            if kind=='Battery':
+                if (device/'scope').exists() and (device/'scope').read_text().strip()=='Device':continue
+                batteries.append({'status':(device/'status').read_text().strip(),
+                                  'percent':int((device/'capacity').read_text())})
+            elif (device/'online').exists():online.append((device/'online').read_text().strip()=='1')
+    except (OSError,ValueError):
+        return {'mode':mode,'accepting_jobs':mode=='always','reason':'Power state unavailable','batteries':batteries}
+    on_battery=bool(batteries) and (not any(online) if online else any(b['status']!='Charging' for b in batteries))
+    accepting=mode=='always' or (mode=='auto' and not on_battery)
+    return {'mode':mode,'accepting_jobs':accepting,'on_battery':on_battery,'batteries':batteries,
+            'reason':'Submit only; new worker jobs paused' if mode=='paused' else
+                     'Saving battery; new worker jobs paused' if not accepting else 'Accepting worker jobs'}
+
+
 def worker_environment(home):
     # The Docker CLI must use the same local engine as this agent, including
     # rootless sockets. Deployment and login credentials stay out of jobs.
@@ -95,10 +121,17 @@ class Agent:
         import asyncio
         from aiohttp import web
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        try:
+            return web.Response(body=await self.process(await request.read()),content_type='application/octet-stream')
+        except ValueError:
+            raise web.HTTPForbidden(text='Agent authentication rejected')
+
+    async def process(self, raw):
+        import asyncio
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         config = json.loads(self.config.read_text())
         cipher = AESGCM(bytes.fromhex(config['key']))
         try:
-            raw = await request.read()
             value = json.loads(cipher.decrypt(raw[:12], raw[12:], VERSION.encode()))
             if (value.get('to') != config['name'] or value.get('from') not in config['peers'] or
                     abs(time.time()-value['time']) > 60 or not re.fullmatch('[a-f0-9]{32}',value['nonce'])):
@@ -115,10 +148,9 @@ class Agent:
                 reply = {'ok':False,'error':type(error).__name__+': '+str(error)[:800]}
             reply.update(nonce=value['nonce'], node=config['name'], time=time.time())
             nonce = secrets.token_bytes(12)
-            return web.Response(body=nonce+cipher.encrypt(nonce,json.dumps(reply).encode(),VERSION.encode()),
-                                content_type='application/octet-stream')
+            return nonce+cipher.encrypt(nonce,json.dumps(reply).encode(),VERSION.encode())
         except Exception:
-            raise web.HTTPForbidden(text='Agent authentication rejected')
+            raise ValueError('Agent authentication rejected')
 
     def folder(self, ident):
         if not isinstance(ident,str) or not re.fullmatch(r'[0-9TZ-]+-[a-f0-9]{8}(?:-p2p)?',ident):
@@ -126,6 +158,22 @@ class Agent:
         return self.root/ident
 
     def dispatch(self, op, args):
+        policy=worker_policy(self.config)
+        if op=='worker.policy':return policy
+        if op in ('job.start','source.stage','browser.start','image.pull') or (op=='job.feed' and args.get('tasks')):
+            if not policy['accepting_jobs']:raise RuntimeError(policy['reason'])
+        if op in ('tests.request','tests.status'):
+            config=json.loads(self.config.read_text())
+            if not config.get('master_api'):raise RuntimeError('This launcher is not a test master')
+            token=(self.config.parent/'master-api-token').read_text().strip()
+            if op=='tests.request' and (set(args)-{'paths','suites','force'}):raise ValueError('Invalid test selection')
+            request=urllib.request.Request('http://127.0.0.1:8088/api/v1/master/'+('test-requests' if op=='tests.request' else 'status'),
+                data=json.dumps(args).encode() if op=='tests.request' else None,
+                headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
+            with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request,timeout=30) as response:
+                raw=response.read(8*1024*1024+1)
+                if len(raw)>8*1024*1024:raise RuntimeError('Master response too large')
+                return json.loads(raw)
         if op=='registry.read':
             from launcher_registry import read
             return read(args)
@@ -153,7 +201,7 @@ class Agent:
             return {'protocol':VERSION,'source_revision':self.source_revision,'node':config['name'],'ready':bool(shutil.which('docker')) and not Path('/tmp/launcher-agent-draining').exists(),'time':time.time(),
                     'machine':hashlib.sha256(machine.read_bytes()).hexdigest(),'hostname':socket.gethostname(),
                     'addresses':addresses,'platform':info['OSType']+'/'+info['Architecture'],
-                    'capabilities':['github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','file-queue','snapshot-stage','event-wait','encrypted-backup'],
+                    'worker_policy':policy,'capabilities':['github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','file-queue','snapshot-stage','event-wait','encrypted-backup'],
                     'preparations':[key for key,j in self.jobs.items() if j['status']=='running' and j.get('prepare_only')],
                     'active_jobs':[key for key,j in self.jobs.items() if j['status']=='running' and not j.get('prepare_only')],'active_image_transfers':self.registry_transfers,'active_uploads':len(self.uploads)}
         if op.startswith('backup.'):

@@ -69,6 +69,8 @@ class Mesh:
                 return
             try:
                 value = json.loads(raw)
+                if value.get('type')=='agent-rpc' and getattr(self,'gateway',None):
+                    self.gateway.receive(peer,value);return
                 if value['type'] != 'status' or value['name'] != peer:
                     raise ValueError('Unexpected peer message')
                 services = value['services']
@@ -330,7 +332,7 @@ class InternetMesh(Mesh):
         while not stopped.is_set():
             ticker = None
             try:
-                async with ClientSession(timeout=ClientTimeout(total=30),trust_env=False) as session:
+                async with ClientSession(timeout=ClientTimeout(total=30),trust_env=False,headers={'User-Agent':'LifeTech-Launcher/1.0'}) as session:
                     async with session.post(base+'/launchers/session',headers={'Authorization':'Bearer '+self.registration['credential']},
                             json={'room':self.registration['room'],'peer':self.name},allow_redirects=False) as response:
                         if response.status in (401,403):
@@ -384,6 +386,157 @@ def main():
     signal.signal(signal.SIGTERM,lambda *_:stopped.set())
     signal.signal(signal.SIGINT,lambda *_:stopped.set())
     asyncio.run(supervise(path,args.prefix,stopped))
+
+
+LAUNCHER_PAGE = '''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>LifeTech · Swarm</title>
+<style>body{font:16px system-ui;background:#eff5f3;color:#173833;margin:0}main{max-width:900px;margin:auto;padding:32px 20px}h1{font-size:36px;margin:10px 0}h2{font-size:20px}section{background:white;padding:24px;border:1px solid #c6d9d2;border-radius:16px;margin:18px 0}label{display:block;margin:14px 0}button,select,input{font:inherit;padding:12px;border:1px solid #a4bdb5;border-radius:8px;max-width:100%;box-sizing:border-box}button{background:#17665b;color:white;cursor:pointer}input{width:100%}.muted{color:#526c65}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}#message{min-height:24px}small{display:block;margin-top:8px}</style>
+<main><span class="muted">LIFETECH LAUNCHER</span><h1>Your place in the swarm</h1><p id="identity">Connecting to your launcher…</p>
+<section><h2>Connections</h2><p id="connections"></p><button id="check">Check master connection</button> <button id="remote">Test WebRTC path</button><p id="connection-result" role="status"></p></section>
+<section><h2>Contribute computing power</h2><label>Worker mode <select id="mode"><option value="auto">Automatic · AC power only</option><option value="always">Always accept jobs</option><option value="paused">Submit only · save battery</option></select></label><p id="power"></p><small class="muted">Already accepted jobs finish. You can submit work in every mode.</small></section>
+<section><h2>Request tests</h2><form id="request"><label>Suite names, separated by commas<input id="suites" placeholder="monitor"></label><label>Or repository paths, separated by commas<input id="paths" placeholder="OrgPortal/web/src"></label><small class="muted">Requests publish the master's current code and run tests on available workers. They do not deploy.</small><p><button>Submit authenticated request</button></p></form><p id="message" role="status"></p><details><summary>Master results</summary><pre id="result"></pre></details></section></main>
+<script>const $=id=>document.getElementById(id);async function api(path,body){const r=await fetch('/launcher/'+path,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);return d}async function refresh(){try{const d=await api('status');$('identity').textContent=d.node+' · master '+d.master;$('mode').value=d.worker.mode;$('power').textContent=d.worker.reason+(d.worker.batteries?.length?' · '+d.worker.batteries.map(b=>b.percent+'%').join(', '):'');const open=Object.values(d.webrtc_channels).filter(x=>x==='open').length;$('connections').textContent='LAN configured · '+(d.internet_enrolled?'Internet enrolled · '+open+' open WebRTC connection(s)':'Internet not enrolled');}catch(e){$('identity').textContent=e.message}}$('mode').onchange=async()=>{try{await api('policy',{mode:$('mode').value});await refresh()}catch(e){$('power').textContent=e.message}};async function check(transport){$('connection-result').textContent='Checking…';try{const d=await api('master',{transport});$('connection-result').textContent='Authenticated master responded via '+(transport==='webrtc'?'WebRTC':'LAN-first routing');$('result').textContent=JSON.stringify(d,null,2)}catch(e){$('connection-result').textContent=e.message}}$('check').onclick=()=>check('auto');$('remote').onclick=()=>check('webrtc');$('request').onsubmit=async e=>{e.preventDefault();const split=id=>$(id).value.split(',').map(s=>s.trim()).filter(Boolean);const body={suites:split('suites'),paths:split('paths')};if(!body.suites.length&&!body.paths.length){$('message').textContent='Choose suites or paths to test.';return}const button=e.target.querySelector('button');button.disabled=true;try{const d=await api('request',body);$('message').textContent='Request accepted: '+d.id;$('result').textContent=JSON.stringify(d,null,2)}catch(e){$('message').textContent=e.message}finally{button.disabled=false}};refresh();setInterval(refresh,10000);</script></html>'''
+
+
+class JobGateway:
+    """Loopback gateway and bounded encrypted agent RPC over WebRTC data channels."""
+    def __init__(self, agent):
+        self.agent=agent;self.mesh=None;self.pending={};self.parts={};self.inflight=set();self.runner=None
+
+    async def send(self, peer, ident, data, reply):
+        import base64
+        channel=self.mesh.channels.get(peer) if self.mesh else None
+        if not channel or channel.readyState!='open':raise RuntimeError('Remote launcher is not connected')
+        if len(data)>8*1024*1024:raise ValueError('RPC exceeds transport limit')
+        async with asyncio.timeout(120):
+            for index,offset in enumerate(range(0,len(data),12000)):
+                while channel.bufferedAmount>262144:
+                    if channel.readyState!='open':raise RuntimeError('Remote launcher disconnected')
+                    await asyncio.sleep(.02)
+                channel.send(json.dumps({'type':'agent-rpc','id':ident,'reply':reply,'seq':index,
+                    'end':offset+12000>=len(data),'data':base64.b64encode(data[offset:offset+12000]).decode()}))
+
+    def receive(self, peer, message):
+        import base64,re
+        config=json.loads(self.agent.config.read_text())
+        if peer not in config.get('internet_nodes',{}).values():raise ValueError('Unenrolled RPC peer')
+        ident=message['id'];reply=message['reply']
+        if not isinstance(ident,str) or not re.fullmatch('[a-f0-9]{32}',ident) or type(reply)!=bool:raise ValueError('Invalid RPC frame')
+        key=(peer,ident,reply)
+        if reply and (peer,ident) not in self.pending:raise ValueError('Unsolicited RPC response')
+        self.parts={k:v for k,v in self.parts.items() if v['time']>time.monotonic()-120}
+        if key not in self.parts:
+            if message['seq']!=0 or len(self.parts)>=8:raise ValueError('RPC assembly limit')
+            self.parts[key]={'data':bytearray(),'seq':0,'time':time.monotonic()}
+        state=self.parts[key]
+        if message['seq']!=state['seq'] or len(message['data'])>16000:raise ValueError('Invalid RPC sequence')
+        state['data'].extend(base64.b64decode(message['data'],validate=True));state['seq']+=1
+        if len(state['data'])>8*1024*1024:
+            del self.parts[key];raise ValueError('RPC assembly limit')
+        if message.get('end') is not True:return
+        data=bytes(self.parts.pop(key)['data'])
+        if reply:
+            future=self.pending[(peer,ident)]
+            if not future.done():future.set_result(data)
+        else:
+            if len(self.inflight)>=8:raise ValueError('RPC concurrency limit')
+            async def respond():
+                try:await self.send(peer,ident,await self.agent.process(data),True)
+                except Exception as error:logging.warning('Remote agent request failed: %s',type(error).__name__)
+            task=asyncio.create_task(respond());self.inflight.add(task);task.add_done_callback(self.inflight.discard)
+
+    async def remote(self, node, raw):
+        config=json.loads(self.agent.config.read_text());peer=config.get('internet_nodes',{}).get(node)
+        if not peer:raise RuntimeError('No internet enrollment for this node')
+        if len(self.pending)>=8:raise RuntimeError('Remote request limit')
+        ident=secrets.token_hex(16);future=asyncio.get_running_loop().create_future();self.pending[(peer,ident)]=future
+        try:
+            await self.send(peer,ident,raw,False)
+            return await asyncio.wait_for(future,180)
+        finally:self.pending.pop((peer,ident),None)
+
+    async def request(self, request):
+        from aiohttp import web,ClientSession,ClientTimeout,ClientConnectorError,ConnectionTimeoutError
+        # This bridge never decrypts caller traffic, and only contacts enrolled peers.
+        if request.headers.get('Origin'):raise web.HTTPForbidden()
+        node=request.headers.get('X-Lifetech-Peer');config=json.loads(self.agent.config.read_text())
+        if node not in config['peers']:raise web.HTTPForbidden()
+        raw=await request.read()
+        try:
+            if request.headers.get('X-Lifetech-Transport')!='webrtc':
+                try:
+                    async with ClientSession(timeout=ClientTimeout(total=180,connect=3),trust_env=False) as session:
+                        async with session.post('http://'+config['peers'][node]+':8790/agent/v1',data=raw,allow_redirects=False) as response:
+                            if response.status!=200:raise RuntimeError('Agent rejected request')
+                            data=bytearray()
+                            async for chunk in response.content.iter_chunked(65536):
+                                data.extend(chunk)
+                                if len(data)>8*1024*1024:raise ValueError('RPC response too large')
+                            data=bytes(data)
+                            if len(data)>8*1024*1024:raise ValueError('RPC response too large')
+                            return web.Response(body=data)
+                except (ClientConnectorError,ConnectionTimeoutError):pass
+            return web.Response(body=await self.remote(node,raw))
+        except Exception as error:raise web.HTTPBadGateway(text=type(error).__name__+': '+str(error)[:200])
+
+    def local_browser(self, request):
+        from aiohttp import web
+        origin=request.headers.get('Origin')
+        if request.host not in ('127.0.0.1:8791','localhost:8791') or (origin and origin not in ('http://127.0.0.1:8791','http://localhost:8791')):
+            raise web.HTTPForbidden()
+
+    async def master_call(self, op, args, transport='auto'):
+        from aiohttp import ClientSession,ClientTimeout
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        config=json.loads(self.agent.config.read_text());node=config.get('master','compai.local')
+        cipher=AESGCM(bytes.fromhex(config['key']));ident=secrets.token_hex(16);nonce=secrets.token_bytes(12)
+        value={'from':config['name'],'to':node,'time':time.time(),'nonce':ident,'op':op,'args':args}
+        raw=nonce+cipher.encrypt(nonce,json.dumps(value).encode(),b'lifetech-agent.v1')
+        async with ClientSession(timeout=ClientTimeout(total=190),trust_env=False) as session:
+            async with session.post('http://127.0.0.1:8791/agent/v1',data=raw,
+                    headers={'X-Lifetech-Peer':node,'X-Lifetech-Transport':transport}) as response:
+                if response.status!=200:raise RuntimeError((await response.text())[:300])
+                raw=await response.read()
+        value=json.loads(cipher.decrypt(raw[:12],raw[12:],b'lifetech-agent.v1'))
+        if value.get('nonce')!=ident or value.get('node')!=node or abs(time.time()-value['time'])>60:raise ValueError('Master response identity mismatch')
+        if not value.get('ok'):raise RuntimeError(value.get('error','Master request failed'))
+        return value['result']
+
+    async def browser(self, request):
+        from aiohttp import web
+        from launcher_agent import worker_policy
+        self.local_browser(request)
+        if request.path=='/launcher':
+            return web.Response(text=LAUNCHER_PAGE,content_type='text/html',headers={'Cache-Control':'no-store','X-Frame-Options':'DENY'})
+        try:
+            if request.method=='GET':
+                config=json.loads(self.agent.config.read_text())
+                peers={}
+                if self.mesh:peers={p:c.readyState for p,c in self.mesh.channels.items()}
+                return web.json_response({'node':config['name'],'worker':worker_policy(self.agent.config),
+                    'lan':config.get('peers',{}),'internet_enrolled':bool(config.get('internet')),'webrtc_channels':peers,
+                    'master':config.get('master','compai.local')},headers={'Cache-Control':'no-store'})
+            body=await request.json()
+            if request.path=='/launcher/policy':
+                if body.get('mode') not in ('auto','always','paused'):raise ValueError('Invalid worker mode')
+                path=self.agent.config.parent/'worker-policy.json';temp=path.with_suffix('.tmp')
+                temp.write_text(json.dumps({'mode':body['mode']}));temp.chmod(0o600);temp.replace(path)
+                return web.json_response(worker_policy(self.agent.config))
+            if request.path=='/launcher/request':
+                result=await self.master_call('tests.request',body)
+            else:
+                result=await self.master_call('tests.status',{},body.get('transport','auto'))
+            return web.json_response(result)
+        except Exception as error:return web.json_response({'error':str(error)[:500]},status=409)
+
+    async def start(self):
+        from aiohttp import web
+        app=web.Application(client_max_size=2*1024*1024)
+        app.router.add_post('/agent/v1',self.request)
+        app.router.add_get('/launcher',self.browser)
+        app.router.add_get('/launcher/status',self.browser)
+        for route in ('policy','request','master'):app.router.add_post('/launcher/'+route,self.browser)
+        self.runner=web.AppRunner(app,access_log=None);await self.runner.setup()
+        await web.TCPSite(self.runner,'127.0.0.1',8791).start()
 
 
 class EnrollmentPoller:
@@ -477,6 +630,8 @@ async def supervise(path,prefix,stopped):
     poller = EnrollmentPoller(path)
     from launcher_agent import Agent
     agent=Agent(path,os.environ.get('LIFETECH_JOB_ROOT',str(path.parent/'jobs')))
+    gateway=JobGateway(agent)
+    await gateway.start()
     tasks = {}
     try:
         while not stopped.is_set():
@@ -488,7 +643,7 @@ async def supervise(path,prefix,stopped):
                 if all(key in config for key in ('name','peers','key')):
                     desired['lan'] = {key:config[key] for key in ('name','peers','key')}
                 if config.get('internet') and not config['internet'].get('pending'):
-                    desired['internet'] = {'internet':config['internet']}
+                    desired['internet'] = {'internet':config['internet'],'internet_nodes':config.get('internet_nodes',{})}
                 for name,(version,task) in list(tasks.items()):
                     changed = name not in desired or version!=json.dumps(desired[name],sort_keys=True)
                     if changed:
@@ -499,6 +654,7 @@ async def supervise(path,prefix,stopped):
                     if name in tasks:
                         continue
                     mesh = Mesh(value,prefix,agent) if name=='lan' else InternetMesh(value,prefix)
+                    if name=='internet':mesh.gateway=gateway;gateway.mesh=mesh
                     task = asyncio.create_task(mesh.run(stopped),name='launcher-'+name)
                     tasks[name] = (json.dumps(value,sort_keys=True),task)
                     def completed(done):
@@ -515,6 +671,9 @@ async def supervise(path,prefix,stopped):
                 if stopped.is_set():break
                 await asyncio.sleep(1)
     finally:
+        await gateway.runner.cleanup()
+        for task in gateway.inflight:task.cancel()
+        await asyncio.gather(*gateway.inflight,return_exceptions=True)
         await asyncio.to_thread(agent.close)
         for _,task in tasks.values():task.cancel()
         await asyncio.gather(*(task for _,task in tasks.values()),return_exceptions=True)

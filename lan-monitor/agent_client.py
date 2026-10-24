@@ -38,7 +38,7 @@ class AgentClient:
             try:
                 self.connection.timeout=timeout
                 if self.connection.sock:self.connection.sock.settimeout(timeout)
-                self.connection.request('POST','/agent/v1',body=data,headers={'Content-Type':'application/octet-stream'})
+                self.connection.request('POST','/agent/v1',body=data,headers={'Content-Type':'application/octet-stream','X-Lifetech-Peer':self.node})
                 response=self.connection.getresponse()
                 raw=response.read(8*1024**2+1)
                 if response.status!=200:raise RuntimeError('Agent HTTP status '+str(response.status))
@@ -149,9 +149,17 @@ class AgentSessions:
             if self.stopped():raise InterruptedError('Agent readiness stopped')
             try:
                 client=AgentClient(host)
-                value=client.call('status')
+                try:value=client.call('status',timeout=5)
+                except (OSError,TimeoutError):
+                    client.close()
+                    host['agent_endpoint']='http://127.0.0.1:8791'
+                    host['transport']='webrtc'
+                    client=AgentClient(host);value=client.call('status',timeout=30)
                 if value.get('protocol')!=PROTOCOL:raise RuntimeError('Agent protocol mismatch')
-                if host['lan_address'] not in value.get('addresses',[]):raise RuntimeError('Agent address is not on an attested physical interface')
+                if host.get('transport')!='webrtc' and host['lan_address'] not in value.get('addresses',[]):raise RuntimeError('Agent address is not on an attested physical interface')
+                if value.get('worker_policy',{}).get('accepting_jobs') is False:
+                    host['worker_policy']=value['worker_policy']
+                    raise RuntimeError(value['worker_policy']['reason'])
                 if value.get('active_jobs'):raise RuntimeError('Agent is busy with an existing job')
                 value=self.updater.ensure(host,client,value)
                 required={'github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','file-queue','snapshot-stage','event-wait'}
@@ -160,8 +168,11 @@ class AgentSessions:
                 missing=required-set(value.get('capabilities',[]))
                 if missing:raise RuntimeError('Agent capabilities missing: '+', '.join(sorted(missing))+' after launcher update')
                 if value.get('source_revision')!=expected:raise RuntimeError('Launcher update revision verification failed')
+                if value.get('worker_policy',{}).get('accepting_jobs') is False:
+                    host['worker_policy']=value['worker_policy']
+                    raise RuntimeError(value['worker_policy']['reason'])
                 if value.get('active_jobs'):raise RuntimeError('Agent is busy with an existing job')
-                if host['lan_address'] not in value['addresses']:raise RuntimeError('Agent address is not on an attested physical interface')
+                if host.get('transport')!='webrtc' and host['lan_address'] not in value['addresses']:raise RuntimeError('Agent address is not on an attested physical interface')
                 host['session']={'status':'ready','verified':True,'verified_at':time.time(),'transport':PROTOCOL,'machine':value['machine'],'capabilities':value['capabilities']}
                 host['agent_status']=value
                 self.progress(host,'ready',host['session'])

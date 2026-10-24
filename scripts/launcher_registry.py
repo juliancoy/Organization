@@ -57,9 +57,9 @@ def pull(agent,args):
         payload={'from':config['name'],'to':coordinator,'time':time.time(),'nonce':request_id,
                  'op':'registry.read','args':{'path':path,'offset':offset,'head':head}}
         nonce=secrets.token_bytes(12)
-        request=urllib.request.Request('http://'+config['peers'][coordinator]+':8790/agent/v1',
+        request=urllib.request.Request('http://127.0.0.1:8791/agent/v1',
             data=nonce+cipher.encrypt(nonce,json.dumps(payload).encode(),PROTOCOL.encode()),
-            headers={'Content-Type':'application/octet-stream'})
+            headers={'Content-Type':'application/octet-stream','X-Lifetech-Peer':coordinator})
         with opener.open(request,timeout=60) as response:raw=response.read(2*CHUNK)
         value=json.loads(cipher.decrypt(raw[:12],raw[12:],PROTOCOL.encode()))
         if value.get('nonce')!=request_id or value.get('node')!=coordinator or abs(time.time()-value['time'])>60:raise ValueError('Invalid registry response identity or freshness')

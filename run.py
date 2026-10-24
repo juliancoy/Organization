@@ -97,6 +97,8 @@ def container_login(args, name):
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--recreate-launcher', action='store_true', help='Recreate the launcher container to load updated code/configuration; keep service containers and data.')
+    parser.add_argument('--worker-mode',choices=['auto','always','paused'],help='Accept jobs on AC power, always, or submit only. Existing jobs finish.')
+    parser.add_argument('--swarm',action='store_true',help='Open this launcher’s local swarm controls.')
     parser.add_argument('--peer-register', type=Path, help='Register this machine using a private internet launcher invitation file.')
     parser.add_argument('--peer-enroll', action='store_true', help='Enroll saved LAN machines and this coordinator for launcher WebRTC; does not restart services.')
     parser.add_argument('--release', choices=['runtime', 'check', 'build', 'deploy', 'verify'], help='Run a release action in the pinned Bookworm container.')
@@ -175,6 +177,17 @@ def start_codecollective_preview():
 
 def main(argv=None):
     args = parse_args(argv)
+    if args.worker_mode:
+        folder=Path.home()/'.config/lifetech-launcher';folder.mkdir(parents=True,exist_ok=True,mode=0o700)
+        path=folder/'worker-policy.json';temporary=path.with_suffix('.tmp')
+        temporary.write_text(json.dumps({'mode':args.worker_mode}));temporary.chmod(0o600);temporary.replace(path)
+        print('Worker mode: '+args.worker_mode+'; existing jobs finish, submission remains available')
+        return 0
+    if args.swarm:
+        import webbrowser
+        webbrowser.open('http://127.0.0.1:8791/launcher')
+        print('http://127.0.0.1:8791/launcher')
+        return 0
     if args.peer_register:
         sys.path.insert(0, str(ROOT / 'scripts'))
         from launcher_registration import register

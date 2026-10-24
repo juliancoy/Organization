@@ -1,3 +1,4 @@
+import {pollVisible} from './visible-poll.js';
 const panel=document.getElementById('mobile-devices');
 const node=(tag,text='',cls='')=>{const el=document.createElement(tag);el.textContent=text;el.className=cls;return el;};
 let requesting=false,queued=false;
@@ -41,4 +42,4 @@ async function refresh(){
   panel.replaceChildren(card);
  }catch(error){panel.replaceChildren(node('p',error.message,'mobile-error'));}
 }
-void refresh();setInterval(refresh,5000);
+pollVisible(refresh,5000);

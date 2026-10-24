@@ -25,7 +25,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def post(base,path,credential,body):
     request=urllib.request.Request(service_url(base)+path,data=json.dumps(body).encode(),
-        headers={'Authorization':'Bearer '+credential,'Content-Type':'application/json'},method='POST')
+        headers={'Authorization':'Bearer '+credential,'Content-Type':'application/json','User-Agent':'LifeTech-Launcher/1.0'},method='POST')
     with urllib.request.build_opener(NoRedirect).open(request,timeout=30) as response:
         raw=response.read(65537)
         if len(raw)>65536:raise ValueError('Registration response too large')

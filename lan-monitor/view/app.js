@@ -1,3 +1,4 @@
+import {pollVisible} from './visible-poll.js';
 import {EdgeLines} from './edge-lines.js';
 const edgeLines=new EdgeLines();
 import {selectHostTerminal} from './host-terminal.js';
@@ -694,12 +695,12 @@ async function poll() {
     data = await response.json(); sync();
     if(embeddedLAN&&firstLoad)requestAnimationFrame(fit);
   } catch (error) { $('error').textContent = 'Monitor unavailable: ' + error.message; }
-  setTimeout(poll, document.hidden ? 5000 : 1000);
+
 }
 async function pollArtefactContext(){
   if(!document.hidden){try{const r=await fetch('/api/distributed-tests',{cache:'no-store',signal:AbortSignal.timeout(4000)});if(!r.ok)throw Error();const result=await r.json();coordinatorContext={run:result.run,received:Date.now()};}catch{coordinatorContext=null;}}
-  setTimeout(pollArtefactContext,5000);
+
 }
-void pollArtefactContext();poll(); requestAnimationFrame(frame);
+pollVisible(pollArtefactContext,5000);pollVisible(poll,1000); requestAnimationFrame(frame);
 
 $('lan-only').onchange=event=>{lanOnly=event.target.checked;persistSettings();clearEdgeHover();if(data)sync();};

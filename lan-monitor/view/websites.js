@@ -1,3 +1,4 @@
+import {pollVisible} from './visible-poll.js';
 import {groupWebsiteGraph} from './providers.js';
 import {originName,changes,graph} from './website-model.js';
 const $=id=>document.getElementById(id),canvas=$('graph'),ctx=canvas.getContext('2d');
@@ -58,4 +59,4 @@ async function pollOnce(){try{const response=await fetch('/api/websites'+(chosen
 $('group-providers').onchange=()=>{selected=null;if(data)render();};
 $('site').onchange=()=>{chosenRun='';selected=null;pollOnce();};$('run').onchange=event=>{chosenRun=event.target.value;selected=null;pollOnce();};
 $('capture').onclick=async()=>{ $('capture').disabled=true;try{const response=await fetch('/api/websites/capture',{method:'POST'});if(!response.ok&&response.status!==409)throw Error('HTTP '+response.status);await pollOnce();}catch(error){$('error').textContent=error.message;$('capture').disabled=false;}};
-await pollOnce();setInterval(pollOnce,3000);
+pollVisible(pollOnce,3000);

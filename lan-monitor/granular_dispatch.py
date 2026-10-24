@@ -121,6 +121,11 @@ def execute(service, hosts, images):
                         raise RuntimeError(result.get('error') or ('Worker ended before its tasks completed: '+''.join(host.get('logs',[])[-3:])))
                     break
                 outgoing = []
+                policy=client.call('worker.policy')
+                host['worker_policy']=policy
+                if not policy['accepting_jobs']:
+                    closed=True
+                    host['preparation']=policy['reason']+'; finishing accepted jobs'
                 release_p2p=network.done.is_set() and not p2p_released
                 with service.lock:
                     if ready and not closed:
