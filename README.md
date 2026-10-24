@@ -69,8 +69,8 @@ CodeCollective helper; review its behavior there before using it.
 
 ## Reverse engineering tools
 
-`./pull-all` also clones or updates the official [REA](https://github.com/morluto/rea)
-source into `rea/`. To prepare the CLI, run:
+To optionally clone the official [REA](https://github.com/morluto/rea)
+source and prepare the CLI, run:
 
 ```bash
 ./setup-rea
@@ -79,8 +79,8 @@ source into `rea/`. To prepare the CLI, run:
 ```
 
 Setup requires Git and npm. It caches REA 6.5.0 and its supported Node 24.18.0
-runtime through npm, without changing the system Node installation. The source
-checkout follows upstream through `pull-all`; the executable stays pinned until
+runtime through npm, without changing the system Node installation. The
+executable stays pinned until
 the versions in `rea-tool` are deliberately updated. Native decompilation needs
 a separately configured provider such as Ghidra. CLI use needs no agent restart.
 To configure the Codex integration, first review
@@ -131,3 +131,12 @@ It deletes and purges **only its own VM** after success, failure, Ctrl-C, or
 SIGTERM, using [Multipass's per-instance deletion](https://canonical.com/multipass/docs/latest/reference/command-line-interface/delete/).
 An uncatchable kill or host shutdown can prevent cleanup; the printed VM name
 can then be removed with `multipass delete --purge <name>`.
+
+## Local recovery and realistic testing data
+
+`./disaster-recovery backup` keeps full production databases, uploaded objects,
+source history, working changes, and available configuration on PILEDRIVE. Each
+backup includes an isolated restore drill and a manifest of recovery gaps.
+`./local-sync --org lifetech --include-private` creates a separate scoped testing
+copy from the latest verified archive. See [DISASTER_RECOVERY.md](DISASTER_RECOVERY.md)
+for credentials, daily scheduling, restore steps, retention, and current limits.
