@@ -1,6 +1,7 @@
 import {DurableObject} from 'cloudflare:workers';
-import {verifyTicket, type Ticket} from './auth';
+import {verifyTicket, issueTicket, credentialHash, ROOM, type Ticket} from './auth';
 
+type Device = {name:string; hash:string; expires:number; revoked:boolean; lastSeen:number};
 type Attachment = Ticket & {window: number; count: number};
 const json = (value: unknown, status = 200) => Response.json(value, {status, headers:{'Cache-Control':'no-store'}});
 
@@ -13,7 +14,40 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === '/health') return json({service:'organization-archive-peers', version:env.CF_VERSION_METADATA.id,
-      signaling:'websocket', transport:'webrtc', turnConfigured:!!(env.TURN_KEY_ID && env.TURN_KEY_API_TOKEN)});
+      signaling:'websocket', transport:'webrtc', launcherRegistration:'/launchers/register', registrationPage:'/register', turnConfigured:!!(env.TURN_KEY_ID && env.TURN_KEY_API_TOKEN)});
+    if (url.pathname.startsWith('/launchers/')) {
+      if (request.method !== 'POST') return json({error:'POST required'},405);
+      // Native clients only: never allow ambient browser credentials or cross-origin registration.
+      const origin=request.headers.get('Origin');
+      if (origin && origin!==url.origin) return json({error:'Origin denied'},403);
+      let body:Record<string,unknown>;
+      try {
+        const reader=request.body?.getReader();if(!reader) throw new Error();
+        const chunks:Uint8Array[]=[];let size=0;
+        while(true){const part=await reader.read();if(part.done)break;size+=part.value.length;
+          if(size>4096){await reader.cancel();return json({error:'Request too large'},413);}chunks.push(part.value);}
+        const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}
+        body=JSON.parse(new TextDecoder().decode(bytes));
+      } catch {return json({error:'Invalid request'},400);}
+      const token=request.headers.get('Authorization')?.replace(/^Bearer /,'')||'';
+      try {
+        if(url.pathname==='/launchers/register') {
+          const invite=await verifyTicket(token,env.PEER_SIGNING_KEY,Date.now(),['launcher-enroll-v1']);
+          if(typeof body.name!=='string'||!body.name.trim()||body.name.length>100||typeof body.credential!=='string')return json({error:'Invalid device'},400);
+          return await env.SIGNAL_ROOMS.getByName(invite.room).register(invite,body.name.trim(),body.credential);
+        }
+        if(url.pathname==='/launchers/session') {
+          if(typeof body.room!=='string'||!ROOM.test(body.room)||typeof body.peer!=='string'||!/^[a-f0-9-]{36}$/.test(body.peer))return json({error:'Invalid device'},400);
+          return await env.SIGNAL_ROOMS.getByName(body.room).session(body.room,body.peer,token);
+        }
+        if(url.pathname==='/launchers/revoke') {
+          const admin=await verifyTicket(token,env.PEER_SIGNING_KEY,Date.now(),['launcher-admin-v1']);
+          if(typeof body.peer!=='string'||!/^[a-f0-9-]{36}$/.test(body.peer))return json({error:'Invalid device'},400);
+          return await env.SIGNAL_ROOMS.getByName(admin.room).revoke(body.peer);
+        }
+      } catch {return json({error:'Invalid or expired enrollment credential'},401);}
+      return json({error:'Unknown launcher route'},404);
+    }
     if (url.pathname === '/signal' || url.pathname === '/ice') {
       const origin = request.headers.get('Origin');
       const allowed = [url.origin, ...env.PEER_ALLOWED_ORIGINS.split(',')];
@@ -51,7 +85,9 @@ export class SignalRoom extends DurableObject<Env> {
     let ticket: Ticket;
     try {ticket=await verifyTicket(socketTicket(request)||'',this.env.PEER_SIGNING_KEY);}
     catch {return json({error:'Invalid invitation'},401);}
+    if(ticket.aud==='launcher-session-v1' && !await this.activeDevice(ticket.peer))return json({error:'Device revoked or expired'},401);
     await this.expire();
+    if(ticket.aud==='launcher-session-v1' && !await this.activeDevice(ticket.peer))return json({error:'Device revoked or expired'},401);
     const sockets=this.ctx.getWebSockets();
     if (sockets.length >= 24) return json({error:'Room full'},429);
     if (sockets.some(ws=>(ws.deserializeAttachment() as Attachment).peer===ticket.peer)) return json({error:'Device already connected'},409);
@@ -65,7 +101,50 @@ export class SignalRoom extends DurableObject<Env> {
     return new Response(null,{status:101,webSocket:client,headers:{'Sec-WebSocket-Protocol':'archive.v1'}});
   }
 
+  async activeDevice(peer:string):Promise<boolean> {
+    const device=await this.ctx.storage.get<Device>('device:'+peer);
+    return !!device&&!device.revoked&&device.expires>Date.now();
+  }
+
+  async register(invite:Ticket,name:string,credential:string):Promise<Response> {
+    const hash=await credentialHash(credential);
+    const result=await this.ctx.storage.transaction(async storage=>{
+      const previous=await storage.get<Device>('device:'+invite.peer);
+      if(previous)return previous.hash===hash&&!previous.revoked&&previous.expires>Date.now()?previous:null;
+      const devices=await storage.list<Device>({prefix:'device:',limit:1024});
+      if(devices.size>=1024||[...devices.values()].filter(device=>!device.revoked&&device.expires>Date.now()).length>=24)return null;
+      const device:Device={name,hash,expires:Date.now()+90*86400000,revoked:false,lastSeen:Date.now()};
+      await storage.put('device:'+invite.peer,device);
+      return device;
+    });
+    if(!result)return json({error:'Invitation already consumed, revoked, or fleet full'},409);
+    return json({room:invite.room,peer:invite.peer,name:result.name,expires:result.expires});
+  }
+
+  async session(room:string,peer:string,credential:string):Promise<Response> {
+    const hash=await credentialHash(credential);
+    const device=await this.ctx.storage.transaction(async storage=>{
+      const current=await storage.get<Device>('device:'+peer);
+      if(!current||current.revoked||current.expires<=Date.now()||current.hash!==hash)return null;
+      await storage.put('device:'+peer,{...current,lastSeen:Date.now()});return current;
+    });
+    if(!device)return json({error:'Device registration invalid'},401);
+    const iat=Math.floor(Date.now()/1000),exp=Math.min(iat+1800,Math.floor(device.expires/1000));
+    if(exp<=iat)return json({error:'Registration expired'},401);
+    const token=await issueTicket({aud:'launcher-session-v1',room,peer,iat,exp},this.env.PEER_SIGNING_KEY);
+    return json({token,expires:exp});
+  }
+
+  async revoke(peer:string):Promise<Response> {
+    const device=await this.ctx.storage.get<Device>('device:'+peer);
+    if(!device)return json({error:'Device not found'},404);
+    await this.ctx.storage.put('device:'+peer,{...device,revoked:true});
+    for(const ws of this.ctx.getWebSockets(peer))ws.close(1008,'Device revoked');
+    return json({revoked:true,peer});
+  }
+
   async ice(ticket: Ticket): Promise<Response> {
+    if(ticket.aud==='launcher-session-v1' && !await this.activeDevice(ticket.peer))return json({error:'Device revoked or expired'},401);
     const fallback={iceServers:[{urls:['stun:stun.cloudflare.com:3478']}],relayAvailable:false};
     if (!this.env.TURN_KEY_ID || !this.env.TURN_KEY_API_TOKEN) return json(fallback);
     const cached=await this.ctx.storage.get<{expires:number;value:unknown}>('ice:'+ticket.peer);

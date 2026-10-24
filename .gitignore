@@ -44,3 +44,11 @@
 
 !/scripts/setup-lan-ssh.py
 !/scripts/tests/
+
+!/scripts/launcher_peers.py
+!/scripts/enroll_launcher_peers.py
+
+!/scripts/launcher_registration.py
+!/lan-monitor/launcher_sessions.py
+
+!/lan-monitor/tests/test_launcher_sessions.py

@@ -7,6 +7,8 @@ import importlib.util
 import io
 import json
 import os
+import getpass
+import socket
 from pathlib import Path
 import re
 import shlex
@@ -17,6 +19,7 @@ import threading
 import time
 import uuid
 from distributed_worker import SUITES
+from distributed_images import ImageDistributor
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE = Path(__file__).with_name('.runtime') / 'distributed'
@@ -38,10 +41,15 @@ def targets(path=INVENTORY):
         result.append({'host': host, 'user': user})
     if not result or len(result) > 8:
         raise ValueError('Configure between one and eight LAN SSH accounts')
+    local_host = socket.gethostname().split('.')[0] + '.local'
+    result = [host for host in result if host['host'] != local_host]
+    result.append({'host': local_host, 'user': getpass.getuser(), 'local': True})
     return result
 
 
 def ssh(target):
+    if target.get('local'):
+        return ['bash', '-c']
     return ['ssh', '-i', str(KEY), '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes',
             '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=8', '-o', 'ConnectionAttempts=1',
             '-o', 'ForwardAgent=no', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3',
@@ -51,10 +59,10 @@ def ssh(target):
 def plan(hosts):
     hosts = copy.deepcopy(hosts)
     for host in hosts:
-        host.update(status='queued', suites=['monitor', 'map'], jobs={})
+        host.update(status='queued', suites=['monitor', 'map', 'p2p'], jobs={})
     for index, suite in enumerate(['org-api', 'web', 'identity', 'chat', 'workspace', 'identity-python']):
         # Browser/identity work goes to the last host; frontend to the middle.
-        slot = {'org-api': 0, 'chat': 0, 'web': 1, 'workspace': 1, 'identity': 2, 'identity-python': 2}[suite] % len(hosts)
+        slot = {'org-api': 0, 'chat': 0, 'web': 1, 'workspace': 3, 'identity': 2, 'identity-python': 2}[suite] % len(hosts)
         hosts[slot]['suites'].append(suite)
     for host in hosts:
         host['jobs'] = {suite: {'name': SUITES[suite]['name'], 'status': 'queued', 'phase': None, 'logs': []} for suite in host['suites']}
@@ -176,7 +184,7 @@ class DistributedTests:
             self.run = {'id': dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:8],
                         'status': 'preparing', 'started': now(), 'finished': None,
                         'hosts': hosts, 'repositories': {}, 'source_sha256': None,
-                        'scope': 'Isolated application suites; tests have no network or deployment credentials. All application test execution is container-isolated.'}
+                        'scope': 'Application suites run in isolated containers without network or deployment credentials. The dedicated P2P suite uses separate browser containers on real SSH machines, synthetic fixtures and short-lived dataset invitations; its network access is required for WebRTC.'}
             self.running = True
             self.save()
             threading.Thread(target=self.execute, daemon=True).start()
@@ -200,7 +208,7 @@ class DistributedTests:
                 subprocess.run(ssh(host) + [command], capture_output=True, timeout=40)
             except (OSError, subprocess.TimeoutExpired):
                 pass  # Host completion reports failures; never claim it stopped before acknowledgement.
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(run['hosts'])) as pool:
             list(pool.map(stop_host, run['hosts']))
 
     def update(self, host, event):
@@ -279,7 +287,7 @@ sys.exit(subprocess.call([sys.executable,str(work/'lan-monitor/distributed_worke
                 if process.poll() is None:
                     process.kill()
             with self.lock:
-                jobs = host['jobs'].values()
+                jobs = [job for suite,job in host['jobs'].items() if not SUITES[suite].get('coordinated')]
                 host['status'] = 'stopped' if self.run.get('stop_requested') else 'passed' if all(job['status'] == 'passed' for job in jobs) else 'failed'
                 if code != 0:
                     host['status'] = 'unavailable'
@@ -290,7 +298,9 @@ sys.exit(subprocess.call([sys.executable,str(work/'lan-monitor/distributed_worke
         finally:
             with self.lock:
                 host.update(finished=now(), duration_seconds=round(time.monotonic() - started, 2))
-                for job in host['jobs'].values():
+                for suite,job in host['jobs'].items():
+                    if SUITES[suite].get('coordinated') and not self.run.get('stop_requested'):
+                        continue
                     if job['status'] not in FINAL:
                         job['status'] = 'stopped' if self.run.get('stop_requested') else 'unavailable'
                 if self.run.get('stop_requested'):
@@ -301,6 +311,12 @@ sys.exit(subprocess.call([sys.executable,str(work/'lan-monitor/distributed_worke
             except (OSError, subprocess.TimeoutExpired):
                 pass
 
+    def image_progress(self, image, phase, source, destination):
+        with self.lock:
+            self.run['image_progress'] = {'image': image, 'phase': phase, 'source': source, 'destination': destination}
+            self.run['updated'] = now()
+            self.save()
+
     def execute(self):
         try:
             with tempfile.TemporaryDirectory(prefix='orgportal-distributed-') as temporary:
@@ -308,6 +324,37 @@ sys.exit(subprocess.call([sys.executable,str(work/'lan-monitor/distributed_worke
                 with self.lock:
                     run = self.run
                     hosts = run['hosts']
+                images = ImageDistributor(hosts, ssh, lambda: bool(run.get('stop_requested')), self.image_progress)
+                from launcher_sessions import LauncherSessions
+                def session_progress(host, phase, detail):
+                    with self.lock:
+                        host['session'] = {'status':phase, **(detail or {})}
+                        run['preparation'] = 'Launcher session: '+host['host']+' · '+phase
+                        self.save()
+                sessions = LauncherSessions(self.root, hosts, ssh, images,
+                    lambda:bool(run.get('stop_requested')),session_progress)
+                reachable = sessions.accessible()
+                if not reachable:
+                    raise RuntimeError('No accessible machines with Docker for launcher initialization')
+                unavailable = [host for host in hosts if host not in reachable]
+                hosts = plan(reachable)
+                images.hosts = hosts
+                with self.lock:
+                    run['hosts'] = hosts + unavailable
+                    run['unavailable_hosts'] = [host['host'] for host in unavailable]
+                    for host in unavailable:
+                        host.update(suites=[],jobs={})
+                    self.save()
+                initialized = sessions.initialize(hosts)
+                if len(initialized) != len(hosts):
+                    raise RuntimeError('Launcher session initialization failed; see machine session details')
+                with self.lock:
+                    run.pop('preparation',None)
+                    self.save()
+                image_ids = images.prepare()
+                with self.lock:
+                    run['images'] = image_ids
+                    for host in hosts:host['images'] = images.host_images[host['host']]
                     frozen = copy.deepcopy(run)
                 checksum = bundle(self.root, archive, frozen)
                 with self.lock:
@@ -316,12 +363,14 @@ sys.exit(subprocess.call([sys.executable,str(work/'lan-monitor/distributed_worke
                     self.save()
                 if run.get('stop_requested'):
                     return
-                with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=len(hosts)) as pool:
                     futures = [pool.submit(self.host, index, host, archive, checksum, run['id']) for index, host in enumerate(hosts)]
                     for future in futures:
                         future.result()
+                if not run.get('stop_requested'):
+                    self.network(run, archive)
                 with self.lock:
-                    run['status'] = 'passed' if all(host['status'] == 'passed' for host in hosts) else 'failed'
+                    run['status'] = 'passed' if not run.get('unavailable_hosts') and all(host['status'] == 'passed' for host in hosts) else 'failed'
         except Exception as exc:
             with self.lock:
                 self.run.update(status='failed', error=type(exc).__name__ + ': ' + str(exc)[:500])
@@ -335,6 +384,41 @@ sys.exit(subprocess.call([sys.executable,str(work/'lan-monitor/distributed_worke
                         for job in host['jobs'].values():
                             if job['status'] not in FINAL:
                                 job['status'] = 'stopped'
+                elif self.run.get('status') == 'failed':
+                    for host in self.run['hosts']:
+                        if host['status'] not in FINAL:
+                            host['status'] = 'failed'
+                        for job in host['jobs'].values():
+                            if job['status'] not in FINAL:
+                                job.update(status='failed',phase='infrastructure')
                 self.running = False
                 self.run['finished'] = now()
                 self.save()
+
+    def network(self,run,archive=None):
+        from p2p_network import NetworkP2P
+        hosts=[host for host in run['hosts'] if 'p2p' in host.get('jobs',{})]
+        started=time.monotonic()
+        with self.lock:
+            for host in hosts:
+                host['jobs']['p2p'].update(status='running',phase='network',started=now())
+                host['status']='running'
+            self.save()
+        result=NetworkP2P(hosts,run['id'],ssh,emit=self.update,
+                          stopped=lambda:bool(run.get('stop_requested')),source_archive=archive).run()
+        with self.lock:
+            run['p2p']=result
+            for host in hosts:
+                job=host['jobs']['p2p'];job.update(status=result['status'],duration_seconds=round(time.monotonic()-started,2),
+                    test_counts={'tests':4,'passed':sum(c['status']=='passed' for c in result['checks']),
+                                 'failed':0 if result['status']=='passed' else 1,'skipped':0})
+                job['logs'].append('Direct network coverage: '+result['coverage']['direct']+'; cross-NAT: '+result['coverage']['cross_nat']+'; TURN: '+result['coverage']['turn'])
+                if result.get('error'):job.setdefault('failure_details',[]).append(result['error'])
+                for check in result['checks']:
+                    routes=list(check.get('routes',[]))
+                    for receiver in check.get('receivers',[]):routes.extend(receiver['routes'])
+                    for route in routes:
+                        pair=route['pair'];job['logs'].append(check['name']+': '+json.dumps(pair,separators=(',',':')))
+                host['status']='passed' if all(j['status']=='passed' for j in host['jobs'].values()) else 'failed'
+                host['finished']=now()
+            self.save()

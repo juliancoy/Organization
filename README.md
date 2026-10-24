@@ -148,3 +148,46 @@ backup includes an isolated restore drill and a manifest of recovery gaps.
 `./local-sync --org lifetech --include-private` creates a separate scoped testing
 copy from the latest verified archive. See [DISASTER_RECOVERY.md](DISASTER_RECOVERY.md)
 for credentials, daily scheduling, restore steps, retention, and current limits.
+
+### Launcher WebRTC mesh
+
+Launchers exchange readiness and Docker service names/states over encrypted WebRTC data channels. They use the saved LAN machine inventory, including the coordinator itself. The alphabetically earlier hostname initiates each connection; disconnected peers retry automatically. Each launcher keeps its current peer observations in `/tmp/launcher-peers.json` inside its container, and removes stale observations when a connection times out.
+
+After the updated code is available on each machine, run `./run.py --peer-enroll` on the coordinator. This provisions a shared fleet key and machine-specific configuration through the saved SSH accounts at `~/.config/lifetech-launcher/peers.json` with owner-only permissions. Then run `./run.py --recreate-launcher` on each machine to rebuild and recreate its launcher with the configuration mounted read-only. Enrollment alone does not restart anything.
+
+TCP port 8790 carries AES-GCM encrypted offer/answer signaling directly between enrolled LAN peers. LAN WebRTC uses direct UDP ICE candidates and DTLS data channels. Internet-enrolled launchers also use the authenticated public signaling service and its STUN/TURN configuration. Fleet machines need LAN connectivity on TCP 8790 and the UDP candidate ports. Signaling includes peer identities, expiring timestamps, single-use offer nonces and matching answer nonces. The shared fleet key is the trust boundary: all enrolled machines are trusted. Status messages contain no environment variables, credentials, logs, database content, or commands. This channel currently shares status; distributed job assignment and Docker image transfers continue through their existing paths.
+
+The launcher image installs `aiortc` and `aiohttp` for native WebRTC support. This adds native dependencies to the launcher image and requires package downloads when rebuilding it; browsers downloading the website receive no additional dependencies.
+
+### Session initialization from the tests page
+
+Starting a distributed run now performs launcher-session preparation first. It probes every saved machine plus the coordinator for SSH/local access, Python and Docker, reassigns application suites across reachable machines, prepares the launcher image once and streams cached copies over the LAN. A healthy enrolled launcher/session is reused. A missing session starts as a separate `lifetech-launcher-session` container; it does not launch or restart the application stack. The coordinator waits for fresh WebRTC status from every accessible peer before starting application suites. Per-machine session errors and unreachable machines remain visible; incomplete machine coverage cannot produce an overall passing run.
+
+Session containers remain running between test runs. The Stop button stops the distributed test run; it leaves initialized launcher sessions available. Existing active launchers with conflicting enrollment produce an explicit error rather than silently changing their fleet key. Recreating the full launcher takes over the peer service from its session container.
+
+### Internet device registration
+
+After deploying the updated peer Worker, the public registration page is `/register` and the API is `POST /launchers/register`. Any internet-connected device with a fleet invitation can enroll; registration grants status-mesh membership, not SSH access, test execution, or production credentials.
+
+On the trusted coordinator, create one private invitation:
+
+```sh
+./peer-share launcher-invite --output /tmp/launcher-invitation.json
+```
+
+The file includes a private registration link and an invitation token valid for one hour. Give the invitation to its intended device. On that device:
+
+```sh
+./run.py --peer-register /path/to/launcher-invitation.json
+./run.py --recreate-launcher
+```
+
+`--peer-register` needs only Python's standard library and HTTPS access. It creates a random device credential, registers through the public service and saves the credential in owner-only host configuration. Interrupted enrollment retries reuse the same pending credential. Existing working registration remains intact if a new enrollment fails. Registration lasts 90 days; the launcher renews its 30-minute signaling sessions automatically and reconnects after disconnections. Each fleet currently supports 24 enrolled devices. Internet signaling discovers peers within that fleet and returns the existing short-lived STUN/TURN settings. TURN must be configured for networks that cannot establish a direct WebRTC route.
+
+To revoke a device using its printed peer UUID:
+
+```sh
+./peer-share launcher-revoke --peer DEVICE_UUID
+```
+
+Only the coordinator's signing key can create enrollment/admin invitations. The server stores hashes of device credentials, rejects enrollment-token reuse by a different device credential, separates enrollment/admin/session audiences, and checks revocation before new signaling or ICE leases. Revocation closes the device's signaling connection; connected launcher clients then close their peer links. The public registry accepts no unauthenticated fleet membership. Deploying this Worker and enabling TURN are separate release actions; implementing these paths does not publish them.

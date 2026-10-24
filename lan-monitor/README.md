@@ -231,3 +231,79 @@ returned. Resource context is available on compai; remote file names and
 socket-to-file or socket-to-database-name mappings require application
 instrumentation. Context is refreshed with socket ownership and expires after
 ten seconds. Opening a process card reveals its file and database details.
+
+### Distributed image preparation
+
+Before dispatching suites, the coordinator checks its Docker cache and every saved
+SSH machine for each required image. A complete cached copy is reused. Only when
+no machine has the image does the coordinator pull it from the registry. The
+combined Python/Node toolchain is also prepared once, rather than built on every
+worker.
+
+Images move directly from `docker image save | gzip -1` on the source to
+`gzip -d | docker image load` on the destination over SSH. The coordinator relays
+the stream through bounded memory pipes; no tar archives or intermediate image
+files are written. Docker stores imported images in the destination's normal
+image cache. Matching IDs or matching configuration and layer fingerprints skip
+transfers, including across Docker storage backends. Each device records its own
+verified image ID before dispatch. An unreachable peer does not prevent discovery on other machines. Workers use
+`--pull=never`, verify the image IDs in the source snapshot, and execute those exact
+image IDs rather than mutable tags. Image preparation is cancelled by **Stop all tests**.
+
+Preparing images does not run a suite; stopped runs remain stopped. These changes
+apply on the next explicitly requested run after the coordinator loads this code.
+
+### Live container website view
+
+On the main tests page, select a machine, open a running container, and choose
+**Website** beside **Console**. Publicly bound web ports appear in the port
+selector. The embedded website remains live and interactive while machine
+observations refresh; **Reload** refreshes only the website. **Open in new tab**
+is available for sites that disallow embedding or need browser sign-in.
+
+A custom HTTP/HTTPS website or gateway URL can be entered for services reached
+through another container's gateway. Loopback-only bindings are identified rather
+than presented as reachable LAN endpoints. Containers without a published web
+endpoint still offer their console and a custom URL field. Selecting Website
+does not start a server, container, test, or deployment.
+
+### Cross-device WebRTC tests
+
+`Start all tests` includes a coordinated **Cross-device WebRTC P2P** suite after
+application shards finish. It requires at least two distinct saved SSH machine
+identities. Each participant runs a disposable, non-root browser container with
+all Linux capabilities dropped. This dedicated suite uses the host network for
+real ICE connectivity; ordinary application test containers remain offline.
+Only public SDK source is mounted. The coordinator keeps the enrollment signing
+key and sends browsers short-lived invitations for a synthetic dataset.
+
+The suite checks SHA-256 of received bytes, the selected ICE candidate pair and
+physical-interface addresses, and RTCDataChannel byte counters. Loopback,
+hidden/unverifiable routes, duplicate machine identities, and TURN relay paths
+cannot satisfy the direct-P2P check. It also checks reseeding with the original
+sender disconnected, repairing a missing cached chunk, and WASM consumption of
+received fixtures. Cross-NAT and TURN coverage are reported separately; a LAN
+pass does not establish either. Device clocks must be synchronized within one
+minute so expiring invitations have consistent semantics.
+
+To run only this network suite against the saved devices:
+
+```sh
+python3 lan-monitor/p2p_network.py --report lan-monitor/.runtime/p2p/acceptance.json
+```
+
+Reports contain machine fingerprints, tested SDK hash, fixture hash, selected
+routes and byte counts; invitations and signing keys are excluded. Normal
+integrated reports follow the distributed runner's retention policy. A manually
+chosen report remains until its operator removes it.
+
+Browser images use the shared image distributor: inspect existing image IDs,
+reuse a matching cached image, otherwise stream `docker image save` through
+compression and SSH directly into `docker image load`. Image archives are never
+staged as `.tar`/`.tar.gz` files on either device. The SDK transfer is a small
+source-only bundle, separate from container images. Browsers execute the verified
+image ID with `--pull=never`; Docker's ordinary image store remains necessary.
+
+The coordinator is also a worker: each new run includes the local machine, runs its shard directly without SSH, and starts all worker shards concurrently. Its suites appear in its machine card alongside the LAN workers.
+
+Distributed-run preparation now initializes missing launcher WebRTC sessions on accessible saved machines and the local coordinator. It reuses healthy sessions, prepares/distributes the launcher image through the same LAN cache pipeline, and waits for fresh peer status before dispatching application suites. Offline machines are reported explicitly and excluded from assignment; incomplete fleet coverage cannot pass. Session sidecars persist between runs and do not restart the application stack. Internet enrollment and session renewal are documented in the root README.

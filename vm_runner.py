@@ -33,7 +33,7 @@ def source_files(repository):
             raise RuntimeError(f'Unsafe source path: {name}')
         if any(part in {'.git', 'node_modules', '__pycache__', '.venv', '.wrangler'} or part.startswith('.local') for part in path.parts):
             continue
-        if path.name == 'pidp_editme.py' or (path.name.startswith(('.env', '.dev.vars')) and not path.name.endswith(('.example', '.sample'))):
+        if path.name == 'pidp_editme.py' or ((path.name.startswith(('.env', '.dev.vars')) or path.name.endswith('.env')) and not path.name.endswith(('.example', '.sample'))):
             continue
         source = repository / path
         # Do not follow symlinks (including parent directories) out of a checkout.

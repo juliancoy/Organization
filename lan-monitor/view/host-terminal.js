@@ -1,3 +1,4 @@
+import {containerWebsites} from './container-websites.js';
 import {breadcrumbNav,setBreadcrumbs} from './breadcrumbs.js';
 import {cpuColor} from './cpu-colors.js';
 let host=null,report=null,cpuReport=null,busy=false,hideTimer,openTimer,pendingHost=null,pinned=false;
@@ -73,9 +74,47 @@ consoleTools.className='console-tools';consoleSearch.type='search';consoleSearch
 function renderConsole(){const query=consoleSearch.value.toLowerCase(),lines=consoleText.split('\n');const visible=query?lines.filter(line=>line.toLowerCase().includes(query)):lines;const follow=containerConsole.scrollHeight-containerConsole.scrollTop-containerConsole.clientHeight<40;containerConsole.textContent=visible.join('\n')||'No matching output';consoleInfo.textContent=consolePaused?'Paused':query?visible.length+' matching lines':'Live · latest 100 lines';if(follow)containerConsole.scrollTop=containerConsole.scrollHeight;}
 consoleSearch.oninput=renderConsole;consolePause.onclick=()=>{consolePaused=!consolePaused;consolePause.textContent=consolePaused?'Resume output':'Pause output';renderConsole();};
 consoleTools.append(consoleSearch,consolePause,consoleInfo);
+const containerViews=document.createElement('div'),consoleView=document.createElement('button'),websiteView=document.createElement('button');
+containerViews.className='container-view-options';containerViews.setAttribute('role','group');containerViews.setAttribute('aria-label','Container view');
+consoleView.type=websiteView.type='button';consoleView.textContent='Console';websiteView.textContent='Website';containerViews.append(consoleView,websiteView);
+const website=document.createElement('section'),websiteForm=document.createElement('form'),websitePorts=document.createElement('select'),websiteUrl=document.createElement('input'),websiteGo=document.createElement('button'),websiteRefresh=document.createElement('button'),websiteLink=document.createElement('a'),websiteHint=document.createElement('p'),websiteFrame=document.createElement('iframe');
+website.className='container-website';website.hidden=true;websiteForm.className='container-website-tools';websitePorts.setAttribute('aria-label','Published website port');websiteUrl.type='url';websiteUrl.placeholder='Website or gateway URL';websiteUrl.setAttribute('aria-label','Container website URL');websiteGo.type='submit';websiteGo.textContent='View';websiteRefresh.type='button';websiteRefresh.textContent='Reload';websiteLink.textContent='Open in new tab';websiteLink.target='_blank';websiteLink.rel='noopener noreferrer';websiteHint.className='muted';websiteFrame.title='Live container website';websiteFrame.hidden=true;websiteFrame.setAttribute('sandbox','allow-scripts allow-forms allow-same-origin allow-popups');websiteFrame.referrerPolicy='no-referrer';
+websiteForm.append(websitePorts,websiteUrl,websiteGo,websiteRefresh,websiteLink);website.append(websiteForm,websiteHint,websiteFrame);
+let containerView='console',websiteKey='',websiteDetail=null;const websiteUrls=new Map();
+function renderWebsite(detail){
+ websiteDetail=detail;
+ const key=host+'/'+selectedContainer,endpoints=containerWebsites(host,detail),signature=JSON.stringify(endpoints),changed=websiteKey!==key;
+ if(changed){
+  websiteKey=key;websiteUrl.value=websiteUrls.get(key)||endpoints.find(item=>!item.loopback)?.url||'';
+  websiteFrame.removeAttribute('src');websitePorts.dataset.signature='';
+ }
+ if(websitePorts.dataset.signature!==signature){
+  websitePorts.replaceChildren(new Option('Custom URL',''));
+  for(const endpoint of endpoints){const option=new Option(endpoint.label,endpoint.url);option.disabled=endpoint.loopback;websitePorts.append(option);}
+  websitePorts.dataset.signature=signature;
+ }
+ websitePorts.value=endpoints.some(item=>item.url===websiteUrl.value&&!item.loopback)?websiteUrl.value:'';
+ websitePorts.hidden=!endpoints.length;
+ websiteHint.textContent=endpoints.some(item=>!item.loopback)?'Live, interactive website. If the site blocks embedding, open it in a new tab.':endpoints.length?'Published ports are bound to this machine’s loopback address. Enter a reachable gateway URL to preview the site.':'No published web endpoint. Enter a reachable website or gateway URL, or use Console for this container.';
+ if(containerView==='website'&&changed&&websiteUrl.value)loadWebsite();
+}
+function loadWebsite(){
+ let url;try{url=new URL(websiteUrl.value);if(!['http:','https:'].includes(url.protocol)||url.username||url.password)throw Error();}catch{websiteHint.textContent='Enter an HTTP or HTTPS website URL.';return;}
+ websiteUrls.set(websiteKey,url.href);websiteLink.href=url.href;websiteLink.hidden=false;websiteFrame.hidden=false;
+ if(websiteFrame.getAttribute('src')!==url.href)websiteFrame.src=url.href;
+}
+function setContainerView(view){
+ containerView=view;containerPanel.dataset.view=view;website.hidden=view!=='website';consoleTools.hidden=containerConsole.hidden=view!=='console';containerDetails.hidden=view==='website';
+ consoleView.setAttribute('aria-pressed',String(view==='console'));websiteView.setAttribute('aria-pressed',String(view==='website'));
+ if(view==='website'&&websiteDetail){renderWebsite(websiteDetail);if(websiteUrl.value)loadWebsite();}else websiteFrame.removeAttribute('src');
+}
+function clearWebsite(){websiteFrame.removeAttribute('src');websiteFrame.hidden=true;websiteLink.hidden=true;websiteKey='';websiteDetail=null;}
+consoleView.onclick=()=>setContainerView('console');websiteView.onclick=()=>{pinned=true;pin.textContent='Unpin';panel.classList.add('is-pinned');setContainerView('website');};
+websiteForm.onsubmit=event=>{event.preventDefault();loadWebsite();};websitePorts.onchange=()=>{if(websitePorts.value){websiteUrl.value=websitePorts.value;loadWebsite();}};
+websiteRefresh.onclick=()=>{websiteFrame.removeAttribute('src');loadWebsite();};websiteLink.hidden=true;setContainerView('console');
 const containerCrumbs=breadcrumbNav('Container inspection');
-containerPanel.append(containerClose,containerHeading,containerCrumbs,containerDetails,consoleTools,containerConsole);document.body.append(containerPanel);
-function backToMachine(){selectedContainer=null;containerPanel.hidden=true;pinHostTerminal(host);pin.focus({preventScroll:true});}
+containerPanel.append(containerClose,containerHeading,containerCrumbs,containerViews,containerDetails,consoleTools,containerConsole,website);document.body.append(containerPanel);
+function backToMachine(){clearWebsite();selectedContainer=null;containerPanel.hidden=true;pinHostTerminal(host);pin.focus({preventScroll:true});}
 containerClose.onclick=backToMachine;
 containerPanel.onpointerenter=()=>clearTimeout(hideTimer);
 containerPanel.onpointerleave=hideHostTerminal;
@@ -92,13 +131,13 @@ async function refreshContainers(){
    containerGrid.dataset.signature=signature;containerGrid.replaceChildren();
    for(const item of data.containers){
     const button=document.createElement('button');button.type='button';button.className='container-tile';button.dataset.containerClass=containerClass(item);button.textContent=item.name+'\n'+(containerClass(item)==='launcher'?'Launcher · Biotech gold\n':'')+item.image;button.setAttribute('aria-haspopup','dialog');
-    const open=()=>{if(selectedContainer===item.id&&!containerPanel.hidden)return;selectedContainer=item.id;containerHeading.textContent=item.name;containerDetails.textContent=item.image;containerConsole.textContent='Loading console…';containerPanel.hidden=false;setBreadcrumbs(containerCrumbs,[{label:'Network',action:()=>{dismiss();containerPanel.hidden=true;selectedContainer=null;}},{label:host,action:backToMachine},{label:item.name}]);setTimeout(()=>void refreshContainers(),0);};
+    const open=()=>{if(selectedContainer===item.id&&!containerPanel.hidden)return;clearWebsite();selectedContainer=item.id;renderWebsite(item);setContainerView(containerView);containerHeading.textContent=item.name;containerDetails.textContent=item.image;containerConsole.textContent='Loading console…';containerPanel.hidden=false;setBreadcrumbs(containerCrumbs,[{label:'Network',action:()=>{dismiss();clearWebsite();containerPanel.hidden=true;selectedContainer=null;}},{label:host,action:backToMachine},{label:item.name}]);setTimeout(()=>void refreshContainers(),0);};
     let previewTimer;button.onpointerenter=()=>{previewTimer=setTimeout(open,250);};button.onpointerleave=()=>clearTimeout(previewTimer);button.onfocus=open;button.onclick=()=>{open();pinned=true;pin.textContent='Unpin';panel.classList.add('is-pinned');};containerGrid.append(button);
    }
   }
-  if(requestedId&&!data.detail){containerDetails.textContent='Container stopped or is no longer available.';containerConsole.textContent='';}
+  if(requestedId&&!data.detail){clearWebsite();websiteHint.textContent='Container stopped or is no longer available.';containerDetails.textContent='Container stopped or is no longer available.';containerConsole.textContent='';}
   if(data.detail){
-   const detail=data.detail;containerHeading.textContent=detail.name+' · '+requestedHost;
+   const detail=data.detail;renderWebsite(detail);containerHeading.textContent=detail.name+' · '+requestedHost;
    containerPanel.dataset.containerClass=containerClass(detail);
    containerDetails.textContent=JSON.stringify({image:detail.image,class:containerClass(detail),id:detail.id,state:detail.state,health:detail.health,started:detail.started_at,restarts:detail.restart_count,ports:detail.ports},null,2);
    if(!consolePaused){consoleText=detail.console||'No console output recorded.';renderConsole();}
@@ -107,8 +146,8 @@ async function refreshContainers(){
  finally{containerBusy=false;}
 }
 setInterval(()=>{
- if(!host||panel.hidden){containerPanel.hidden=true;selectedContainer=null;containerHost=null;return;}
- if(containerHost!==host){containerHost=host;selectedContainer=null;containerPanel.hidden=true;containerGrid.replaceChildren();containerGrid.dataset.signature='';containersTitle.textContent='Running containers · Loading…';}
+ if(!host||panel.hidden){clearWebsite();containerPanel.hidden=true;selectedContainer=null;containerHost=null;return;}
+ if(containerHost!==host){clearWebsite();containerHost=host;selectedContainer=null;containerPanel.hidden=true;containerGrid.replaceChildren();containerGrid.dataset.signature='';containersTitle.textContent='Running containers · Loading…';}
  if(document.visibilityState==='visible')void refreshContainers();
 },1000);
-document.addEventListener('keydown',event=>{if(event.key==='Escape'){selectedContainer=null;containerPanel.hidden=true;}});
+document.addEventListener('keydown',event=>{if(event.key==='Escape'){clearWebsite();selectedContainer=null;containerPanel.hidden=true;}});

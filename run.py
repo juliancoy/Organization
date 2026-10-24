@@ -17,35 +17,22 @@ ROOT = Path(__file__).resolve().parent
 def launch_container(args):
     """Keep the local launcher visible alongside the services it starts."""
     from tempfile import TemporaryDirectory
-    from importlib.metadata import distribution
     import shutil
     name = ('lifetech' if args.prefix == 'bmoremedtech-' else args.prefix.rstrip('-') or 'local') + '-launcher'
-    image = 'organization-launcher:local'
+    image = 'organization-launcher:webrtc-1'
     existing = subprocess.run(['docker', 'inspect', '--format', '{{.State.Running}}', name], capture_output=True, text=True)
-    if existing.returncode == 0 and existing.stdout.strip() == 'true':
+    if existing.returncode == 0 and existing.stdout.strip() == 'true' and not args.recreate_launcher:
         print(f'{name} is already running. View its output with: docker logs -f {name}')
         if args.login:
             container_login(args, name)
         return 0
-    if existing.returncode == 0:
-        subprocess.run(['docker', 'rm', name], check=True)
     with TemporaryDirectory(prefix='organization-launcher-') as folder:
-        folder = Path(folder)
-        shutil.copyfile(ROOT / 'Dockerfile.launcher', folder / 'Dockerfile.launcher')
-        # Package the installed launcher dependencies; startup needs no package downloads.
-        if sys.version_info[:2] != (3, 12):
-            raise RuntimeError('Use Python 3.12 for the launcher image.')
-        for package in ('docker', 'cryptography', 'cffi', 'pycparser', 'requests', 'urllib3', 'charset_normalizer', 'idna', 'certifi'):
-            installed = distribution(package)
-            for relative in installed.files or []:
-                if '..' in relative.parts or '__pycache__' in relative.parts:
-                    continue
-                source = Path(installed.locate_file(relative))
-                if source.is_file():
-                    target = folder / 'python' / relative
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(source, target)
-        subprocess.run(['docker', 'build', '-f', str(folder / 'Dockerfile.launcher'), '-t', image, str(folder)], check=True)
+        shutil.copyfile(ROOT / 'Dockerfile.launcher', Path(folder) / 'Dockerfile')
+        subprocess.run(['docker', 'build', '-t', image, folder], check=True)
+    if existing.returncode == 0:
+        subprocess.run(['docker', 'rm', '--force', name], check=True)
+    # The full launcher takes over the peer port from a test-initialized session.
+    subprocess.run(['docker','rm','--force','lifetech-launcher-session'],capture_output=True)
     socket = Path('/var/run/docker.sock')
     docker_cli = Path(shutil.which('docker')).resolve()
     command = ['docker', 'run', '--detach', '--init', '--name', name, '--restart', 'unless-stopped',
@@ -57,6 +44,10 @@ def launch_container(args):
                '--mount', f'type=bind,src={docker_cli},dst=/usr/local/bin/docker,readonly',
                '--env', 'HOME=/tmp', '--env', 'PYTHONUNBUFFERED=1', '--env', 'ORGANIZATION_LAUNCHER_CONTAINER=1',
                '--env', 'ORGPORTAL_JOURNAL_AUTO_SYNC=false']
+    peer_folder = Path.home() / '.config/lifetech-launcher'
+    peer_folder.mkdir(parents=True,exist_ok=True,mode=0o700)
+    command += ['--mount', f'type=bind,src={peer_folder},dst=/run/launcher-config',
+                '--env', 'LIFETECH_PEER_CONFIG=/run/launcher-config/peers.json']
     for key in os.environ:
         if key.startswith(('ORGPORTAL_', 'PIDP_', 'CHAT_')) and key != 'ORGPORTAL_JOURNAL_AUTO_SYNC':
             command += ['--env', key]
@@ -91,6 +82,9 @@ def container_login(args, name):
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--recreate-launcher', action='store_true', help='Recreate the launcher container to load updated code/configuration; keep service containers and data.')
+    parser.add_argument('--peer-register', type=Path, help='Register this machine using a private internet launcher invitation file.')
+    parser.add_argument('--peer-enroll', action='store_true', help='Enroll saved LAN machines and this coordinator for launcher WebRTC; does not restart services.')
     parser.add_argument('--release', choices=['runtime', 'check', 'build', 'deploy', 'verify'], help='Run a release action in the pinned Bookworm container.')
     parser.add_argument('--target', choices=['all', 'web', 'api'], default='all')
     parser.add_argument('--release-checkout', type=Path, help='Clean OrgPortal checkout to release.')
@@ -106,6 +100,12 @@ def parse_args(argv=None):
     parser.add_argument('--vm-timeout', type=int, default=5400, help='Total VM run timeout in seconds (default: 5400).')
     parser.add_argument('--vm-image-archive', type=Path, help='Optional docker-save archive to preload inside the VM.')
     args = parser.parse_args(argv)
+    if args.recreate_launcher and (args.release or args.vm or args.peer_enroll or args.peer_register):
+        parser.error('--recreate-launcher cannot be combined with --release, --vm or --peer-enroll')
+    if args.peer_enroll and args.peer_register:
+        parser.error('Choose either LAN enrollment or internet registration')
+    if (args.peer_enroll or args.peer_register) and (args.release or args.vm or args.login):
+        parser.error('--peer-enroll cannot be combined with --release, --vm or --login')
     if args.release_checkout and not args.release:
         parser.error('--release-checkout requires --release')
     if args.release and (args.vm or args.login):
@@ -125,6 +125,16 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
+    if args.peer_register:
+        sys.path.insert(0, str(ROOT / 'scripts'))
+        from launcher_registration import register
+        print(json.dumps(register(args.peer_register)))
+        return 0
+    if args.peer_enroll:
+        sys.path.insert(0, str(ROOT / 'scripts'))
+        from enroll_launcher_peers import enroll
+        enroll(ROOT)
+        return 0
     if args.release:
         portal = ROOT / 'OrgPortal'
         sys.path.insert(0, str(portal))
@@ -164,8 +174,14 @@ def main(argv=None):
     if os.getenv('ORGANIZATION_LAUNCHER_CONTAINER'):
         Path('/tmp/launcher-ready').touch()
         print('Startup complete. Launcher is available in the machine container view.')
-        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
-        signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
+        sys.path.insert(0, str(ROOT / 'scripts'))
+        from launcher_peers import start
+        stop_peers = start(args.prefix)
+        def shutdown(*_):
+            stop_peers()
+            sys.exit(0)
+        signal.signal(signal.SIGTERM, shutdown)
+        signal.signal(signal.SIGINT, shutdown)
         while True:
             signal.pause()
     return 0

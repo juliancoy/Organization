@@ -16,6 +16,7 @@ BROWSER = 'mcr.microsoft.com/playwright:v1.59.1-noble'
 PYTHON = 'python:3.12-bookworm'
 # Commands are application-owned, never accepted from dashboard requests.
 SUITES = {
+    'p2p': {'name': 'Cross-device WebRTC P2P', 'coordinated': True, 'image': 'selenium/standalone-chrome:latest'},
     'monitor': {'name': 'LAN monitor Python', 'cwd': 'lan-monitor', 'image': PYTHON,
                 'test': ['python3', '-m', 'unittest', 'discover', '-s', 'tests', '-v']},
     'map': {'name': 'LAN map model', 'cwd': 'lan-monitor', 'image': NODE,
@@ -24,7 +25,7 @@ SUITES = {
                   'prepare': ['python', '-m', 'pip', 'install', '--target', '/work/.test-deps/workspace', '-r', 'requirements.txt'],
                   'test': ['python', '-m', 'unittest', 'discover', '-s', 'tests', '-v']},
     'org-api': {'name': 'Organization API', 'cwd': 'OrgPortal/org-worker', 'image': NODE,
-                'prepare': ['npm', 'ci', '--no-audit', '--no-fund'],
+                'prepare': ['sh', '-c', 'npm ci --prefix ../chat-worker --omit=dev --no-audit --no-fund && npm ci --no-audit --no-fund'],
                 'test': ['sh', '-c', 'npm test && npm run typecheck && npm run check:bundle']},
     'chat': {'name': 'Chat API', 'cwd': 'OrgPortal/chat-worker', 'image': NODE,
              'prepare': ['npm', 'ci', '--no-audit', '--no-fund'],
@@ -83,21 +84,10 @@ def run(work, suite_id, phase, spec, run_id, env):
     if not command:
         return 0
     name = 'orgportal-test-' + run_id + '-' + suite_id
-    if spec.get('image') == 'orgportal-distributed-python-node:1':
-        inspected = subprocess.run(['docker', 'image', 'inspect', spec['image']], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
-        if inspected.returncode:
-            emit('phase', suite=suite_id, phase='toolchain')
-            build = subprocess.run(['docker', 'build', '-t', spec['image'], '-'],
-                input='FROM node:22-bookworm AS node\nFROM python:3.12-bookworm\nCOPY --from=node /usr/local/bin/node /usr/local/bin/node\n',
-                capture_output=True, text=True, timeout=900)
-            for line in (build.stdout + build.stderr).splitlines()[-80:]:
-                emit('log', suite=suite_id, phase='toolchain', line=clean(line))
-            if build.returncode:
-                return 125
     cwd = work / spec['cwd']
     native = spec.get('native')
     if not native:
-        command = ['docker', 'run', '--rm', '--name', name, '--user', str(os.getuid()) + ':' + str(os.getgid()), '-e', 'HOME=/tmp', '--cpus', '2', '--memory', '3g',
+        command = ['docker', 'run', '--pull=never', '--rm', '--name', name, '--user', str(os.getuid()) + ':' + str(os.getgid()), '-e', 'HOME=/tmp', '--cpus', '2', '--memory', '3g',
                    '--pids-limit', '512', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
                    '--shm-size', '256m', '--network', 'host' if phase == 'prepare' else 'none',
                    '--mount', 'type=bind,src=' + str(work) + ',dst=/work', '-w', '/work/' + spec['cwd'],
@@ -172,10 +162,20 @@ def main():
                ORGPORTAL_BUILD_COMMIT=manifest['repositories']['OrgPortal']['commit'])
     emit('host', hostname=__import__('socket').gethostname(), cpus=os.cpu_count(),
          python=__import__('sys').version.split()[0], suites=target['suites'])
+    for image in dict.fromkeys(SUITES[suite]['image'] for suite in target['suites']):
+        result = subprocess.run(['docker', 'image', 'inspect', image, '--format', '{{json .Id}}'],
+                                capture_output=True, text=True, timeout=25)
+        if result.returncode or json.loads(result.stdout) != target['images'].get(image):
+            emit('log', phase='images', line='Required image was not distributed or its ID differs: ' + image)
+            raise SystemExit(125)
     for suite_id in target['suites']:
         if (work.parent / 'STOP').exists():
             break
         spec = SUITES[suite_id]
+        if spec.get('coordinated'):
+            continue  # The coordinator must drive real peers together, across hosts.
+        # Execute the verified image ID, independent of later tag changes.
+        spec = {**spec, 'image': target['images'][spec['image']]}
         started = time.monotonic()
         emit('suite', suite=suite_id, status='running', name=spec['name'])
         status = run(work, suite_id, 'prepare', spec, manifest['id'], env)

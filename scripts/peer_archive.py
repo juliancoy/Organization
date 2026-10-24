@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 from pathlib import Path
 import time
 import urllib.parse
@@ -24,10 +25,10 @@ def encoded(value):
     return base64.urlsafe_b64encode(json.dumps(value,separators=(',',':')).encode()).rstrip(b'=').decode()
 
 
-def ticket(secret,room,ttl=3600):
+def ticket(secret,room,ttl=3600,audience='archive-peers-v1'):
     if len(secret)<32 or not 1<=ttl<=3600:raise RuntimeError('A signing key and a lifetime of 1–3600 seconds are required')
     now=int(time.time());peer=str(uuid.uuid4())
-    body={'aud':'archive-peers-v1','room':room,'peer':peer,'iat':now,'exp':now+ttl}
+    body={'aud':audience,'room':room,'peer':peer,'iat':now,'exp':now+ttl}
     value=encoded({'alg':'HS256','typ':'JWT'})+'.'+encoded(body)
     signature=base64.urlsafe_b64encode(hmac.new(secret.encode(),value.encode(),hashlib.sha256).digest()).rstrip(b'=').decode()
     return body,value+'.'+signature
@@ -65,6 +66,11 @@ def main():
     invite=sub.add_parser('invite');invite.add_argument('--package',type=Path,required=True);invite.add_argument('--output',type=Path,required=True)
     invite.add_argument('--key-file',type=Path,default=DEFAULT_KEY);invite.add_argument('--url',default=DEFAULT_URL)
     invite.add_argument('--devices',type=int,default=1);invite.add_argument('--ttl',type=int,default=3600)
+    launcher=sub.add_parser('launcher-invite');launcher.add_argument('--output',type=Path,required=True)
+    launcher.add_argument('--key-file',type=Path,default=DEFAULT_KEY);launcher.add_argument('--url',default=DEFAULT_URL)
+    launcher.add_argument('--devices',type=int,default=1);launcher.add_argument('--ttl',type=int,default=3600)
+    launcher.add_argument('--fleet-file',type=Path,default=Path.home()/'.config/lifetech-launcher/fleet.json')
+    revoke=sub.add_parser('launcher-revoke');revoke.add_argument('--peer',required=True);revoke.add_argument('--fleet-file',type=Path,default=Path.home()/'.config/lifetech-launcher/fleet.json');revoke.add_argument('--key-file',type=Path,default=DEFAULT_KEY);revoke.add_argument('--url',default=DEFAULT_URL)
     args=parser.parse_args()
     if args.action=='prepare-test':
         import tempfile
@@ -79,7 +85,7 @@ def main():
     elif args.action=='prepare-encrypted':
         room=package_file(args.file,args.output,'encrypted-dr')
         print(json.dumps({'package':str(args.output),'dataset':room,'decryptionKeyIncluded':False}))
-    else:
+    elif args.action=='invite':
         if not 1<=args.devices<=24:raise RuntimeError('Choose 1–24 devices per dataset room')
         parsed=urllib.parse.urlsplit(args.url)
         if parsed.scheme!='https' and not (parsed.scheme=='http' and parsed.hostname in {'localhost','127.0.0.1'}):raise RuntimeError('Use HTTPS or host-local testing')
@@ -90,6 +96,26 @@ def main():
             invitations.append({'peer':body['peer'],'expires':body['exp'],'url':args.url.rstrip('/')+'/#'+urllib.parse.urlencode({'token':token})})
         private_json(args.output,{'dataset':room,'invitations':invitations})
         print(json.dumps({'invitationsFile':str(args.output),'devices':args.devices,'ttlSeconds':args.ttl}))
+
+    elif args.action=='launcher-invite':
+        if not 1<=args.devices<=24:raise RuntimeError('Choose 1–24 devices')
+        from launcher_registration import service_url
+        base=service_url(args.url)
+        if args.fleet_file.exists():room=json.loads(args.fleet_file.read_text())['room']
+        else:
+            room=secrets.token_hex(32);private_json(args.fleet_file,{'room':room})
+        secret=args.key_file.read_text().strip();invitations=[]
+        for _ in range(args.devices):
+            body,token=ticket(secret,room,args.ttl,'launcher-enroll-v1')
+            invitations.append({'url':base,'token':token,'peer':body['peer'],'expires':body['exp'],'registrationUrl':base+'/register#'+urllib.parse.urlencode({'token':token})})
+        private_json(args.output,{'invitations':invitations})
+        print(json.dumps({'invitationsFile':str(args.output),'devices':args.devices,'room':room}))
+    else:
+        from launcher_registration import post,service_url
+        room=json.loads(args.fleet_file.read_text())['room']
+        _,token=ticket(args.key_file.read_text().strip(),room,60,'launcher-admin-v1')
+        result=post(service_url(args.url),'/launchers/revoke',token,{'peer':args.peer})
+        print(json.dumps(result))
 
 
 if __name__=='__main__':

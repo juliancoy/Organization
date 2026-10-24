@@ -6,7 +6,7 @@ import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
-from distributed import DistributedTests, bundle, plan, targets
+from distributed import DistributedTests, bundle, plan, targets, ssh
 
 class DistributedTestsTests(unittest.TestCase):
     def test_stop_is_idempotent_and_targets_only_current_run(self):
@@ -31,7 +31,12 @@ class DistributedTestsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'accounts.json'
             path.write_text(json.dumps({'accounts': {'host.local': 'julian'}}))
-            self.assertEqual(targets(path), [{'host': 'host.local', 'user': 'julian'}])
+            workers = targets(path)
+            self.assertEqual(workers[0], {'host': 'host.local', 'user': 'julian'})
+            self.assertTrue(workers[-1]['local'])
+            self.assertEqual(ssh(workers[-1]), ['bash', '-c'])
+            assigned = plan(workers + [{'host': 'b.local', 'user': 'julian'}, {'host': 'c.local', 'user': 'julian'}])
+            self.assertTrue(any(suite not in ('monitor', 'map', 'p2p') for host in assigned if host.get('local') for suite in host['suites']))
             for host, user in [('8.8.8.8', 'julian'), ('host.local;id', 'julian'), ('host.local', 'julian;id')]:
                 path.write_text(json.dumps({'accounts': {host: user}}))
                 with self.assertRaises(ValueError): targets(path)
