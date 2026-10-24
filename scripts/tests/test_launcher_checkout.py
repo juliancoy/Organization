@@ -1,0 +1,37 @@
+"""A pinned shallow cache with no branches must still produce a usable checkout."""
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import threading
+import unittest
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+from launcher_agent import Agent
+
+class CheckoutTests(unittest.TestCase):
+    def test_cached_custom_ref_materializes_without_network_or_new_branches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            def git(path,*args):
+                return subprocess.check_output(['git','-c','core.hooksPath=/dev/null','-C',str(path),*args],stderr=subprocess.PIPE,text=True).strip()
+            source=root/'fixture';source.mkdir();git(source,'init','--quiet')
+            (source/'fixture.txt').write_text('pinned content\n')
+            git(source,'add','fixture.txt');git(source,'-c','user.name=Fixture','-c','user.email=fixture@example.test','commit','-qm','fixture')
+            commit=git(source,'rev-parse','HEAD');url='https://github.com/example/fixture.git'
+            jobs=root/'jobs';cache=jobs/'git-cache'/(hashlib.sha256(url.encode()).hexdigest()+'.git');cache.mkdir(parents=True)
+            git(cache,'init','--bare','--quiet');git(cache,'remote','add','origin',url)
+            git(cache,'fetch','--depth=1',str(source),commit+':refs/cache/'+commit)
+            self.assertEqual(git(cache,'for-each-ref','--format=%(refname)','refs/heads'),'')
+            config=root/'peers.json';config.write_text(json.dumps({'name':'fixture.local'}))
+            agent=Agent.__new__(Agent);agent.root=jobs;agent.config=config;agent.lock=threading.RLock()
+            work=jobs/'run'/'source';work.mkdir(parents=True)
+            manifest={'repositories':{'.':{'url':url,'commit':commit}},'hosts':[{'host':'fixture.local','suites':['monitor'],'jobs':{}}]}
+            job={'sequence':0,'events':[]}
+            agent.checkout(work,manifest,{},job)
+            self.assertEqual((work/'fixture.txt').read_text(),'pinned content\n')
+            self.assertEqual(git(work,'rev-parse','HEAD'),commit)
+            self.assertEqual(git(work,'status','--porcelain'),'?? distributed-plan.json')
+            self.assertFalse((work/'.git/objects/info/alternates').exists())
+            self.assertEqual(git(cache,'for-each-ref','--format=%(refname)','refs/heads'),'')

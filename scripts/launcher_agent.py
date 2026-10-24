@@ -353,6 +353,9 @@ class Agent:
                 # Local cloning hardlinks immutable objects where supported. Each
                 # run owns its refs/index/worktree and has no external alternates.
                 git(work,'clone','--local','--no-checkout',str(cache),str(path),local=True)
+                # Cache commits live under refs/cache, which clone does not advertise.
+                # Fetch the exact object locally so a shallow cache can materialize it.
+                git(path,'fetch','--no-tags','--depth=1',str(cache),repo['commit'],local=True)
             git(path,'remote','set-url','origin',repo['url'])
             git(path,'checkout','--detach','--force',repo['commit'])
             if git(path,'rev-parse','HEAD')!=repo['commit'] or git(path,'status','--porcelain'):
