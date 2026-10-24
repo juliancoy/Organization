@@ -1,8 +1,8 @@
-"""Layer-aware image delivery over loopback-only, authenticated SSH tunnels."""
+"""Publish once to a loopback registry; agents pull missing layers over encrypted RPC."""
+import concurrent.futures
 import hashlib
 import json
 import re
-import shlex
 import subprocess
 import threading
 import time
@@ -22,8 +22,7 @@ class ImageRegistry:
 
     def start(self):
         if self.ready:return
-        self.service.notify(IMAGE,'pulling','compai.local',None)
-        self.service.local_command(['docker','image','pull',IMAGE])
+        self.service.ensure(IMAGE,[None])
         image=self.service.inspect(None,IMAGE)
         result=subprocess.run(['docker','inspect',NAME],capture_output=True,text=True,timeout=25)
         if result.returncode==0:
@@ -65,10 +64,10 @@ class ImageRegistry:
             self.service.notify(image,'publishing','compai.local',None)
             self.service.local_command(['docker','tag',expected,tag])
             self.service.local_command(['docker','push',tag])
-            result=subprocess.run(['docker','image','inspect',tag,'--format','{{json .RepoDigests}}'],
-                                  check=True,capture_output=True,text=True,timeout=25)
-            digests=json.loads(result.stdout) or []
-            digest=next((value.split('@',1)[1] for value in digests if value.startswith(f'127.0.0.1:{PORT}/{repository}@')),None)
+            request=urllib.request.Request(f'http://127.0.0.1:{PORT}/v2/{repository}/manifests/{fingerprint}',
+                method='HEAD',headers={'Accept':'application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json'})
+            opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open(request,timeout=15) as response:digest=response.headers.get('Docker-Content-Digest')
             if not digest or not re.fullmatch(r'sha256:[a-f0-9]{64}',digest):
                 raise RuntimeError('Registry did not return an immutable image digest')
             value=(repository,digest,fingerprint)
@@ -76,43 +75,24 @@ class ImageRegistry:
             return value
 
     def transfer(self,source,destination,image,expected):
-        if source is not None:raise RuntimeError('Test registry requires coordinator-refreshed images')
+        if source is not None or not destination or not destination.get('agent_endpoint'):
+            raise RuntimeError('Layer delivery requires a coordinator image and enrolled agent destination')
+        from agent_client import AgentClient,CONFIG
         repository,digest,fingerprint=self.publish(image,expected)
-        tunnel=None
-        try:
-            if destination is None or destination.get('local'):
-                port=PORT
-            else:
-                # Reserve an available worker loopback port; ExitOnForwardFailure
-                # rejects a collision rather than connecting to another service.
-                code="import socket;s=socket.socket();s.bind(('127.0.0.1',0));print(s.getsockname()[1]);s.close()"
-                result=subprocess.run(self.service.command(destination,['python3','-c',code]),
-                                      check=True,capture_output=True,text=True,timeout=25)
-                port=int(result.stdout.strip())
-                args=self.service.ssh(destination)
-                tunnel=subprocess.Popen(args[:-1]+['-N','-o','ExitOnForwardFailure=yes',
-                    '-R',f'127.0.0.1:{port}:127.0.0.1:{PORT}',args[-1]],
-                    stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
-                # A remote HTTP request verifies the reverse tunnel before Docker pulls.
-                check="import urllib.request;urllib.request.urlopen('http://127.0.0.1:"+str(port)+"/v2/',timeout=2).close()"
-                for _ in range(20):
-                    if self.service.cancelled():raise InterruptedError('Registry transfer stopped')
-                    if tunnel.poll() is not None:raise RuntimeError('SSH registry forwarding failed')
-                    result=subprocess.run(self.service.command(destination,['python3','-c',check]),capture_output=True,timeout=15)
-                    if result.returncode==0:break
-                    time.sleep(.25)
-                else:raise RuntimeError('Worker cannot reach the registry through SSH')
-            reference=f'127.0.0.1:{port}/{repository}@{digest}'
-            self.service.notify(image,'distributing','compai.local',destination['host'] if destination else 'local')
-            process=subprocess.Popen(self.service.command(destination,['docker','pull',reference]),
-                                     stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
-            self.service.wait([process],1800)
-            if self.service.fingerprint(destination,reference)!=fingerprint:
-                raise RuntimeError('Registry image contents differ from the prepared source: '+image)
-            self.service.local_command(self.service.command(destination,['docker','tag',reference,self.service.cache_tag(image)]))
-        finally:
-            if tunnel:
-                tunnel.terminate()
-                try:tunnel.wait(timeout=5)
-                except subprocess.TimeoutExpired:tunnel.kill();tunnel.wait()
-                if tunnel.stderr:tunnel.stderr.close()
+        coordinator=json.loads(CONFIG.read_text())['name']
+        self.service.notify(image,'distributing_layers',coordinator,destination['host'])
+        client=AgentClient(destination)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future=pool.submit(client.call,'image.pull',{'coordinator':coordinator,'repository':repository,
+                'digest':digest,'fingerprint':fingerprint,'image':image},timeout=1800)
+            while True:
+                try:
+                    result=future.result(timeout=2)
+                    break
+                except concurrent.futures.TimeoutError:
+                    if future.done():raise
+                    try:progress=client.call('image.progress',{'image':image},timeout=10)
+                    except Exception:progress={}
+                    self.service.notify(image,'distributing_layers',coordinator,destination['host'],progress)
+        self.service.notify(image,'transferred',coordinator,destination['host'])
+        if not result.get('id'):raise RuntimeError('Agent did not confirm its layer-verified image')

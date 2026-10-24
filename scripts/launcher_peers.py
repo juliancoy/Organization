@@ -21,7 +21,7 @@ class Mesh:
         import hashlib
         folder = Path(__file__).resolve().parent
         self.config_revision = hashlib.sha256(json.dumps(self.peers,sort_keys=True).encode()).hexdigest()
-        self.source_revision = hashlib.sha256(b''.join((folder/name).read_bytes() for name in ('launcher_peers.py','launcher_discovery.py','launcher_registration.py','launcher_agent.py'))).hexdigest()
+        self.source_revision = hashlib.sha256(b''.join((folder/name).read_bytes() for name in ('launcher_peers.py','launcher_discovery.py','launcher_registration.py','launcher_agent.py','launcher_registry.py'))).hexdigest()
         if self.name not in self.peers or len(self.peers) > 24:
             raise ValueError('Mesh requires 1–24 enrolled launchers including this machine')
         self.cipher = AESGCM(bytes.fromhex(config['key']))

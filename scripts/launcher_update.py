@@ -6,7 +6,7 @@ from pathlib import Path
 import shutil
 import tempfile
 
-FILES=('launcher_peers.py','launcher_discovery.py','launcher_registration.py','launcher_agent.py')
+FILES=('launcher_peers.py','launcher_discovery.py','launcher_registration.py','launcher_agent.py','launcher_registry.py')
 
 
 def main():

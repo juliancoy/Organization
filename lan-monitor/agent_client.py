@@ -35,10 +35,9 @@ class AgentClient:
         if not reply.get('ok'):raise RuntimeError(reply.get('error','Agent operation failed'))
         return reply['result']
 
-    def upload(self,path,stopped=lambda:False,expected=None):
+    def upload(self,path,stopped=lambda:False):
         path=Path(path)
         with path.open('rb') as stream:digest=hashlib.file_digest(stream,'sha256').hexdigest()
-        if expected and digest!=expected:raise RuntimeError('Source archive differs from the recorded snapshot checksum')
         token=self.call('upload.begin',{'size':path.stat().st_size,'sha256':digest})['upload']
         offset=0
         with path.open('rb') as stream:
@@ -58,6 +57,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 class AgentSessions:
     def __init__(self,root,hosts,stopped,progress):
         self.root,self.hosts,self.stopped,self.progress=Path(root),hosts,stopped,progress
+        self.expected_revision=None
 
     def reject(self,host,reason):
         host.update(status='unavailable',error=str(reason)[:800])
@@ -109,13 +109,15 @@ class AgentSessions:
         if self.stopped():raise InterruptedError('Agent readiness stopped')
         if not hosts:return []
         import concurrent.futures
-        folder=self.root/'scripts'
-        expected=hashlib.sha256(b''.join((folder/name).read_bytes() for name in ('launcher_peers.py','launcher_discovery.py','launcher_registration.py','launcher_agent.py'))).hexdigest()
+        if self.expected_revision is None:
+            folder=self.root/'scripts'
+            self.expected_revision=hashlib.sha256(b''.join((folder/name).read_bytes() for name in ('launcher_peers.py','launcher_discovery.py','launcher_registration.py','launcher_agent.py','launcher_registry.py'))).hexdigest()
+        expected=self.expected_revision
         def probe(host):
             if self.stopped():raise InterruptedError('Agent readiness stopped')
             try:
                 value=AgentClient(host).call('status')
-                required={'github-jobs','image-import','p2p-browser','cancel','events'}
+                required={'github-jobs','p2p-browser','cancel','events','layer-pull','registry-read'}
                 if value.get('protocol')!=PROTOCOL or not value.get('ready') or not required.issubset(value.get('capabilities',[])):raise RuntimeError('Agent protocol or capabilities unavailable')
                 if value.get('source_revision')!=expected:raise RuntimeError('Agent source is outdated; apply an explicit launcher update')
                 if value.get('active_jobs'):raise RuntimeError('Agent is busy with an existing job')

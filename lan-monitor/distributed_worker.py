@@ -209,6 +209,8 @@ def main():
     for suite_id in target['suites']:
         if (work.parent / 'STOP').exists():
             break
+        if target.get('jobs',{}).get(suite_id,{}).get('status')=='reused':
+            continue
         spec = SUITES[suite_id]
         if spec.get('coordinated'):
             continue  # The coordinator must drive real peers together, across hosts.

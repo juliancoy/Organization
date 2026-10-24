@@ -2,6 +2,8 @@
 from pathlib import Path
 import sys
 import shlex
+import threading
+from image_registry import ImageRegistry
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from docker_utils.images import ImageResolver
@@ -17,6 +19,9 @@ def required_images(host):return list(dict.fromkeys(SUITES[suite]['image'] for s
 class ImageDistributor(ImageResolver):
     def __init__(self,hosts,ssh,cancelled,notify):
         self.refreshed=set()
+        self.image_locks={}
+        self.locks_guard=threading.Lock()
+        self.registry=ImageRegistry(self)
         self.failures={}
         super().__init__(hosts,ssh,cancelled,notify,{
             TOOLCHAIN:self.toolchain,
@@ -24,6 +29,11 @@ class ImageDistributor(ImageResolver):
         })
 
     def ensure(self,image,destinations,*,isolate_hosts=False):
+        with self.locks_guard:lock=self.image_locks.setdefault(image,threading.RLock())
+        with lock:self.refresh(image)
+        return self.ensure_locked(image,destinations,isolate_hosts=isolate_hosts)
+
+    def refresh(self,image):
         # A run refreshes each required registry reference once, then shares its
         # verified contents over the LAN. Pull failures never silently use stale tags.
         if image not in self.refreshed:
@@ -34,9 +44,12 @@ class ImageDistributor(ImageResolver):
             else:
                 self.notify(image,'pulling','compai.local',None)
                 self.local_command(['docker','image','pull',image])
+                self.notify(image,'downloaded','compai.local',None)
             if not self.inspect(None,image) or not self.compatible(None,image):
                 raise RuntimeError('Image refresh did not produce a native-platform image: '+image)
             self.refreshed.add(image)
+
+    def ensure_locked(self,image,destinations,*,isolate_hosts=False):
         def distribute(host):
             try:return super(ImageDistributor,self).ensure(image,[host])
             except InterruptedError:raise
@@ -76,21 +89,8 @@ class ImageDistributor(ImageResolver):
         return super().fingerprint(host,reference)
 
     def transfer(self,source,destination,image,expected):
-        if destination and destination.get('agent_endpoint'):
-            import subprocess,tempfile
-            from agent_client import AgentClient
-            if source is not None:raise RuntimeError('Agent image delivery requires a coordinator-prepared image')
-            self.notify(image,'distributing','coordinator',destination['host'])
-            with tempfile.TemporaryDirectory(prefix='launcher-image-') as folder:
-                archive=Path(folder)/'image.tar'
-                subprocess.run(['docker','image','save','-o',str(archive),image],check=True,capture_output=True,timeout=600)
-                client=AgentClient(destination)
-                upload=client.upload(archive,self.cancelled)
-                result=client.call('image.import',{'upload':upload,'image':image,'fingerprint':self.fingerprint(None,image)},timeout=600)
-                if not result.get('id'):raise RuntimeError('Agent did not report its verified local image ID')
-            return
-        if destination is not None:raise RuntimeError('Image destination has no authenticated agent endpoint')
-        return super().transfer(source,destination,image,expected)
+        if destination is None:return super().transfer(source,destination,image,expected)
+        return self.registry.transfer(source,destination,image,expected)
 
     def toolchain(self,service):
         for base in (NODE,PYTHON):self.ensure(base,[None])

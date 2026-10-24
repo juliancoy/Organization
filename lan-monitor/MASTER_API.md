@@ -115,3 +115,5 @@ The new routes require the collector to adopt its updated HTTP handler once and
 nginx to adopt the `/mcp` proxy location once. No service was automatically
 restarted or deployed while implementing this API. The existing per-run code
 loader continues to load current coordinator code without restarting active runs.
+
+Run results may include `status: reused`, `input_fingerprint`, and `reused_from` for unchanged suites. These are historical passing baselines, not fresh executions. History exposes separate `passed` and `reused` counts, and `get_run` retains that provenance.

@@ -68,3 +68,5 @@
 !/scripts/launcher_agent.py
 !/scripts/launcher_discovery.py
 !/scripts/launcher_update.py
+
+!/scripts/launcher_registry.py

@@ -27,13 +27,15 @@ class Agent:
     def __init__(self, config, root):
         self.config = config
         folder=Path(__file__).resolve().parent
-        self.source_revision=hashlib.sha256(b''.join((folder/name).read_bytes() for name in ('launcher_peers.py','launcher_discovery.py','launcher_registration.py','launcher_agent.py'))).hexdigest()
+        self.source_revision=hashlib.sha256(b''.join((folder/name).read_bytes() for name in ('launcher_peers.py','launcher_discovery.py','launcher_registration.py','launcher_agent.py','launcher_registry.py'))).hexdigest()
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.lock = threading.RLock()
         self.nonces = {}
         self.jobs = {}
         self.uploads = {}
+        self.registry_transfers=0
+        self.image_progress={}
         self.browsers=set()
         self.browser_timers={}
         self.busy()
@@ -56,7 +58,7 @@ class Agent:
         path=Path('/tmp/launcher-agent-busy.json');temporary=path.with_suffix('.tmp')
         with self.lock:
             temporary.write_text(json.dumps({'jobs':[key for key,job in self.jobs.items() if job['status']=='running'],
-                                             'browsers':sorted(self.browsers),'time':time.time()}));temporary.replace(path)
+                                             'browsers':sorted(self.browsers),'transfers':self.registry_transfers,'time':time.time()}));temporary.replace(path)
 
     @staticmethod
     def image_fingerprint(image):
@@ -111,6 +113,18 @@ class Agent:
         return self.root/ident
 
     def dispatch(self, op, args):
+        if op=='registry.read':
+            from launcher_registry import read
+            return read(args)
+        if op=='image.progress':
+            with self.lock:return dict(self.image_progress.get(args['image'], {}))
+        if op=='image.pull':
+            from launcher_registry import pull
+            if Path('/tmp/launcher-agent-draining').exists():raise RuntimeError('Agent is draining for an explicit update')
+            with self.lock:self.registry_transfers+=1;self.busy()
+            try:return pull(self,args)
+            finally:
+                with self.lock:self.registry_transfers-=1;self.busy()
         if op == 'metrics':
             result=subprocess.run([sys.executable,'-c',METRIC_SAMPLE],capture_output=True,text=True,timeout=8,check=True)
             return json.loads(result.stdout)
@@ -126,8 +140,8 @@ class Agent:
             return {'protocol':VERSION,'source_revision':self.source_revision,'node':config['name'],'ready':bool(shutil.which('docker')) and not Path('/tmp/launcher-agent-draining').exists(),'time':time.time(),
                     'machine':hashlib.sha256(machine.read_bytes()).hexdigest(),'hostname':socket.gethostname(),
                     'addresses':addresses,'platform':info['OSType']+'/'+info['Architecture'],
-                    'capabilities':['github-jobs','image-import','p2p-browser','cancel','events'],
-                    'active_jobs':[key for key,j in self.jobs.items() if j['status']=='running']}
+                    'capabilities':['github-jobs','p2p-browser','cancel','events','layer-pull','registry-read'],
+                    'active_jobs':[key for key,j in self.jobs.items() if j['status']=='running'],'active_image_transfers':self.registry_transfers}
         if op.startswith('upload.'):
             return self.upload(op,args)
         if op == 'image.inspect':
@@ -137,14 +151,6 @@ class Agent:
                     image = client.images.get(args['image'])
                     return {'id':image.id,'os':image.attrs['Os'],'architecture':image.attrs['Architecture'],'fingerprint':self.image_fingerprint(image)}
                 except docker.errors.ImageNotFound:return None
-        if op == 'image.import':
-            path = self.completed_upload(args['upload'])
-            with self.client() as client, path.open('rb') as stream:
-                client.images.load(stream)
-                image = client.images.get(args['image'])
-                if self.image_fingerprint(image)!=args['fingerprint']:raise ValueError('Imported image contents differ')
-            self.release_upload(args['upload'])
-            return {'id':image.id}
         if op == 'job.start':return self.start(args)
         if op == 'job.poll':
             ident=args['id'];folder=self.folder(ident)

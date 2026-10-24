@@ -31,6 +31,7 @@ export function summarizeFailure(run){
    phase:host.exclusion_stage||host.session?.status||host.status||'Unknown',evidence:[hostError],evidenceSource:'Recorded machine error',affected:[{host:host.host}],host:host.host});
   for(const [id,job]of Object.entries(host.jobs||{})){
    const evidence=recordedEvidence(job),ownEvidence=lines(job.failure_details).length>0||Boolean(job.error)||evidence.diagnostic||(job.test_counts?.failed||0)>0;
+   if(job.status==='reused'){counts.reused=(counts.reused||0)+1;continue;}
    if(job.not_executed){notExecuted++;continue;}
    if(job.status==='stopped'){counts.stopped++;continue;}
    if(ended.has(run.status)&&!job.started&&['queued','running','preparing','transferring'].includes(job.status)){notExecuted++;continue;}
@@ -53,6 +54,6 @@ export function summarizeFailure(run){
     evidenceSource:evidence.source,affected:[target],host:host.host,suite:id,exitCode:job.exit_code});
   }
  }
- const headline=incidents[0]?.reason||(run.status==='partial'?'Verified workers completed; excluded nodes or missing peer coverage are reported below.':run.status==='passed'?'All recorded suites passed.':run.status==='stopped'?'Run stopped; this is not a passing or failing test result.':run.status==='interrupted'?'Run interrupted; no specific cause retained.':run.status==='failed'?'Run failed; no specific error retained.':'No failure evidence recorded so far.');
+ const headline=incidents[0]?.reason||(run.status==='partial'?'Verified workers completed; excluded nodes or missing peer coverage are reported below.':run.status==='passed'?(counts.reused?'Passing coverage retained; '+counts.reused+' unchanged suites reused.':'All recorded suites passed.'):run.status==='stopped'?'Run stopped; this is not a passing or failing test result.':run.status==='interrupted'?'Run interrupted; no specific cause retained.':run.status==='failed'?'Run failed; no specific error retained.':'No failure evidence recorded so far.');
  return {headline,incidents,counts,blocked,notExecuted};
 }

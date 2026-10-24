@@ -39,7 +39,7 @@ def main():
         folder=pointer.resolve()
         if folder.parent!=releases.resolve():raise ValueError('Agent release escapes release directory')
         manifest=json.loads((folder/'manifest.json').read_text())
-        expected={'launcher_peers.py','launcher_discovery.py','launcher_registration.py','launcher_agent.py'}
+        expected={'launcher_peers.py','launcher_discovery.py','launcher_registration.py','launcher_agent.py','launcher_registry.py'}
         if set(manifest)!=expected:raise ValueError('Incomplete agent release')
         for name,digest in manifest.items():
             if hashlib.sha256((folder/name).read_bytes()).hexdigest()!=digest:raise ValueError('Agent release checksum mismatch')
@@ -48,7 +48,7 @@ def main():
     def idle():
         if not busy.exists():return True
         value=json.loads(busy.read_text())
-        return not value.get('jobs') and not value.get('browsers')
+        return not value.get('jobs') and not value.get('browsers') and not value.get('transfers')
 
     def launch(folder):
         marker.unlink(missing_ok=True)

@@ -12,11 +12,13 @@ import time
 import uuid
 from distributed_worker import SUITES
 from distributed_images import ImageDistributor
+from run_activity import capture
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE = Path(__file__).with_name('.runtime') / 'distributed'
 HISTORY_LIMIT = 10
-FINAL = {'partial', 'passed', 'failed', 'unavailable', 'timed_out', 'interrupted', 'stopped'}
+SUCCESS = {'passed','reused'}
+FINAL = {'reused','partial', 'passed', 'failed', 'unavailable', 'timed_out', 'interrupted', 'stopped'}
 
 
 def now():
@@ -85,6 +87,10 @@ class DistributedTests:
     def save(self):
         if not self.run:
             return
+        if getattr(self, '_activity_run', None) != self.run['id']:
+            self._activity_run = self.run['id']
+            self._activity_snapshot = {}
+        self._activity_snapshot = capture(self.run, self._activity_snapshot, now())
         path = self.folder / (self.run['id'] + '.json')
         temporary = path.with_suffix('.tmp')
         temporary.write_text(json.dumps(self.run))
@@ -108,7 +114,7 @@ class DistributedTests:
                     data = json.loads(path.read_text())
                     item={key: data.get(key) for key in ('id', 'started', 'finished', 'status', 'source_sha256')}
                     jobs=[job for host in data.get('hosts',[]) for job in host.get('jobs',{}).values()]
-                    item.update(suites=len(jobs),passed=sum(job.get('status')=='passed' for job in jobs),
+                    item.update(suites=len(jobs),passed=sum(job.get('status')=='passed' for job in jobs),reused=sum(job.get('status')=='reused' for job in jobs),
                                 failed=sum(job.get('status') in ('failed','timed_out','unavailable','interrupted') for job in jobs))
                     history.append(item)
                     if len(history)>=HISTORY_LIMIT:break
@@ -181,6 +187,11 @@ class DistributedTests:
                 self.save()
 
     def host(self, index, host, manifest, ident):
+        if all(job['status']=='reused' for suite,job in host['jobs'].items() if not SUITES[suite].get('coordinated')):
+            with self.lock:
+                host.update(status='passed',finished=now(),duration_seconds=0)
+                self.save()
+            return
         from agent_client import AgentClient
         started=time.monotonic();client=AgentClient(host);cursor=0
         try:
@@ -199,7 +210,7 @@ class DistributedTests:
                 previous=cursor;cursor=result['cursor']
                 if result['status'] not in ('running','starting') and cursor==previous:
                     jobs=[j for suite,j in host['jobs'].items() if not SUITES[suite].get('coordinated')]
-                    host['status']='stopped' if result['status']=='stopped' else 'passed' if result['status']=='completed' and all(j['status']=='passed' for j in jobs) else 'failed'
+                    host['status']='stopped' if result['status']=='stopped' else 'passed' if result['status']=='completed' and all(j['status'] in SUCCESS for j in jobs) else 'failed'
                     if result.get('error'):host['error']=result['error']
                     break
                 time.sleep(.5)
@@ -220,9 +231,9 @@ class DistributedTests:
                     if job['status'] not in FINAL:job['status']='stopped' if self.run.get('stop_requested') else 'unavailable'
                 self.save()
 
-    def image_progress(self, image, phase, source, destination):
+    def image_progress(self, image, phase, source, destination, progress=None):
         with self.lock:
-            self.run['image_progress'] = {'image': image, 'phase': phase, 'source': source, 'destination': destination}
+            self.run['image_progress'] = {'image': image, 'phase': phase, 'source': source, 'destination': destination, **(progress or {})}
             self.run['updated'] = now()
             self.save()
 
@@ -266,20 +277,11 @@ class DistributedTests:
             initialized = sessions.verify(hosts) if hosts else []
             exclude(hosts,initialized,'launcher_verification')
             hosts = initialized
-            while hosts:
-                hosts = plan(hosts)
-                images.hosts = hosts
-                publish()
-                image_ids = images.prepare()
-                prepared = [host for host in hosts if host['host'] not in images.failures]
-                exclude(hosts,prepared,'image_preparation')
-                verified = sessions.verify(prepared)
-                exclude(prepared,verified,'readiness_verification')
-                if len(verified)==len(hosts):break
-                hosts = verified
             publish()
             if not hosts:
                 raise RuntimeError('No verified connected workers; see excluded machine details')
+            # Publish shared immutable sources once; each worker then prepares and
+            # executes independently. Never re-plan work after dispatch has begun.
             from github_sources import publish as publish_github,source_digest
             def publication_progress(name,record):
                 with self.lock:
@@ -287,40 +289,63 @@ class DistributedTests:
                     run['preparation']='GitHub: '+name+' · '+record['stage']
                     self.save()
             repositories=publish_github(self.root,run['id'],lambda:bool(run.get('stop_requested')),publication_progress)
-            # Publishing can take time: verify workers again and reassign if one disappeared.
-            while hosts:
-                verified=sessions.verify(hosts)
-                exclude(hosts,verified,'post_publication_readiness')
-                if len(verified)==len(hosts):break
-                hosts=plan(verified) if verified else []
-                while hosts:
-                    images.hosts=hosts
-                    publish()
-                    image_ids=images.prepare()
-                    prepared=[host for host in hosts if host['host'] not in images.failures]
-                    exclude(hosts,prepared,'image_preparation')
-                    if len(prepared)==len(hosts):break
-                    hosts=plan(prepared) if prepared else []
-            publish()
-            if not hosts:raise RuntimeError('Commits were published, but no verified workers remain; see excluded machines')
             with self.lock:
-                run.pop('preparation',None)
                 run['repositories']=repositories
                 run['source_sha256']=source_digest(repositories)
                 run['source_transport']='github'
-                run['images']=image_ids
-                for host in hosts:host['images']=images.host_images[host['host']]
+                run['images']={}
+                run.pop('preparation',None)
                 run['status']='stopping' if run.get('stop_requested') else 'running'
-                manifest=copy.deepcopy(run)
                 self.save()
-            if run.get('stop_requested'):
-                return
+            from distributed_images import required_images
+            from suite_cache import SuiteCache
+            def prepare_and_run(index,host):
+                try:
+                    with self.lock:
+                        host.update(status='preparing',preparation='Preparing required images')
+                        self.save()
+                    for image in required_images(host):
+                        if run.get('stop_requested'):return
+                        images.ensure(image,[host])
+                    verified=sessions.verify([host])
+                    if not verified:raise RuntimeError(host.get('error') or 'Worker readiness verification failed')
+                    with self.lock:
+                        host['images']=dict(images.host_images[host['host']])
+                        run['images'].update(images.images)
+                        cache_plan=copy.deepcopy(run)
+                    SuiteCache(self.root,self.folder,SUITES).apply(cache_plan,images,{host['host']})
+                    with self.lock:
+                        cached=next(row for row in cache_plan['hosts'] if row['host']==host['host'])
+                        host['jobs']=cached['jobs']
+                        host.pop('preparation',None)
+                        run['reuse']={'suites':sum(j['status']=='reused' for h in run['hosts'] for j in h['jobs'].values()),
+                            'policy':'relevant-source+dependencies+image+machine','fresh_passes_only':True}
+                        manifest=copy.deepcopy(run)
+                        self.save()
+                    if not run.get('stop_requested'):self.host(index,host,manifest,run['id'])
+                except Exception as error:
+                    with self.lock:
+                        host.update(status='unavailable',error=type(error).__name__+': '+str(error)[:500],finished=now())
+                        for job in host['jobs'].values():
+                            if job['status'] not in FINAL:
+                                job.update(status='unavailable',not_executed=True,phase='image_preparation')
+                        self.save()
             with concurrent.futures.ThreadPoolExecutor(max_workers=len(hosts)) as pool:
-                futures = [pool.submit(self.host, index, host, manifest, run['id']) for index, host in enumerate(hosts)]
-                for future in futures:
-                    future.result()
+                futures=[pool.submit(prepare_and_run,index,host) for index,host in enumerate(hosts)]
+                for future in concurrent.futures.as_completed(futures):future.result()
             if not run.get('stop_requested'):
-                self.network(run)
+                # P2P alone needs the participant set; ordinary suites have already
+                # completed on each ready worker without waiting for slower nodes.
+                with self.lock:
+                    peers=[h['jobs']['p2p'] for h in hosts if h['status']!='unavailable']
+                    if peers and not all(j['status']=='reused' for j in peers):
+                        for job in peers:
+                            if job['status']=='reused':
+                                job.update(status='queued',phase=None,not_executed=False,logs=[],duration_seconds=None)
+                                job.pop('reused_from',None)
+                    run.setdefault('reuse',{})['suites']=sum(j['status']=='reused' for h in run['hosts'] for j in h['jobs'].values())
+                    self.save()
+                self.network(run,images)
             with self.lock:
                 run['status'] = ('failed' if any(host['status'] not in ('passed','partial') for host in hosts) else
                                  'partial' if excluded or any(host['status']=='partial' for host in hosts) else 'passed')
@@ -348,10 +373,15 @@ class DistributedTests:
                 self.run['finished'] = now()
                 self.save()
 
-    def network(self,run):
+    def network(self,run,images=None):
         from p2p_network import NetworkP2P
         hosts=[host for host in run['hosts'] if not host.get('excluded') and host.get('session',{}).get('verified')
                and host.get('status')!='unavailable' and 'p2p' in host.get('jobs',{})]
+        if hosts and all(host['jobs']['p2p']['status']=='reused' for host in hosts):
+            with self.lock:
+                run['p2p']={'status':'reused','not_executed':True,'reason':'Unchanged code, images and participant identities; see each suite baseline'}
+                self.save()
+            return
         if len(hosts)<2:
             with self.lock:
                 reason='At least two verified connected machines required; network coverage not measured'
@@ -359,7 +389,7 @@ class DistributedTests:
                 for host in hosts:
                     host['jobs']['p2p'].update(status='unavailable',not_executed=True,phase='coverage')
                     host['jobs']['p2p']['logs'].append(reason)
-                    host['status']='partial' if all(j['status']=='passed' for key,j in host['jobs'].items() if key!='p2p') else 'failed'
+                    host['status']='partial' if all(j['status'] in SUCCESS for key,j in host['jobs'].items() if key!='p2p') else 'failed'
                 self.save()
             return
         started=time.monotonic()
@@ -369,7 +399,7 @@ class DistributedTests:
                 host['status']='running'
             self.save()
         result=NetworkP2P(hosts,run['id'],emit=self.update,
-                          stopped=lambda:bool(run.get('stop_requested')),source_commit=run['repositories']['.']['commit']).run()
+                          stopped=lambda:bool(run.get('stop_requested')),source_commit=run['repositories']['.']['commit'],images=images).run()
         with self.lock:
             run['p2p']=result
             for host in hosts:
@@ -383,6 +413,6 @@ class DistributedTests:
                     for receiver in check.get('receivers',[]):routes.extend(receiver['routes'])
                     for route in routes:
                         pair=route['pair'];job['logs'].append(check['name']+': '+json.dumps(pair,separators=(',',':')))
-                host['status']='passed' if all(j['status']=='passed' for j in host['jobs'].values()) else 'failed'
+                host['status']='passed' if all(j['status'] in SUCCESS for j in host['jobs'].values()) else 'failed'
                 host['finished']=now()
             self.save()

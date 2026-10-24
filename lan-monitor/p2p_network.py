@@ -18,7 +18,6 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from distributed_images import ImageDistributor
 
 ROOT=Path(__file__).resolve().parents[1]
 IMAGE='selenium/standalone-chrome:latest'
@@ -115,8 +114,9 @@ class Browser:
 
 
 class NetworkP2P:
-    def __init__(self,hosts,ident,emit=lambda *args:None,stopped=lambda:False,source_commit=None):
+    def __init__(self,hosts,ident,emit=lambda *args:None,stopped=lambda:False,source_commit=None,images=None):
         self.hosts=hosts;self.ident=ident;self.emit=emit;self.stopped=stopped
+        self.images=images
         self.source_commit=source_commit;self.resources=[];self.report={'status':'running','coverage':{'direct':'pending','cross_nat':'not_measured','turn':'unavailable'},'checks':[],'participants':[]}
     def check_stop(self):
         if self.stopped():raise RuntimeError('P2P run stopped')
@@ -195,11 +195,21 @@ class NetworkP2P:
             def image_progress(image,phase,source,destination):
                 for host in self.hosts:
                     if not destination or host['host']==destination:self.log(host,'Browser image '+phase+((' from '+source) if source else ''))
-            # Image delivery uses authenticated, checksummed agent uploads.
-            from distributed import no_remote_shell
-            images=ImageDistributor(self.hosts,no_remote_shell,self.stopped,image_progress)
-            images.ensure(IMAGE,self.hosts)
-            self.report['browser_images']=images.host_images
+            # Reuse the run resolver and its refreshed references; never create
+            # a second downloader for the P2P phase.
+            if self.images:
+                self.images.ensure(IMAGE,self.hosts)
+                self.report['browser_images']=self.images.host_images
+            else:
+                # A run already in flight has prepared and recorded these IDs.
+                # Verify them without refreshing tags or making another resolver.
+                from agent_client import AgentClient
+                self.report['browser_images']={}
+                for host in self.hosts:
+                    expected=host.get('images',{}).get(IMAGE)
+                    actual=AgentClient(host).call('image.inspect',{'image':IMAGE})
+                    if not expected or not actual or actual['id']!=expected:raise RuntimeError('Prepared P2P image is unavailable on '+host['host'])
+                    self.report['browser_images'][host['host']]={IMAGE:expected}
             self.sdk_hash=hashlib.sha256(self.source('peer-worker/public/peer.js')).hexdigest()
             with tempfile.TemporaryDirectory(prefix='distributed-p2p-') as folder:
                 folder=Path(folder);source=folder/'browser.tgz'

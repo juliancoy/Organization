@@ -1,15 +1,16 @@
+import {renderActivity} from './run-activity.js';
 import './machine-heat.js';
 import './host-terminal.js';
 import {summarizeFailure} from './failure-summary.js';
 import {renderFailures} from './failure-display.js';
 const $=id=>document.getElementById(id);
-const terminal=new Set(['partial','passed','failed','unavailable','timed_out','interrupted','stopped']);
+const terminal=new Set(['reused','partial','passed','failed','unavailable','timed_out','interrupted','stopped']);
 const suiteEntries=host=>Object.entries(host.jobs||{}).sort(([,a],[,b])=>Number(terminal.has(a.status))-Number(terminal.has(b.status)));
 let data=null,selected=null,chosen='',polling=false;
 let terminalChoice='';
 const historyReports=new Map(),historyPending=new Set();
 let historyLoading=false;
-function historyStamp(item){return [item.status,item.finished||'',item.passed,item.failed,item.suites].join('|');}
+function historyStamp(item){return [item.status,item.finished||'',item.passed,item.reused,item.failed,item.suites].join('|');}
 async function loadHistoryReasons(){
  if(historyLoading)return;historyLoading=true;
  try{
@@ -45,7 +46,7 @@ function renderTerminal(run){
 }
 $('terminal-job').onchange=()=>{terminalChoice=$('terminal-job').value;renderTerminal(data?.run);};
 const el=(tag,text='',className='')=>{const node=document.createElement(tag);node.textContent=text;if(className)node.className=className;return node;};
-const label=status=>({partial:'Partial coverage',stopped:'Stopped',stopping:'Stopping',timed_out:'Timed out',unavailable:'Unavailable',interrupted:'Interrupted',queued:'Queued',transferring:'Transferring',preparing:'Preparing',running:'Running',passed:'Passed',failed:'Failed'}[status]||'Unknown');
+const label=status=>({reused:'Unchanged · reused',partial:'Partial coverage',stopped:'Stopped',stopping:'Stopping',timed_out:'Timed out',unavailable:'Unavailable',interrupted:'Interrupted',queued:'Queued',transferring:'Transferring',preparing:'Preparing',running:'Running',passed:'Passed',failed:'Failed'}[status]||'Unknown');
 const badge=status=>el('span',label(status),'badge '+status);
 const seconds=value=>Number.isFinite(value)?value<60?value.toFixed(1)+' s':(value/60).toFixed(1)+' min':'—';
 const duration=job=>job.duration_seconds??(job.started&&!terminal.has(job.status)?Math.max(0,((terminal.has(data?.run?.status)?Date.parse(data.run.finished||data.run.updated):Date.now())-Date.parse(job.started))/1000):null);
@@ -65,7 +66,7 @@ function renderHistory(){
   const active=chosen?chosen===item.id:data.run?.id===item.id;
   button.setAttribute('aria-pressed',String(active));
   button.append(el('strong',new Date(item.started).toLocaleString()),badge(item.status),el('code',item.id));
-  button.append(el('small',Number.isInteger(item.suites)?item.passed+' / '+item.suites+' suites passed'+(item.failed?' · '+item.failed+' failed / unavailable':''):'Open recorded results'));
+  button.append(el('small',Number.isInteger(item.suites)?item.passed+' / '+item.suites+' suites passed'+(item.reused?' · '+item.reused+' unchanged':'')+(item.failed?' · '+item.failed+' failed / unavailable':''):'Open recorded results'));
   const reason=item.id===data.run?.id?summarizeFailure(data.run):historyReports.get(item.id)?.summary;
   if(reason){const preview=el('span',reason.headline.slice(0,200),'run-failure-preview');preview.title=reason.headline;button.append(preview);}
   else button.append(el('span',historyReports.get(item.id)?.unavailable?'Saved explanation unavailable · open run to retry':'Loading saved reason…','run-failure-preview muted'));
@@ -77,6 +78,7 @@ $('latest-run').onclick=()=>chooseRun('');
 function render(){
  const run=data?.run;
  document.dispatchEvent(new CustomEvent('test-context',{detail:{run,host:selected}}));
+ renderActivity(run);
  renderTerminal(run);
  renderHistory();
  renderFailures($('run-failures'),run,inspectRecordedFailure);
@@ -99,7 +101,7 @@ function render(){
  $('command-scope').textContent='All '+hosts.length+' worker machines · compai coordinates and runs suites';
  const jobs=hosts.flatMap(host=>Object.values(host.jobs||{}));
  $('summary').replaceChildren();
- for(const [name,value]of [['Worker machines',hosts.length],['Passed suites',jobs.filter(j=>j.status==='passed').length],['Unsuccessful suite statuses',jobs.filter(j=>['failed','unavailable','timed_out','interrupted'].includes(j.status)).length],['Completed',jobs.filter(j=>terminal.has(j.status)).length+' / '+jobs.length],['Repositories pushed',Object.values(run.repositories||{}).filter(repo=>repo.stage==='pushed').length+' / '+Math.max(3,Object.keys(run.repositories||{}).length)]]){const card=el('div','','metric');card.append(el('span',name),el('strong',String(value)));$('summary').append(card);}
+ for(const [name,value]of [['Worker machines',hosts.length],['Fresh passes / reused',jobs.filter(j=>j.status==='passed').length+' / '+jobs.filter(j=>j.status==='reused').length],['Unsuccessful suite statuses',jobs.filter(j=>['failed','unavailable','timed_out','interrupted'].includes(j.status)).length],['Completed',jobs.filter(j=>terminal.has(j.status)).length+' / '+jobs.length],['Repositories pushed',Object.values(run.repositories||{}).filter(repo=>repo.stage==='pushed').length+' / '+Math.max(3,Object.keys(run.repositories||{}).length)]]){const card=el('div','','metric');card.append(el('span',name),el('strong',String(value)));$('summary').append(card);}
  if(selected!=='compai.local'&&!hosts.some(host=>host.host===selected))selected=hosts[0]?.host;
  const focusedHost=document.activeElement?.closest('#topology [data-terminal-host]')?.dataset.terminalHost;
  $('topology').replaceChildren(...(hosts.some(host=>host.local)?[]:[coordinatorNode()]));
@@ -128,7 +130,7 @@ function render(){
  for(const host of hosts)for(const [,job] of suiteEntries(host)){if(!job.started)continue;const row=el('div','','timeline-row'),track=el('div','','track'),bar=el('span','','bar '+job.status);bar.style.marginLeft=Math.max(0,100*(Date.parse(job.started)-first)/1000/span)+'%';bar.style.width=Math.min(100,100*(duration(job)||0)/span)+'%';track.append(bar);row.append(el('span',host.host+' · '+job.name),track,el('span',seconds(duration(job))));$('timeline').append(row);}
  const host=hosts.find(host=>host.host===selected);$('jobs').replaceChildren();
  if(selected==='compai.local'){$('details-title').textContent='compai.local';$('details-meta').textContent='Local test coordinator · Hover for CPU utilization, running containers, and container console output.';$('jobs').append(el('p','Publishes GitHub commits and collects results from verified local agents.','muted'));}
- if(host){for(const [name,source]of Object.entries(host.source_sync||{}))$('jobs').append(el('p',(name==='.'?'Organization':name)+' · '+source.status+' · '+source.commit,'muted'));$('details-title').textContent=host.host;$('details-meta').textContent=[host.local?'Local agent':'Authenticated LAN agent',host.cpus?host.cpus+' CPUs':null,host.python?'Host Python '+host.python:null,host.error].filter(Boolean).join(' · ');let completedHeading=false;for(const [suiteId,job] of suiteEntries(host)){if(terminal.has(job.status)&&!completedHeading){$('jobs').append(el('h3','Completed suites','completed-suites-heading'));completedHeading=true;}const details=el('details','','job'),title=el('summary');details.dataset.suite=suiteId;details.open=terminalChoice===host.host+'/'+suiteId;title.append(el('span',job.name+' · '+(job.phase||'Waiting')+' · '+seconds(duration(job))+(job.test_counts?' · '+(job.test_counts.passed??'—')+' passed / '+(job.test_counts.failed??0)+' failed / '+(job.test_counts.skipped??0)+' skipped':'')),badge(job.status));details.append(title,el('pre',(job.failure_details?.length?'Failure details:\n'+job.failure_details.join('\n')+'\n\nRecent output:\n':'')+(job.logs||[]).join('\n')||'No output recorded yet.'));$('jobs').append(details);}}
+ if(host){for(const [name,source]of Object.entries(host.source_sync||{}))$('jobs').append(el('p',(name==='.'?'Organization':name)+' · '+source.status+' · '+source.commit,'muted'));$('details-title').textContent=host.host;$('details-meta').textContent=[host.local?'Local agent':'Authenticated LAN agent',host.cpus?host.cpus+' CPUs':null,host.python?'Host Python '+host.python:null,host.error].filter(Boolean).join(' · ');let completedHeading=false;for(const [suiteId,job] of suiteEntries(host)){if(terminal.has(job.status)&&!completedHeading){$('jobs').append(el('h3','Completed suites','completed-suites-heading'));completedHeading=true;}const details=el('details','','job'),title=el('summary');details.dataset.suite=suiteId;details.open=terminalChoice===host.host+'/'+suiteId;title.append(el('span',job.name+' · '+(job.phase||'Waiting')+' · '+seconds(duration(job))+(job.test_counts?' · '+(job.test_counts.passed??'—')+' passed / '+(job.test_counts.failed??0)+' failed / '+(job.test_counts.skipped??0)+' skipped':'')),badge(job.status));details.append(title,el('pre',(job.failure_details?.length?'Failure details:\n'+job.failure_details.join('\n')+'\n\nRecent output:\n':'')+(job.logs||[]).join('\n')||'No output recorded yet.'));if(job.reused_from){const baseline=el('button','View passing baseline · '+job.reused_from.run_id);baseline.type='button';baseline.onclick=()=>chooseRun(job.reused_from.run_id);details.append(baseline);}$('jobs').append(details);}}
  $('snapshot').textContent=run.source_sha256?'GitHub manifest SHA-256 '+run.source_sha256:'Preparing GitHub commits…';
  $('scope').textContent=(run.scope||'')+' '+Object.entries(run.repositories||{}).map(([name,repo])=>(name==='.'?'Organization':name)+' '+(repo.commit?.slice(0,12)||'pending')+' · '+(repo.stage||'recorded')).join(' · ');
 }
