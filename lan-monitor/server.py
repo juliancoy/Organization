@@ -280,6 +280,10 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, FileNotFoundError):
                 self.send_error(404, 'Visual artifact not found')
                 return
+        elif path == '/api/mobile-tests':
+            from mobile_worker import view
+            body=json.dumps(view()).encode()
+            content_type='application/json'
         elif path == '/api/distributed-tests':
             try:
                 data = distributed_tests.view(parse_qs(urlsplit(self.path).query).get('id', [None])[0])
@@ -355,6 +359,15 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if handle_master(self,master_api):return
         path = urlsplit(self.path).path
+        if path=='/api/mobile-tests/start':
+            if self.headers.get('Origin')!='http://'+self.headers.get('Host',''):
+                self.send_error(403);return
+            try:
+                result=distributed_tests.requests.submit(suites=['mobile'],force=True)
+                body=json.dumps(result).encode()
+                self.send_response(202);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
+            except Exception as error:self.send_error(400,str(error))
+            return
         if path=='/api/distributed-tests/rerun':
             if self.headers.get('Origin')!='http://'+self.headers.get('Host',''):
                 self.send_error(403);return

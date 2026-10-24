@@ -462,6 +462,7 @@ class Agent:
             if path.is_symlink():raise ValueError('Repository path must not be a symlink')
             path.mkdir(parents=True,exist_ok=True,mode=0o755)
             if any(path.iterdir()):raise ValueError('Checkout directory must be fresh: '+name)
+            sparse = name == 'CodeCollective'
             identity=hashlib.sha256(repo['url'].encode()).hexdigest()
             cache=cache_root/(identity+'.git')
             if cache.is_symlink():raise ValueError('Git cache must not be a symlink')
@@ -469,12 +470,19 @@ class Agent:
             # No network operation occurs when the exact pinned commit is present.
             with (cache_root/(identity+'.lock')).open('a') as lock:
                 fcntl.flock(lock,fcntl.LOCK_EX)
+                # Every writer owns this lock. A leftover Git lock belongs to an
+                # interrupted fetch; discard only this disposable source cache.
+                if (cache/'shallow.lock').exists():shutil.rmtree(cache)
                 if not cache.exists():
                     cache.mkdir(mode=0o700)
                     git(cache,'init','--bare','--quiet')
                     git(cache,'remote','add','origin',repo['url'])
                 if git(cache,'remote','get-url','origin')!=repo['url']:
                     raise ValueError('Git cache origin differs from the source manifest')
+                if sparse:
+                    git(cache,'config','remote.origin.promisor','true')
+                    git(cache,'config','remote.origin.partialclonefilter','blob:none')
+                    git(cache,'config','uploadpack.allowFilter','true')
                 cached=git(cache,'cat-file','-e',repo['commit']+'^{commit}',required=False) is not None
                 seeded=False
                 if not cached:
@@ -488,7 +496,7 @@ class Agent:
                         cached=True;seeded=True;break
                 event(name,repo,'cached' if cached else 'fetching',cache_hit=cached,seeded_from_previous_run=seeded)
                 if not cached:
-                    git(cache,'fetch','--no-tags','--depth=1','origin',
+                    git(cache,'fetch','--no-tags','--depth=1',*(['--filter=blob:none'] if sparse else []),'origin',
                         repo['commit']+':refs/cache/'+repo['commit'])
                 if git(cache,'rev-parse',repo['commit']+'^{commit}')!=repo['commit']:
                     raise ValueError('Git cache returned a different commit')
@@ -497,8 +505,13 @@ class Agent:
                 git(work,'clone','--local','--no-checkout',str(cache),str(path),local=True)
                 # Cache commits live under refs/cache, which clone does not advertise.
                 # Fetch the exact object locally so a shallow cache can materialize it.
-                git(path,'fetch','--no-tags','--depth=1',str(cache),repo['commit'],local=True)
+                if sparse:
+                    git(path,'config','remote.origin.promisor','true')
+                    git(path,'config','remote.origin.partialclonefilter','blob:none')
+                git(path,'fetch','--no-tags','--depth=1',*(['--filter=blob:none'] if sparse else []),str(cache),repo['commit'],local=True)
             git(path,'remote','set-url','origin',repo['url'])
+            if sparse:
+                git(path,'sparse-checkout','set','--no-cone','/run.py','/usa/','/css/','/tests/usajobs-mobile.test.cjs')
             git(path,'checkout','--detach','--force',repo['commit'])
             if git(path,'rev-parse','HEAD')!=repo['commit'] or git(path,'status','--porcelain'):
                 raise ValueError('Checkout verification failed: '+name)

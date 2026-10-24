@@ -220,7 +220,7 @@ class DistributedTests:
                     job['failure_details'] = job['failure_details'][:240]
                 elif kind == 'counts':
                     job['test_counts'] = {key: value for key, value in event.get('counts', {}).items() if key in ('tests', 'passed', 'failed', 'skipped') and isinstance(value, int) and value >= 0}
-                elif kind in ('artifact_begin', 'artifact_chunk', 'artifact_end') and suite == 'visual':
+                elif kind in ('artifact_begin', 'artifact_chunk', 'artifact_end') and suite in ('visual','mobile'):
                     try:
                         artifact = self.artifacts.receive(self.run['id'], host['host'], suite, event)
                         if artifact:
@@ -295,6 +295,16 @@ class DistributedTests:
             with self.lock:
                 run = self.run
                 hosts = run['hosts']
+            if run.get('selection') == {'paths':[], 'suites':['mobile']}:
+                from github_sources import publish,source_digest
+                from mobile_worker import MobileRun
+                with self.publication_lock:repositories=publish(self.root,run['id'],lambda:bool(run.get('stop_requested')),lambda name,record:None)
+                with self.lock:
+                    run.update(hosts=[],repositories=repositories,source_sha256=source_digest(repositories),status='running',granular=True,pending_tasks=[])
+                    self.save()
+                mobile=MobileRun(self,required=True);mobile.join()
+                run['status']=outcome(run,[mobile.host],{})
+                return
             images = ImageDistributor(hosts, no_remote_shell, lambda: bool(run.get('stop_requested')), self.image_progress)
             from agent_client import AgentSessions
             def session_progress(host, phase, detail):
@@ -435,7 +445,7 @@ class DistributedTests:
                     self.save()
                 if any('p2p' in h['jobs'] for h in hosts):self.network(run,images)
             with self.lock:
-                run['status'] = outcome(run, hosts, excluded)
+                run['status'] = outcome(run, hosts+[h for h in run['hosts'] if h.get('kind')=='android'], excluded)
         except Exception as exc:
             with self.lock:
                 self.run.update(status='failed', error=type(exc).__name__ + ': ' + str(exc)[:500])

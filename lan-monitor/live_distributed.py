@@ -19,7 +19,7 @@ class LiveDistributedTests:
     @staticmethod
     def load():
         importlib.invalidate_caches()
-        for name in ('distributed','run_activity','post_deployment','distributed_worker','suite_cache','work_queue','granular_dispatch','granular_worker','worker_preparation','early_p2p','github_sources','distributed_images','visual_artifacts','image_registry','agent_client','agent_updates','p2p_network','docker_utils','docker_utils.images','docker_utils.policy','docker_utils.sdk'):
+        for name in ('distributed','run_activity','post_deployment','distributed_worker','suite_cache','work_queue','granular_dispatch','granular_worker','worker_preparation','early_p2p','mobile_worker','github_sources','distributed_images','visual_artifacts','image_registry','agent_client','agent_updates','p2p_network','docker_utils','docker_utils.images','docker_utils.policy','docker_utils.sdk'):
             sys.modules.pop(name,None)
         return importlib.import_module('distributed').DistributedTests()
 
@@ -56,6 +56,7 @@ class LiveDistributedTests:
                 jobs={key:job for key,job in original['jobs'].items() if (not suite or key==suite)
                       and (not failed_only or key!='p2p') and (not failed_only or job['status'] in ('failed','timed_out','unavailable','interrupted'))}
                 if not jobs:continue
+                if 'mobile' in jobs:raise ValueError('Use request_tests with suites mobile for an Android rerun')
                 if 'p2p' in jobs:raise ValueError('P2P requires a full distributed run; select an ordinary suite')
                 worker={key:copy.deepcopy(original[key]) for key in ('host','local') if key in original}
                 worker.update(status='queued',suites=list(jobs),jobs={key:{'name':job['name'],'status':'queued','phase':None,'logs':[]} for key,job in jobs.items()})

@@ -10,7 +10,7 @@ export function renderVisualArtifacts(job) {
   const url=new URL(artifact.url,location.origin);
   if(url.origin!==location.origin||url.pathname!=='/api/distributed-tests/artifacts')continue;
   const link=document.createElement('a');link.href=url.href;link.target='_blank';link.rel='noopener noreferrer';link.textContent=artifact.name;
-  if(artifact.name.startsWith('contact-')&&artifact.name.endsWith('.png')){
+  if((artifact.name.startsWith('contact-')||artifact.url.includes('suite=mobile'))&&artifact.name.endsWith('.png')){
    const image=document.createElement('img');image.src=url.href;image.alt=artifact.name.replaceAll('-',' ').replace('.png','');image.loading='lazy';image.decoding='async';
    const card=document.createElement('figure');card.append(image);const caption=document.createElement('figcaption');caption.append(link);card.append(caption);grid.append(card);
   }else{const row=document.createElement('div');row.append(link);list.append(row);}

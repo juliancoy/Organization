@@ -25,7 +25,7 @@ TOOLS=[
  ('get_logs','Suite logs','Read bounded recorded output for one machine/suite in a run.',{'run_id':RUN_ID,'host':{'type':'string','minLength':1,'maxLength':253},'suite':{'type':'string','minLength':1,'maxLength':80},'tail':{'type':'integer','minimum':1,'maximum':80,'default':40}},['host','suite']),
  ('list_machines','Machine inventory','Inspect observed LAN machines and machines recorded in the latest run. Does not probe or initialize agents.',{},[]),
  ('list_suites','Configured suites','List application-owned suites and their container images; arbitrary commands cannot be submitted.',{},[]),
- ('start_run','Start distributed tests','Start the configured distributed run. The coordinator COMMITS AND PUSHES the current Organization, OrgPortal and PIdP branches to GitHub, prepares agents/images, and runs suites. Does not deploy production services.',{},[]),
+ ('start_run','Start distributed tests','Start the configured distributed run. The coordinator COMMITS AND PUSHES the current Organization, OrgPortal, PIdP and CodeCollective branches to GitHub, prepares agents/images, and runs suites. Does not deploy production services.',{},[]),
  ('rerun_suite','Rerun one suite','Queue an independent fresh execution on the original worker using current published sources. Commits and pushes current branches. No deployment or email checks.',{'run_id':RUN_ID,'host':{'type':'string','minLength':1,'maxLength':253},'suite':{'type':'string','minLength':1,'maxLength':80}},['run_id','host','suite']),
  ('rerun_failed','Rerun failed suites','Queue failed ordinary suites from a recorded run. P2P requires a full run. Commits and pushes current branches; no deployment or email checks.',{'run_id':RUN_ID},['run_id']),
  ('stop_run','Stop a specific run','Request cancellation of the currently running test run by ID. Refuses to stop a newer, different run.',{'run_id':RUN_ID},['run_id']),
@@ -96,7 +96,8 @@ class MasterAPI:
             if name=='list_machines':
                 view=self.tests.view();run=view.get('run') or {}
                 fields=('ip','ipv6','hostname','self','status')
-                return {'observed':[ {key:device.get(key) for key in fields if key in device} for device in self.devices().get('devices',[])],
+                from mobile_worker import discover
+                return {'mobile_workers':discover()['devices'],'observed':[ {key:device.get(key) for key in fields if key in device} for device in self.devices().get('devices',[])],
                         'run_id':run.get('id'),'workers':[self.machine(host) for host in run.get('hosts',[])]}
             if name in ('rerun_suite','rerun_failed'):
                 ident=self.tests.rerun(args['run_id'],args.get('host'),args.get('suite'),failed_only=name=='rerun_failed')

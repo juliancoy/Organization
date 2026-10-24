@@ -91,7 +91,7 @@ class VisualArtifacts:
                 'url': '/api/distributed-tests/artifacts?' + query}
 
     def read(self, run, host, suite, name):
-        if not re.fullmatch(r'[a-zA-Z0-9_-]{1,100}', run) or suite != 'visual' or not NAME.fullmatch(name):
+        if not re.fullmatch(r'[a-zA-Z0-9_-]{1,100}', run) or suite not in ('visual','mobile') or not NAME.fullmatch(name):
             raise ValueError('Invalid visual artifact path')
         machine = hashlib.sha256(host.encode()).hexdigest()[:16]
         path = self.folder / (run + '-artifacts') / machine / suite / name

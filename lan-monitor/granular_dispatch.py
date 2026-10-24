@@ -30,9 +30,12 @@ def execute(service, hosts, images):
 
     preparation_bases=list(dict.fromkeys(SUITES[t].get('base',t) for t in run['pending_tasks']))
     network=EarlyP2P(service,hosts,images,include_p2p)
+    from mobile_worker import MobileRun
+    mobile=MobileRun(service,required=True) if run.get('selection') and 'mobile' in run['selection']['suites'] else MobileRun(service) if not run.get('selection') else None
 
     if not tasks:
         network.join()
+        if mobile:mobile.join()
         with service.lock:
             for host in hosts:host['status']='passed'
             service.save()
@@ -176,5 +179,6 @@ def execute(service, hosts, images):
             for future in concurrent.futures.as_completed(futures):future.result()
     finally:
         network.join()
+        if mobile:mobile.join()
     if run['pending_tasks'] and not run.get('stop_requested'):
         raise RuntimeError('No worker could execute the remaining ' + str(len(run['pending_tasks'])) + ' test jobs')
