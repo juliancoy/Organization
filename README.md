@@ -49,7 +49,7 @@ An optional directory argument chooses another existing checkout parent.
 ## Local access
 
 ```bash
-./run.py                       # start or refresh the local stack
+./run.py                       # start the named local launcher container
 ./local-login                  # sign in as a local member
 ./local-login --admin          # sign in as a synthetic local administrator
 ./local-login-guest            # local administrator in Chrome Guest mode
@@ -61,6 +61,14 @@ Local sign-in requires the running loopback deployment and its local Docker
 containers. Administrator provisioning is explicit and local; it grants no
 production access. The launcher preserves the historical `bmoremedtech-` Docker
 volume namespace by default. Use `./run.py --help` for configuration.
+
+`run.py` runs inside `lifetech-launcher` (or `<prefix>-launcher` for another
+namespace). It stays visible after startup; use `docker logs -f lifetech-launcher`
+for its console and `docker stop lifetech-launcher` to stop the launcher.
+The machine inspector marks launcher containers in biotech gold (`#D4AF37`).
+The image packages the installed Python 3.12 launcher dependencies without package
+downloads. The launcher uses the host Docker CLI and socket, with the workspace mounted at
+its original path so the application containers receive the correct bind mounts.
 
 Application changes belong in their respective repositories. Local credentials,
 certificates, databases, dependency directories, and application checkouts are

@@ -64,6 +64,7 @@ document.addEventListener('click',event=>{const node=event.target.closest('[data
 setInterval(()=>{if(!panel.hidden&&document.visibilityState==='visible')void refresh();},1000);
 
 let selectedContainer=null,containerHost=null,containerBusy=false;
+const containerClass=item=>item.name.endsWith('-launcher')?'launcher':'application';
 const containerPanel=document.createElement('section');containerPanel.id='container-hover';containerPanel.hidden=true;containerPanel.setAttribute('role','dialog');containerPanel.setAttribute('aria-label','Container details and console');
 const containerHeading=document.createElement('strong'),containerDetails=document.createElement('pre'),containerConsole=document.createElement('pre'),containerClose=document.createElement('button');
 containerClose.textContent='Close container';containerClose.type='button';containerConsole.tabIndex=0;containerConsole.setAttribute('aria-label','Container console output');
@@ -90,7 +91,7 @@ async function refreshContainers(){
   if(containerGrid.dataset.signature!==signature){
    containerGrid.dataset.signature=signature;containerGrid.replaceChildren();
    for(const item of data.containers){
-    const button=document.createElement('button');button.type='button';button.className='container-tile';button.textContent=item.name+'\n'+item.image;button.setAttribute('aria-haspopup','dialog');
+    const button=document.createElement('button');button.type='button';button.className='container-tile';button.dataset.containerClass=containerClass(item);button.textContent=item.name+'\n'+(containerClass(item)==='launcher'?'Launcher · Biotech gold\n':'')+item.image;button.setAttribute('aria-haspopup','dialog');
     const open=()=>{if(selectedContainer===item.id&&!containerPanel.hidden)return;selectedContainer=item.id;containerHeading.textContent=item.name;containerDetails.textContent=item.image;containerConsole.textContent='Loading console…';containerPanel.hidden=false;setBreadcrumbs(containerCrumbs,[{label:'Network',action:()=>{dismiss();containerPanel.hidden=true;selectedContainer=null;}},{label:host,action:backToMachine},{label:item.name}]);setTimeout(()=>void refreshContainers(),0);};
     let previewTimer;button.onpointerenter=()=>{previewTimer=setTimeout(open,250);};button.onpointerleave=()=>clearTimeout(previewTimer);button.onfocus=open;button.onclick=()=>{open();pinned=true;pin.textContent='Unpin';panel.classList.add('is-pinned');};containerGrid.append(button);
    }
@@ -98,7 +99,8 @@ async function refreshContainers(){
   if(requestedId&&!data.detail){containerDetails.textContent='Container stopped or is no longer available.';containerConsole.textContent='';}
   if(data.detail){
    const detail=data.detail;containerHeading.textContent=detail.name+' · '+requestedHost;
-   containerDetails.textContent=JSON.stringify({image:detail.image,id:detail.id,state:detail.state,health:detail.health,started:detail.started_at,restarts:detail.restart_count,ports:detail.ports},null,2);
+   containerPanel.dataset.containerClass=containerClass(detail);
+   containerDetails.textContent=JSON.stringify({image:detail.image,class:containerClass(detail),id:detail.id,state:detail.state,health:detail.health,started:detail.started_at,restarts:detail.restart_count,ports:detail.ports},null,2);
    if(!consolePaused){consoleText=detail.console||'No console output recorded.';renderConsole();}
   }
  }catch{if(host===requestedHost){containersTitle.textContent='Running containers · Disconnected';containerGrid.replaceChildren();containerGrid.dataset.signature='';if(requestedId)containerConsole.textContent='Console unavailable · retrying…';}}

@@ -5,6 +5,7 @@
 !/repositories.txt
 !/requirements.txt
 !/run.py
+!/Dockerfile.launcher
 !/vm_runner.py
 !/vm/
 !/lan-monitor/
