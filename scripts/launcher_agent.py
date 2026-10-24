@@ -506,15 +506,22 @@ class Agent:
                 # Cache commits live under refs/cache, which clone does not advertise.
                 # Fetch the exact object locally so a shallow cache can materialize it.
                 if sparse:
+                    # Git can disable its local hardlink optimization for partial
+                    # repositories. Retain already-cached immutable objects too.
+                    for source_object in (cache/'objects').rglob('*'):
+                        if not source_object.is_file():continue
+                        destination=path/'.git/objects'/source_object.relative_to(cache/'objects')
+                        if destination.exists():continue
+                        destination.parent.mkdir(parents=True,exist_ok=True)
+                        os.link(source_object,destination)
                     git(path,'config','remote.origin.promisor','true')
                     git(path,'config','remote.origin.partialclonefilter','blob:none')
                 git(path,'fetch','--no-tags','--depth=1',*(['--filter=blob:none'] if sparse else []),'origin' if sparse else str(cache),repo['commit'],local=True)
-            if sparse:
-                git(path,'sparse-checkout','set','--no-cone','/run.py','/usa/','/css/','/js/reusableComponents.js','/tests/usajobs-mobile.test.cjs',local=True)
-            # Resolve sparse blobs through the verified local cache, which can
-            # fetch missing objects from its pinned GitHub promisor remote.
-            git(path,'checkout','--detach','--force',repo['commit'],local=sparse)
             git(path,'remote','set-url','origin',repo['url'])
+            if sparse:
+                git(path,'sparse-checkout','set','--no-cone','/run.py','/usa/','/css/','/js/reusableComponents.js','/tests/usajobs-mobile.test.cjs')
+            # Only missing sparse blobs are fetched from the verified GitHub origin.
+            git(path,'checkout','--detach','--force',repo['commit'])
             if git(path,'rev-parse','HEAD')!=repo['commit'] or git(path,'status','--porcelain'):
                 raise ValueError('Checkout verification failed: '+name)
             event(name,repo,'verified',cache_hit=cached)
