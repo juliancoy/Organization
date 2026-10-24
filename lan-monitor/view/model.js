@@ -213,6 +213,15 @@ export function networkView(data, requested, layer = 'links', allConnections = f
       last_seen:row.last_seen, bytes:row.bytes, source_ip:row.source_ip,
       capture_interface:row.interface, attribution:row.basis});
   }
+  const hardware=router?.hardware_flows;
+  if(allConnections&&fresh(hardware,45))for(const row of hardware.relationships||[]){
+    if(row.source_mac!==id)continue;
+    for(const mac of [row.source_mac,row.destination_mac])if(!inventory.has(mac))add({id:mac,mac,title:'Observed LAN device',ports:[]});
+    connect(row.source_mac,row.destination_mac,{kind:'outbound',
+      evidence:'Router hardware-observed LAN MAC delivery',traffic_basis:hardware.basis,
+      observed:hardware.observed,hardware_packets:row.hardware_packets,
+      capacity_basis:'Hardware packet counters do not measure byte throughput',actual_mbps:null});
+  }
   for (const device of observation?.devices || []) evidence.set(key(device), device);
   const allEdges = [...graph.values()], distances = new Map([[id,0]]), queue = [id];
   while (queue.length) {

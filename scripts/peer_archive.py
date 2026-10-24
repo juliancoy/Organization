@@ -36,6 +36,11 @@ def ticket(secret,room,ttl=3600,audience='archive-peers-v1'):
 
 def package_file(source,output,kind,expires=None,source_manifest=None):
     if output.exists():raise RuntimeError('Package output must be a new directory')
+    if kind not in {'testing','encrypted-dr','public'}:raise RuntimeError('Unknown dataset kind')
+    if kind=='public':
+        from public_data import MAX_BYTES,validate_snapshot
+        if source.stat().st_size>MAX_BYTES:raise RuntimeError('Public data exceeds the size limit')
+        validate_snapshot(json.loads(source.read_bytes()))
     if kind=='encrypted-dr':
         with source.open('rb') as stream:
             magic=stream.read(64)
@@ -48,8 +53,9 @@ def package_file(source,output,kind,expires=None,source_manifest=None):
             sha=hashlib.sha256(chunk).hexdigest();path=chunks/sha
             if not path.exists():path.write_bytes(chunk);path.chmod(0o600)
             parts.append({'hash':sha,'size':len(chunk)});size+=len(chunk)
-    manifest={'version':1,'kind':kind,'files':[{'path':'testing-copy.json' if kind=='testing' else 'recovery.tar.age','size':size,'chunks':parts}]}
-    if kind=='testing':manifest['expires']=expires or int(time.time())+7*86400
+    name={'testing':'testing-copy.json','encrypted-dr':'recovery.tar.age','public':'public-snapshot.json'}[kind]
+    manifest={'version':1,'kind':kind,'files':[{'path':name,'size':size,'chunks':parts}]}
+    if kind in {'testing','public'}:manifest['expires']=expires or int(time.time())+(86400 if kind=='public' else 7*86400)
     if source_manifest:manifest['sourceManifestSha256']=source_manifest
     raw=json.dumps(manifest,sort_keys=True,separators=(',',':')).encode()
     if len(raw)>8*1024*1024:raise RuntimeError('Dataset manifest exceeds browser limit; split the encrypted archive into smaller packages')

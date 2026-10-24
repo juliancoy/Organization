@@ -38,6 +38,7 @@ export function renderActivity(run){
  root.querySelector('.activity-workers').textContent=[...active,...preparing.map(h=>h.host+' · '+(h.preparation||'preparing'))].join('   /   ')||(complete?'Results saved.':'Each node starts independently when its images are ready.');
  const post=run.post_deployment;
  root.querySelector('.post-deployment-status').textContent=post?'Post-deployment: '+post.status.replaceAll('_',' ')+' · '+(post.checks||[]).map(c=>c.name+': '+c.status+' — '+c.detail).join(' / '):complete?'Post-deployment checks run after a passing test run and wait for its deployed commit.':'';
+ if(run.pending_suites?.length)root.querySelector('.activity-workers').append(' · Waiting for a worker: '+run.pending_suites.join(', '));
  const events=run.activity||[];
  root.querySelector('small.muted').textContent=events.length?'Latest 300 coordinator events retained with this run. Process output is below.':'Current snapshot only. Full event recording begins with the next run.';
  const fallback=events.length?events:[{time:run.updated||run.started,message:imageText||run.preparation||'Run '+run.status}];

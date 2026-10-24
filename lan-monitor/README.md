@@ -481,3 +481,5 @@ for organization/chat/web/visual suites; PIdP only for identity suites. Root-onl
 monitor/map/workspace work does not fetch either application repository. The full
 pinned source manifest remains available for build metadata and provenance.
 Source events record `cache_hit` and whether an existing run seeded the cache.
+
+Application scheduling uses a shared longest-first queue for identity, Python identity, web, visual, workspace and chat. Median successful suite durations from the last 20 records set priority, with conservative defaults for unseen suites. Each idle verified machine claims one suite atomically, prepares only that work's images, and checks its own passing baselines. Each dispatch has a distinct agent job ID and checkout; results aggregate into the parent run. After shared work drains, workers execute their own monitor/map checks and unique Org API shard. P2P remains coordinated after ordinary work. New full runs use this policy; targeted reruns preserve their requested machines and shards. This policy trades additional checkout overhead for reduced idle time; wall-clock savings require measurement.

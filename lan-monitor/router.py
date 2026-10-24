@@ -202,8 +202,15 @@ class Router:
             telemetry['sources'].append('ajax_conntrack.asp')
         except Exception as exc:
             errors['connections'] = type(exc).__name__
+        hardware_flows = None
+        if self.config.get('hardware_flows'):
+            try:
+                from router_flows import read
+                hardware_flows = read(self.config)
+            except Exception as exc:
+                errors['hardware_flows'] = type(exc).__name__
         stamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
         telemetry.update(observed=stamp, errors=errors, stale_after_seconds=45)
         return {'mac':metadata.get('lan_hwaddr', '7c:10:c9:b3:c2:38').lower(), 'ip':self.config['address'],
-                'clients':result, 'known_clients':known_clients, 'observed':stamp, 'telemetry':telemetry,
+                'hardware_flows':hardware_flows, 'clients':result, 'known_clients':known_clients, 'observed':stamp, 'telemetry':telemetry,
                 'basis':'Authenticated firmware association table; reported PHY rates are not throughput'}
