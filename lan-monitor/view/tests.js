@@ -49,7 +49,17 @@ function render(){
  if(selected!=='compai.local'&&!hosts.some(host=>host.host===selected))selected=hosts[0]?.host;
  const focusedHost=document.activeElement?.closest('#topology [data-terminal-host]')?.dataset.terminalHost;
  $('topology').replaceChildren(coordinatorNode());
- for(const host of hosts){const node=el('button','','host '+host.status);node.type='button';node.dataset.terminalHost=host.host;node.setAttribute('aria-pressed',String(host.host===selected));node.append(el('strong',host.host),el('small',host.user+' · '+(host.observed_hostname||'Identity not observed yet')),badge(host.status));const jobs=Object.values(host.jobs||{}),finished=jobs.filter(j=>terminal.has(j.status)).length;const progress=el('div','','host-progress'),fill=el('span');fill.style.width=(jobs.length?100*finished/jobs.length:0)+'%';progress.append(fill);node.append(progress,el('small',finished+' / '+jobs.length+' suites finished · '+seconds(duration(host))));node.onclick=()=>{selected=host.host;render();};$('topology').append(node);}
+ for(const host of hosts){const node=el('button','','host '+host.status);node.type='button';node.dataset.terminalHost=host.host;node.setAttribute('aria-pressed',String(host.host===selected));node.append(el('strong',host.host),el('small',host.user+' · '+(host.observed_hostname||'Identity not observed yet')),badge(host.status));const jobs=Object.values(host.jobs||{}),finished=jobs.filter(j=>terminal.has(j.status)).length;const progress=el('div','','host-progress'),fill=el('span');fill.style.width=(jobs.length?100*finished/jobs.length:0)+'%';progress.append(fill);node.append(progress,el('small',finished+' / '+jobs.length+' suites finished · '+seconds(duration(host))));
+ const suites=el('span','','machine-suites');suites.setAttribute('role','list');suites.setAttribute('aria-label',host.host+' test suites');
+ for(const [id,job] of Object.entries(host.jobs||{})){
+  const tile=el('span','','suite-tile '+job.status);tile.dataset.suite=id;tile.setAttribute('role','listitem');
+  tile.append(el('strong',job.name),el('span',label(job.status),'suite-state'));
+  const counts=job.test_counts;
+  const detail=[job.phase,counts?`${counts.passed??'—'} passed · ${counts.failed??0} failed`:null].filter(Boolean).join(' · ');
+  if(detail)tile.append(el('small',detail));
+  tile.title=job.name+' · '+label(job.status)+(detail?' · '+detail:'');suites.append(tile);
+ }
+ node.append(suites);node.onclick=()=>{selected=host.host;render();};$('topology').append(node);}
  if(focusedHost)Array.from($('topology').children).find(node=>node.dataset.terminalHost===focusedHost)?.focus({preventScroll:true});
  $('updated').textContent=run.updated?'Last result '+new Date(run.updated).toLocaleTimeString():'';
  const ids=[...new Set(hosts.flatMap(host=>host.suites||[]))];const header=el('tr');header.append(el('th','Application suite'));for(const host of hosts)header.append(el('th',host.host));$('matrix-head').replaceChildren(header);$('matrix').replaceChildren();
