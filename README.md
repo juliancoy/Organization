@@ -68,6 +68,15 @@ continues through the list. It never stashes or resets local work. Resolve any
 reported checkout conflicts in that application's repository and retry.
 An optional directory argument chooses another existing checkout parent.
 
+## Local identity isolation
+
+The portal is `https://localhost:8443`; identity pages and provider callbacks use
+`https://id.localhost:8443`. Both names resolve to loopback and are covered by the
+local development certificate. Accept that certificate for each origin. Identity
+cookies are host-only; the portal uses its own session via browser-bound SSO.
+Identity CORS does not allow portal JavaScript to read identity responses.
+Account data and Docker volumes are unchanged by this routing configuration.
+
 ## Local access
 
 ```bash
