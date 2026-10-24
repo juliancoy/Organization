@@ -19,7 +19,8 @@ const noResults=el('p','No conversations match. Try another name or load an olde
 const sidebarHeading=el('h2','Conversations'); sidebar.prepend(sidebarHeading,searchLabel);
 list.setAttribute('aria-label','Conversations');
 const previous = el('button', 'Newer'), more = el('button', 'Older'), refresh = el('button', 'Refresh'); controls.append(previous, more, refresh); sidebar.append(list, noResults, controls);
-const newChat = el('button', 'New chat'); newChat.type = 'button'; sidebar.prepend(newChat);
+const newChat = el('button', 'New chat'); newChat.type = 'button';
+const sidebarTitle=el('div','','codex-sidebar-heading'); sidebarTitle.append(sidebarHeading,newChat); sidebar.prepend(sidebarTitle);
 const conversation = el('div', '', 'codex-conversation'), info = el('div'), transcript = el('div', '', 'codex-transcript'); transcript.tabIndex = 0; transcript.setAttribute('aria-label', 'Conversation messages');
 const empty=el('div','','codex-empty'); empty.append(el('span','Your workspace, at a glance','codex-eyebrow'),el('h2','Choose a conversation'),el('p','Select a thread to read its history and send the next instruction. You can review any conversation before taking action.'));
 const back=el('button','← Conversations','codex-back'); back.type='button'; back.onclick=()=>{workspace.classList.remove('codex-reading');list.querySelector('[aria-pressed=true]')?.focus();};
