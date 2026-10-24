@@ -162,7 +162,7 @@ class DistributedTests:
         def stop_host(host):
             if host.get('excluded') or not host.get('agent_endpoint'):return
             try:
-                result=AgentClient(host).call('job.stop',{'id':run['id']},timeout=40)
+                result=AgentClient(host).call('job.stop',{'id':host.get('agent_job_id',run['id'])},timeout=40)
                 host['stop_acknowledged']=result.get('acknowledged') is True
             except Exception as error:host['stop_error']=str(error)[:400]
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(1,len(run['hosts']))) as pool:
@@ -217,16 +217,17 @@ class DistributedTests:
                 self.save()
 
     def host(self, index, host, manifest, ident):
-        if all(job['status']=='reused' for suite,job in host['jobs'].items() if not SUITES[suite].get('coordinated')):
+        selected=set(manifest['hosts'][index]['suites'])
+        if all(job['status']=='reused' for suite,job in host['jobs'].items() if suite in selected and not SUITES[suite].get('coordinated')):
             with self.lock:
-                host.update(status='passed',finished=now(),duration_seconds=0)
+                host.update(status='passed',finished=now());host.setdefault('duration_seconds',0)
                 self.save()
             return
         from agent_client import AgentClient
         started=time.monotonic();client=AgentClient(host);cursor=0
         try:
             with self.lock:
-                host.update(status='preparing',started=now());self.save()
+                host.update(status='preparing',started=host.get('started') or now(),agent_job_id=ident);self.save()
             if self.run.get('stop_requested'):return
             client.call('job.start',{'id':ident,'manifest':manifest,'index':index},timeout=180)
             with self.lock:host['status']='running';self.save()
@@ -239,7 +240,7 @@ class DistributedTests:
                 for item in result['events']:self.update(host,item['event'])
                 previous=cursor;cursor=result['cursor']
                 if result['status'] not in ('running','starting') and cursor==previous:
-                    jobs=[j for suite,j in host['jobs'].items() if not SUITES[suite].get('coordinated')]
+                    jobs=[j for suite,j in host['jobs'].items() if suite in selected and not SUITES[suite].get('coordinated')]
                     host['status']='stopped' if result['status']=='stopped' else 'passed' if result['status']=='completed' and all(j['status'] in SUCCESS for j in jobs) else 'failed'
                     if result.get('error'):host['error']=result['error']
                     break
@@ -255,8 +256,9 @@ class DistributedTests:
             except Exception:pass
         finally:
             with self.lock:
-                host.update(finished=now(),duration_seconds=round(time.monotonic()-started,2))
+                host.update(finished=now(),duration_seconds=round(host.get('duration_seconds',0)+time.monotonic()-started,2))
                 for suite,job in host['jobs'].items():
+                    if suite not in selected:continue
                     if SUITES[suite].get('coordinated') and not self.run.get('stop_requested'):continue
                     if job['status'] not in FINAL:job['status']='stopped' if self.run.get('stop_requested') else 'unavailable'
                 self.save()
@@ -330,12 +332,16 @@ class DistributedTests:
                 self.save()
             from distributed_images import required_images
             from suite_cache import SuiteCache
-            def prepare_and_run(index,host):
+            def prepare_and_run(index,host,selected_suites=None):
+                selected_suites=selected_suites or list(host['jobs'])
                 try:
                     with self.lock:
+                        host.pop('finished',None)
                         host.update(status='preparing',preparation='Preparing required images')
                         self.save()
-                    with self.lock:cache_plan=copy.deepcopy(run)
+                    with self.lock:
+                        cache_plan=copy.deepcopy(run)
+                        cache_plan['hosts'][index]['jobs']={k:v for k,v in cache_plan['hosts'][index]['jobs'].items() if k in selected_suites}
                     cache=SuiteCache(self.root,self.folder,SUITES)
                     if not run.get('targeted') and not run.get('force'):cache.apply(cache_plan,images,{host['host']})
                     candidate=next(row for row in cache_plan['hosts'] if row['host']==host['host'])
@@ -352,16 +358,19 @@ class DistributedTests:
                         host['images']=dict(images.host_images.get(host['host'],{}))
                         run['images'].update(images.images)
                         cache_plan=copy.deepcopy(run)
+                        cache_plan['hosts'][index]['jobs']={k:v for k,v in cache_plan['hosts'][index]['jobs'].items() if k in selected_suites}
                     if not run.get('targeted') and not run.get('force'):cache.apply(cache_plan,images,{host['host']})
                     with self.lock:
                         cached=next(row for row in cache_plan['hosts'] if row['host']==host['host'])
-                        host['jobs']=cached['jobs']
+                        host['jobs'].update(cached['jobs'])
                         host.pop('preparation',None)
                         run['reuse']={'suites':sum(j['status']=='reused' for h in run['hosts'] for j in h['jobs'].values()),
                             'policy':'relevant-source+dependencies+image+machine','fresh_passes_only':True}
                         manifest=copy.deepcopy(run)
+                        manifest['hosts'][index]['suites']=selected_suites
+                        manifest['id']=run['id'].split('-')[0]+'-'+uuid.uuid4().hex[:8]
                         self.save()
-                    if not run.get('stop_requested'):self.host(index,host,manifest,run['id'])
+                    if not run.get('stop_requested'):self.host(index,host,manifest,manifest['id'])
                 except Exception as error:
                     with self.lock:
                         host.update(status='unavailable',error=type(error).__name__+': '+str(error)[:500],finished=now())
@@ -369,10 +378,47 @@ class DistributedTests:
                             if job['status'] not in FINAL:
                                 job.update(status='unavailable',not_executed=True,phase='image_preparation')
                         self.save()
+            from work_queue import pending,SHARED
+            if not run.get('targeted'):
+                with self.lock:
+                    run['pending_suites']=pending(self.folder)
+                    for host in hosts:
+                        host['suites']=[s for s in host['suites'] if s not in SHARED]
+                        host['jobs']={s:j for s,j in host['jobs'].items() if s not in SHARED}
+                    self.save()
+            def worker(index,host):
+                if run.get('targeted'):
+                    prepare_and_run(index,host);return
+                while not run.get('stop_requested'):
+                    with self.lock:
+                        if not run['pending_suites']:break
+                        suite=run['pending_suites'].pop(0)
+                        host['suites'].append(suite)
+                        host['jobs'][suite]={'name':SUITES[suite]['name'],'status':'queued','phase':None,'logs':[]}
+                        self.save()
+                    prepare_and_run(index,host,[suite])
+                    if host['status']=='unavailable':return
+                if not run.get('stop_requested'):
+                    prepare_and_run(index,host,[s for s in host['suites'] if s not in SHARED and s!='p2p'])
+                    with self.lock:
+                        host['status']='passed' if all(j['status'] in SUCCESS for s,j in host['jobs'].items() if s!='p2p') else 'failed'
+                        self.save()
             with concurrent.futures.ThreadPoolExecutor(max_workers=len(hosts)) as pool:
-                futures=[pool.submit(prepare_and_run,index,host) for index,host in enumerate(hosts)]
+                futures=[pool.submit(worker,index,host) for index,host in enumerate(hosts)]
                 for future in concurrent.futures.as_completed(futures):future.result()
+            if run.get('pending_suites') and not run.get('stop_requested'):
+                raise RuntimeError('Workers became unavailable with suites still queued')
             if not run.get('stop_requested'):
+                if not run.get('targeted') and not run.get('force'):
+                    with self.lock:
+                        peer_plan=copy.deepcopy(run)
+                        for row in peer_plan['hosts']:
+                            row['jobs']={key:job for key,job in row['jobs'].items() if key=='p2p'}
+                    SuiteCache(self.root,self.folder,SUITES).apply(peer_plan,images)
+                    with self.lock:
+                        for row in peer_plan['hosts']:
+                            original=next(h for h in run['hosts'] if h['host']==row['host'])
+                            if 'p2p' in row['jobs']:original['jobs']['p2p']=row['jobs']['p2p']
                 # P2P alone needs the participant set; ordinary suites have already
                 # completed on each ready worker without waiting for slower nodes.
                 with self.lock:
