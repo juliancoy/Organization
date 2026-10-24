@@ -211,6 +211,8 @@ def main(argv=None):
     sys.path.insert(0, str(ROOT / 'scripts'))
     from launcher_peers import start
     stop_peers = start(args.prefix)
+    os.environ.setdefault('ORGPORTAL_LOCAL_PREVIEW_ORIGINS', ','.join(
+        f'https://{host}:{port}' for port in (8769, 8770) for host in ('localhost', '127.0.0.1')))
     module.run(args.prefix, args.network)
     start_site_previews(args)
     print(f'\nLocal portal: {base}/')
