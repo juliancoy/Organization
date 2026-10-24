@@ -469,5 +469,6 @@ if __name__ == '__main__':
     threading.Thread(target=traffic_worker, daemon=True).start()
     threading.Thread(target=map_worker, daemon=True).start()
     threading.Thread(target=router_worker, daemon=True).start()
+    distributed_tests.staging.start()
     print(f'LAN collector: http://127.0.0.1:{PORT}', flush=True)
     ThreadingHTTPServer(('127.0.0.1', PORT), Handler).serve_forever()

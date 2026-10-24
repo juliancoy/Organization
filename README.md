@@ -180,6 +180,10 @@ backup includes an isolated restore drill and a manifest of recovery gaps.
 `./local-sync --org lifetech --include-private` creates a separate scoped testing
 copy from the latest verified archive. See [DISASTER_RECOVERY.md](DISASTER_RECOVERY.md)
 for credentials, daily scheduling, restore steps, retention, and current limits.
+For the full captured dataset, use `./dev-data refresh` and `./dev-data checkout`.
+This creates independent writable copies of all four databases, with all captured
+media available read-only to the offline SQL shell. Successful daily backups
+refresh the dev baseline without overwriting existing development workspaces.
 
 ### Launcher WebRTC mesh
 

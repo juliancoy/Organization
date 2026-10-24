@@ -115,12 +115,12 @@ class MasterAPI:
 
     @staticmethod
     def machine(host):
-        return {key:copy.deepcopy(host[key]) for key in ('host','local','status','cpus','session','error','excluded') if key in host}
+        return {key:copy.deepcopy(host[key]) for key in ('host','local','status','cpus','capacity','active_tasks','session','error','excluded') if key in host}
 
     def status(self):
         view=self.tests.view();run=view.get('run')
-        return {'service':'map-test-master','running':view['running'],'run':None if not run else
-                {key:copy.deepcopy(run.get(key)) for key in ('id','status','started','finished','preparation','image_progress','error')},
+        return {'service':'map-test-master','running':view['running'],'snapshot_staging':view.get('snapshot_staging'),'run':None if not run else
+                {key:copy.deepcopy(run.get(key)) for key in ('id','status','started','finished','preparation','image_progress','error','granular','pending_tasks')},
                 'links':{'dashboard':'/tests.html','mcp':'/mcp','api':API,'openapi':API+'/openapi.json'}}
 
     def rest(self,method,target,body=None):

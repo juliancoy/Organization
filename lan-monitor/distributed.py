@@ -41,16 +41,8 @@ def no_remote_shell(target):
 def plan(hosts):
     hosts = copy.deepcopy(hosts)
     for host in hosts:
-        host.update(status='queued', suites=['monitor', 'map', 'p2p'], jobs={})
-    for index, suite in enumerate(['web', 'visual', 'identity', 'chat', 'workspace', 'identity-python']):
-        # Browser/identity work goes to the last host; frontend to the middle.
-        slot = {'org-api': 0, 'chat': 0, 'web': 1, 'visual': 1, 'workspace': 3, 'identity': 2, 'identity-python': 2}[suite] % len(hosts)
-        hosts[slot]['suites'].append(suite)
-    for index,host in enumerate(hosts):
-        host['suites'].insert(0,'org-api')
-        host['org_api_shard']={'index':index+1,'count':len(hosts)}
-        host['jobs'] = {suite: {'name': SUITES[suite]['name'], 'status': 'queued', 'phase': None, 'logs': []} for suite in host['suites']}
-        host['jobs']['org-api']['name'] += f' · shard {index+1}/{len(hosts)}'
+        host.update(status='queued', suites=['p2p'], jobs={
+            'p2p': {'name': SUITES['p2p']['name'], 'status': 'queued', 'phase': None, 'logs': []}})
     return hosts
 
 
@@ -141,7 +133,7 @@ class DistributedTests:
             self.run = {'id': dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:8],
                         'status': 'preparing', 'started': now(), 'finished': None, 'force':force,
                         'hosts': hosts, 'repositories': {}, 'source_sha256': None,
-                        'scope': 'Start commits and pushes Organization, OrgPortal and PIdP on their current branches; verified local agents fetch exact GitHub commits into fresh directories. Application suites run in isolated containers without network or deployment credentials. The dedicated P2P suite uses separate browser containers on authenticated agent machines, synthetic fixtures and short-lived dataset invitations; its network access is required for WebRTC.'}
+                        'scope': 'Start commits and pushes Organization, OrgPortal and PIdP on their current branches; verified local agents fetch exact GitHub commits into fresh directories. Individual test files and build checks are pulled from a shared queue as CPU and memory become available. Each machine keeps one checkout and dependency setup for the run. Test containers have no network or deployment credentials. The dedicated P2P suite uses separate browser containers on authenticated agent machines, synthetic fixtures and short-lived dataset invitations; its network access is required for WebRTC.'}
             if parent_run_id:self.run.update(parent_run_id=parent_run_id,targeted=True,status='queued')
             self.running = True
             self.save()
@@ -381,36 +373,15 @@ class DistributedTests:
                             if job['status'] not in FINAL:
                                 job.update(status='unavailable',not_executed=True,phase='image_preparation')
                         self.save()
-            from work_queue import pending,SHARED
-            if not run.get('targeted'):
-                with self.lock:
-                    run['pending_suites']=pending(self.folder)
-                    for host in hosts:
-                        host['suites']=[s for s in host['suites'] if s not in SHARED]
-                        host['jobs']={s:j for s,j in host['jobs'].items() if s not in SHARED}
-                    self.save()
-            def worker(index,host):
-                if run.get('targeted'):
-                    prepare_and_run(index,host);return
-                while not run.get('stop_requested'):
-                    with self.lock:
-                        if not run['pending_suites']:break
-                        suite=run['pending_suites'].pop(0)
-                        host['suites'].append(suite)
-                        host['jobs'][suite]={'name':SUITES[suite]['name'],'status':'queued','phase':None,'logs':[]}
-                        self.save()
-                    prepare_and_run(index,host,[suite])
-                    if host['status']=='unavailable':return
-                if not run.get('stop_requested'):
-                    prepare_and_run(index,host,[s for s in host['suites'] if s not in SHARED and s!='p2p'])
-                    with self.lock:
-                        host['status']='passed' if all(j['status'] in SUCCESS for s,j in host['jobs'].items() if s!='p2p') else 'failed'
-                        self.save()
-            with concurrent.futures.ThreadPoolExecutor(max_workers=len(hosts)) as pool:
-                futures=[pool.submit(worker,index,host) for index,host in enumerate(hosts)]
-                for future in concurrent.futures.as_completed(futures):future.result()
-            if run.get('pending_suites') and not run.get('stop_requested'):
-                raise RuntimeError('Workers became unavailable with suites still queued')
+            if run.get('targeted'):
+                from work_queue import catalog
+                catalog(self.root, SUITES, run['repositories'])
+                with concurrent.futures.ThreadPoolExecutor(max_workers=len(hosts)) as pool:
+                    futures=[pool.submit(prepare_and_run,index,host) for index,host in enumerate(hosts)]
+                    for future in concurrent.futures.as_completed(futures):future.result()
+            else:
+                from granular_dispatch import execute
+                execute(self,hosts,images)
             if not run.get('stop_requested'):
                 if not run.get('targeted') and not run.get('force'):
                     with self.lock:

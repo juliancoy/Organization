@@ -34,17 +34,14 @@ class DistributedTestsTests(unittest.TestCase):
             self.assertTrue(workers[0]['local'])
             with self.assertRaises(RuntimeError):no_remote_shell(workers[1])
 
-    def test_every_suite_is_assigned_and_common_checks_run_on_every_host(self):
-        hosts = plan([{'host': name + '.local', 'user': 'julian'} for name in ['a', 'b', 'c']])
+    def test_machines_do_not_own_application_suites(self):
+        hosts = plan([{'host': name + '.local'} for name in ['a', 'b', 'c']])
         for host in hosts:
-            self.assertIn('monitor', host['suites']); self.assertIn('map', host['suites'])
-        for suite in ['web', 'chat', 'workspace', 'identity', 'identity-python']:
-            self.assertEqual(sum(suite in host['suites'] for host in hosts), 1)
-        self.assertTrue(all('org-api' in host['suites'] for host in hosts))
-        self.assertEqual([host['org_api_shard'] for host in hosts],
-                         [{'index':i,'count':3} for i in range(1,4)])
+            self.assertEqual(host['suites'], ['p2p'])
+            self.assertEqual(set(host['jobs']), {'p2p'})
+            self.assertNotIn('org_api_shard', host)
 
-    def test_readiness_precedes_sharding_so_offline_workers_leave_no_coverage_holes(self):
+    def test_readiness_excludes_offline_workers_before_queue_dispatch(self):
         with tempfile.TemporaryDirectory() as folder:
             service=DistributedTests(state=folder)
             original=plan([{'host':name+'.local'} for name in ('a','b','offline')])
@@ -55,9 +52,7 @@ class DistributedTestsTests(unittest.TestCase):
                 sessions.return_value.verify.return_value=original[:2]
                 service.execute()
             active=[h for h in service.run['hosts'] if not h.get('excluded')]
-            self.assertEqual([h['org_api_shard'] for h in active],[{'index':1,'count':2},{'index':2,'count':2}])
-            for suite in ('web','visual','identity','chat','workspace','identity-python'):
-                self.assertEqual(sum(suite in h['suites'] for h in active),1)
+            self.assertTrue(all(h['suites']==['p2p'] for h in active))
             offline=next(h for h in service.run['hosts'] if h.get('excluded'))
             self.assertEqual(offline['host'],'offline.local')
             self.assertEqual(offline['jobs'],{})

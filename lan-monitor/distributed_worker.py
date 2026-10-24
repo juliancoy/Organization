@@ -12,6 +12,7 @@ import subprocess
 import threading
 import time
 
+PREPARATION_PROTOCOL = 1
 NODE = 'node:22-bookworm'
 BROWSER = 'mcr.microsoft.com/playwright:v1.59.1-noble'
 PYTHON = 'python:3.12-bookworm'
@@ -47,7 +48,11 @@ SUITES = {
 
 
 def emit(kind, **fields):
-    print(json.dumps({'kind': kind, **fields}), flush=True)
+    with OUTPUT_LOCK:
+        print(json.dumps({'kind': kind, **fields}), flush=True)
+
+
+OUTPUT_LOCK = threading.Lock()
 
 
 def clean(line):
@@ -109,15 +114,15 @@ def run(work, suite_id, phase, spec, run_id, env):
     cwd = work / spec['cwd']
     native = spec.get('native')
     if not native:
-        cache=dependency_cache(work,suite_id,spec)
-        command = ['docker', 'run', '--pull=never', '--rm', '--name', name, '--user', str(os.getuid()) + ':' + str(os.getgid()), '-e', 'HOME=/tmp', '--cpus', '2', '--memory', '3g',
+        cache=dependency_cache(work,spec.get('base',suite_id),spec)
+        command = ['docker', 'run', '--pull=never', '--rm', '--name', name, '--user', str(os.getuid()) + ':' + str(os.getgid()), '-e', 'HOME=/tmp', '--cpus', str(spec.get('cpus',2)), '--memory', str(spec.get('memory_mb',3072))+'m',
                    '--pids-limit', '512', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
                    '--shm-size', '256m', '--network', 'host' if phase == 'prepare' else 'none',
                    '--mount', 'type=bind,src=' + str(work) + ',dst=/work',
                    '--mount', 'type=bind,src=' + str(cache) + ',dst=/cache',
                    '-e','npm_config_cache=/cache/npm','-e','PIP_CACHE_DIR=/cache/pip',
                    '-e','PIP_DISABLE_PIP_VERSION_CHECK=1', '-w', '/work/' + spec['cwd'],
-                   '-e', 'CI=true', '-e', 'PYTHONPATH=/work/.test-deps/' + suite_id + ':/work', '-e', 'SECRET_KEY=distributed-tests-only', '-e', 'DATABASE_URL=postgresql+asyncpg://test:test@127.0.0.1/test',
+                   '-e', 'CI=true', '-e', 'PYTHONPATH=/work/.test-deps/' + spec.get('base',suite_id) + ':/work', '-e', 'SECRET_KEY=distributed-tests-only', '-e', 'DATABASE_URL=postgresql+asyncpg://test:test@127.0.0.1/test',
                    '-e', 'PIDP_BUILD_COMMIT=' + env['PIDP_BUILD_COMMIT'], '-e', 'PIDP_BUILD_DIRTY=false',
                    '-e', 'ORGPORTAL_BUILD_COMMIT=' + env['ORGPORTAL_BUILD_COMMIT'], '-e', 'ORGPORTAL_BUILD_DIRTY=false',
                    spec['image'], *command]
@@ -181,6 +186,10 @@ def main():
     work = Path(__file__).resolve().parents[1]
     manifest = json.loads((work / 'distributed-plan.json').read_text())
     target = manifest['hosts'][args.index]
+    if manifest.get('granular') or any('--' in task for task in target['suites']):
+        from work_queue import catalog
+        catalog(work, SUITES, manifest['repositories'],
+                bases=None if manifest.get('granular') else {task.split('--',1)[0] for task in target['suites']})
     # No inherited deployment, cloud, database, or SSH credentials enter a job.
     env = {key: value for key, value in os.environ.items() if key in ('PATH', 'LANG', 'LC_ALL', 'HOME')}
     env.update(CI='true', PYTHONDONTWRITEBYTECODE='1',
@@ -188,7 +197,7 @@ def main():
                ORGPORTAL_BUILD_COMMIT=manifest['repositories']['OrgPortal']['commit'])
     emit('host', hostname=__import__('socket').gethostname(), cpus=os.cpu_count(),
          python=__import__('sys').version.split()[0], suites=target['suites'])
-    for image in dict.fromkeys([PYTHON]+[SUITES[suite]['image'] for suite in target['suites'] if target['jobs'][suite]['status']!='reused']):
+    for image in dict.fromkeys([PYTHON]+[SUITES[suite]['image'] for suite in target['suites'] if manifest.get('granular') or target['jobs'][suite]['status']!='reused']):
         result = subprocess.run(['docker', 'image', 'inspect', image, '--format', '{{json .Id}}'],
                                 capture_output=True, text=True, timeout=25)
         if result.returncode or json.loads(result.stdout) != target['images'].get(image):
@@ -209,6 +218,14 @@ def main():
         emit('log',phase='mount',line='Docker cannot read this host snapshot. Bind mounts must reference files on the daemon host; use a local Docker context on each agent worker.')
         raise SystemExit(125)
     emit('log',phase='mount',line='Verified host-local source bind mount against the snapshot SHA-256')
+    if manifest.get('prepare_only'):
+        from granular_worker import prepare_snapshot
+        prepare_snapshot(work,manifest,target,env)
+        return
+    if manifest.get('granular') or any('--' in task for task in target['suites']):
+        from granular_worker import execute
+        execute(work,manifest,target,env,SUITES)
+        return
     for suite_id in target['suites']:
         if (work.parent / 'STOP').exists():
             break
@@ -219,14 +236,6 @@ def main():
             continue  # The coordinator must drive real peers together, across hosts.
         # Execute the verified image ID, independent of later tag changes.
         spec = {**spec, 'image': target['images'][spec['image']]}
-        if suite_id=='org-api':
-            shard=target['org_api_shard']
-            index,count=shard['index'],shard['count']
-            if not isinstance(index,int) or not isinstance(count,int) or not 1<=index<=count<=24:
-                raise ValueError('Invalid Org API shard')
-            command=f'npm run build:metadata && node --import tsx --test --test-concurrency=2 --test-shard={index}/{count} test/*.test.ts'
-            if index==1:command+=' && npm run typecheck && npm run check:bundle'
-            spec={**spec,'test':['sh','-c',command]}
         started = time.monotonic()
         emit('suite', suite=suite_id, status='running', name=spec['name'])
         status = run(work, suite_id, 'prepare', spec, manifest['id'], env)

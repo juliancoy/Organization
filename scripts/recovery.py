@@ -20,6 +20,7 @@ import tomllib
 import urllib.error
 import urllib.request
 import uuid
+from dotenv import dotenv_values
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
@@ -140,6 +141,14 @@ def list_objects(s3, bucket):
 def cf_token():
     # Use the operator login for recovery; website/API grants cannot export D1.
     if os.environ.get('CLOUDFLARE_API_TOKEN'): return os.environ['CLOUDFLARE_API_TOKEN']
+    for repo in [ROOT, ROOT/'CodeCollective', ROOT/'BmoreMedTech', ROOT/'Deism']:
+        file = repo / '.env.cloudflare'
+        if not file.is_file(): continue
+        for line in file.read_text().splitlines():
+            if '=' not in line or line.lstrip().startswith('#'): continue
+            name, value = line.split('=', 1)
+            if name.strip().removeprefix('export ') == 'CLOUDFLARE_API_TOKEN' and value.strip():
+                return value.strip().strip('\"\'')
     for p in [Path.home()/'.config/.wrangler/config/default.toml', Path.home()/'.wrangler/config/default.toml']:
         if p.exists():
             value = tomllib.loads(p.read_text()).get('oauth_token')
@@ -304,6 +313,33 @@ def capture_sources(target, repositories=None):
     return result, secret_names
 
 
+def secret_candidates(config, required):
+    """Recover local candidates, never infer that they match deployed values."""
+    parent = (ROOT / config).parent
+    found = {name: {} for name in required}
+    paths = set()
+    for directory in {ROOT, parent, parent.parent}:
+        for pattern in ('.env*', '.pidp.env*', '.dev.vars*'):
+            paths.update(p for p in directory.glob(pattern) if p.is_file() and not p.is_symlink()
+                         and not any(word in p.name.lower() for word in ('example','sample','template')))
+    for path in paths:
+        for key, value in dotenv_values(path, interpolate=False).items():
+            name = key.upper()
+            if name in found and value:
+                found[name].setdefault(value, []).append(str(path))
+    peer_file = Path.home()/'.config/organization-peers/worker-secrets.json'
+    if peer_file.is_file():
+        for name, value in json.loads(peer_file.read_text()).items():
+            if name in found and isinstance(value, str) and value:
+                found[name].setdefault(value, []).append(str(peer_file))
+    values = {}; sources = {}; conflicts = []
+    for name, candidates in found.items():
+        if len(candidates) == 1:
+            value, origins = next(iter(candidates.items())); values[name] = value; sources[name] = origins
+        elif candidates: conflicts.append(name)
+    return values, sources, sorted(conflicts)
+
+
 def backup(args):
     import boto3
     from botocore.config import Config
@@ -433,6 +469,7 @@ def backup(args):
                 manifest['objects'][bucket] = records
                 private_json(pending/'manifest.json',manifest)
             catalog.close()
+            local_candidates = {}
             for worker in inv['workers']:
                 folder = pending/'workers'/worker; folder.mkdir(parents=True,mode=0o700,exist_ok=True)
                 try:
@@ -445,12 +482,19 @@ def backup(args):
                             manifest['gaps'].append(worker+': deployed D1 binding '+binding['name']+' is absent from the configured export inventory')
                         elif kind=='r2_bucket' and binding.get('bucket_name') not in inv['buckets']:
                             manifest['gaps'].append(worker+': deployed R2 binding '+binding['name']+' is absent from the configured object inventory')
-                        elif kind not in {'d1','r2_bucket','plain_text','secret_text','service','assets','version_metadata','durable_object_namespace','queue'}:
+                        elif kind not in {'d1','r2_bucket','plain_text','secret_text','service','assets','version_metadata','durable_object_namespace','queue','send_email'}:
                             manifest['gaps'].append(worker+': deployed binding type '+str(kind)+' needs an exporter')
                     secrets = [b['name'] for b in settings.get('bindings',[]) if b.get('type')=='secret_text']
-                    missing = sorted(set(secrets)-saved_names)
+                    candidates, candidate_sources, conflicts = secret_candidates(inv['workers'][worker]['config'], secrets)
+                    local_candidates[worker] = candidates
+                    private_json(pending/'secrets/local-candidates.json', local_candidates)
+                    missing = sorted(set(secrets)-set(candidates)-set(escrow.get(worker,{})))
                     manifest['workers'][worker] = {'secretNames':secrets,'secretsMissingFromLocalConfig':missing,
                                                   'operatorEscrowNames':sorted(set(secrets)&set(escrow.get(worker,{}))),
+                                                  'localCandidateNames':sorted(candidates),
+                                                  'localCandidateSources':candidate_sources,
+                                                  'conflictingLocalCandidateNames':conflicts,
+                                                  'emailBindings':[b for b in settings.get('bindings',[]) if b.get('type')=='send_email'],
                                                   'secretValuesValidatedAgainstProduction':False}
                     if secrets: manifest['gaps'].append(worker+': deployed secret values cannot be read back; local copies require production validation'+(' (missing: '+', '.join(missing)+')' if missing else ''))
                 except RuntimeError:
@@ -469,7 +513,12 @@ def backup(args):
             # Include nested local backup manifests too; only the root manifest is self-excluded.
             files = {str(p.relative_to(pending)):digest(p) for p in pending.rglob('*') if p.is_file() and p!=pending/'manifest.json'}
             manifest['deduplicatedBytes']=deduplicate_files(pending,store,files)
-            manifest.update(files=files,completedAt=now(),status='data-captured-with-gaps' if manifest['gaps'] else 'complete')
+            manifest.update(files=files,completedAt=now(),status='data-captured-with-gaps' if manifest['gaps'] else 'complete',
+                            coverage={'databaseInventoryComplete':set(manifest['databases'])==set(inv['databases']),
+                                      'objectInventoryComplete':set(manifest['objects'])==set(inv['buckets']),
+                                      'serviceRecoveryComplete':not bool(manifest['gaps']),
+                                      'emailBindingConfigurationCaptured':True,
+                                      'inFlightQueuesCaptured':False})
             private_json(pending/'manifest.json',manifest)
             verify_snapshot(pending,store)
             final = store/stamp; pending.rename(final)
@@ -500,7 +549,16 @@ def resolve_snapshot(store, name):
 def status(store):
     result={'store':str(store),'latestVerified':None,'pending':[],'cachedObjects':[]}
     if not store.exists():return result
-    if (store/'latest.json').exists():result['latestVerified']=json.loads((store/'latest.json').read_text())
+    if (store/'latest.json').exists():
+        result['latestVerified']=json.loads((store/'latest.json').read_text())
+        manifest_path=safe_child(store,result['latestVerified']['snapshot'])/'manifest.json'
+        if manifest_path.exists():
+            manifest=json.loads(manifest_path.read_text())
+            result['coverage']=manifest.get('coverage',{})
+            result['recoveryGaps']=manifest.get('gaps',[])
+            result['missingSecretNames']={worker:entry.get('secretsMissingFromLocalConfig',[])
+                                          for worker,entry in manifest.get('workers',{}).items()
+                                          if entry.get('secretsMissingFromLocalConfig')}
     for folder in sorted(store.glob('.pending-*')):
         try:m=json.loads((folder/'manifest.json').read_text())
         except (OSError,ValueError):continue

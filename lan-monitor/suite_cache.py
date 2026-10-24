@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import subprocess
 
-COMMON=('docker_utils/','lan-monitor/distributed_worker.py','lan-monitor/suite_cache.py','lan-monitor/visual_artifacts.py',
+COMMON=('docker_utils/','lan-monitor/distributed_worker.py','lan-monitor/suite_cache.py','lan-monitor/work_queue.py','lan-monitor/granular_worker.py','lan-monitor/granular_dispatch.py','lan-monitor/agent_updates.py','lan-monitor/snapshot_staging.py','lan-monitor/visual_artifacts.py',
         'scripts/launcher_agent.py','scripts/launcher_registry.py','requirements.txt','pyproject.toml')
 INPUTS={
  'monitor':{'.':('lan-monitor/*.py','lan-monitor/tests/')},
@@ -30,6 +30,7 @@ class SuiteCache:
     def __init__(self,root,folder,specs):
         self.root,self.folder,self.specs=Path(root),Path(folder),specs
         self.trees={}
+        self.image_fingerprints={}
 
     def tree(self,name,commit):
         key=(name,commit)
@@ -39,7 +40,7 @@ class SuiteCache:
         return self.trees[key]
 
     def fingerprint(self,suite,host,run,images):
-        selectors={name:tuple(paths) for name,paths in INPUTS[suite].items()}
+        selectors={name:tuple(paths) for name,paths in INPUTS[self.specs[suite].get('base',suite)].items()}
         selectors['.']=selectors.get('.',())+COMMON
         content=[]
         for name,patterns in sorted(selectors.items()):
@@ -47,12 +48,15 @@ class SuiteCache:
             entries=[entry.hex() for path,entry in self.tree(name,repository['commit']) if selected(path,patterns)]
             if not entries:raise ValueError('No source inputs found for '+suite)
             content.append((name,repository['url'],entries))
-        image=images.fingerprint(host,self.specs[suite]['image'])
+        reference=self.specs[suite]['image']
+        image_key=(host['session']['machine'],reference,host.get('images',{}).get(reference))
+        if image_key not in self.image_fingerprints:
+            self.image_fingerprints[image_key]=images.fingerprint(host,reference)
+        image=self.image_fingerprints[image_key]
         if not image:raise ValueError('Image content could not be fingerprinted')
         context={'schema':1,'suite':suite,'sources':content,'spec':self.specs[suite],'image':image,
                  'machine':host['session']['machine'],'platform':host.get('agent_status',{}).get('platform'),
                  'agent':host.get('agent_status',{}).get('source_revision')}
-        if suite=='org-api':context['shard']=host.get('org_api_shard')
         if suite=='p2p':
             context['fleet']=sorted((worker['host'],worker.get('session',{}).get('machine'),worker.get('lan_address'),
                 worker.get('agent_status',{}).get('source_revision')) for worker in run['hosts'] if not worker.get('excluded'))
@@ -77,8 +81,8 @@ class SuiteCache:
                     if job['status']=='passed':results[key]={'run_id':previous['id'],'host':host['host'],'finished':previous.get('finished')}
         return results
 
-    def apply(self,run,images,host_names=None):
-        baselines=self.baselines(run)
+    def apply(self,run,images,host_names=None,*,baselines=None,force=False):
+        if baselines is None:baselines=self.baselines(run)
         reused=0
         for host in run['hosts']:
             if host.get('excluded') or (host_names is not None and host['host'] not in host_names):continue
@@ -89,7 +93,7 @@ class SuiteCache:
                     continue
                 job['input_fingerprint']=fingerprint
                 previous=baselines.get((host['session']['machine'],suite,fingerprint))
-                if previous:
+                if previous and not force:
                     job.update(status='reused',phase='unchanged',not_executed=True,duration_seconds=0,
                                reused_from=previous,cache_reason='Relevant source, dependencies, image and machine match a recorded passing execution',
                                logs=['Not executed: unchanged inputs. Passing baseline: '+previous['run_id']+' on '+previous['host']])

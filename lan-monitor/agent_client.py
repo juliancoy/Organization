@@ -1,12 +1,14 @@
 """Client for the encrypted launcher job protocol; no SSH fallback."""
 import base64
 import hashlib
+import http.client
+import threading
+from urllib.parse import urlsplit
 import json
 import os
 from pathlib import Path
 import secrets
 import time
-import urllib.request
 
 PROTOCOL='lifetech-agent.v1'
 CONFIG=Path(os.getenv('LIFETECH_PEER_CONFIG',str(Path.home()/'.config/lifetech-launcher/peers.json')))
@@ -20,20 +22,37 @@ class AgentClient:
         self.endpoint=host['agent_endpoint']
         if self.node not in config['peers']:raise ValueError('Agent is not enrolled')
         self.cipher=AESGCM(bytes.fromhex(config['key']))
-        self.opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
+        endpoint=urlsplit(self.endpoint)
+        if endpoint.scheme not in ('http','https') or endpoint.username or endpoint.password or endpoint.path not in ('','/'):
+            raise ValueError('Invalid agent endpoint')
+        connection=http.client.HTTPSConnection if endpoint.scheme=='https' else http.client.HTTPConnection
+        self.connection=connection(endpoint.hostname,endpoint.port,timeout=30)
+        self.connection_lock=threading.Lock()
 
     def call(self, op, args=None, timeout=30):
         request_id=secrets.token_hex(16)
         value={'from':self.sender,'to':self.node,'time':time.time(),'nonce':request_id,'op':op,'args':args or {}}
         nonce=secrets.token_bytes(12)
         data=nonce+self.cipher.encrypt(nonce,json.dumps(value).encode(),PROTOCOL.encode())
-        request=urllib.request.Request(self.endpoint+'/agent/v1',data=data,headers={'Content-Type':'application/octet-stream'})
-        with self.opener.open(request,timeout=timeout) as response:raw=response.read(8*1024**2+1)
+        with self.connection_lock:
+            try:
+                self.connection.timeout=timeout
+                if self.connection.sock:self.connection.sock.settimeout(timeout)
+                self.connection.request('POST','/agent/v1',body=data,headers={'Content-Type':'application/octet-stream'})
+                response=self.connection.getresponse()
+                raw=response.read(8*1024**2+1)
+                if response.status!=200:raise RuntimeError('Agent HTTP status '+str(response.status))
+            except Exception:
+                self.connection.close()
+                raise
         if len(raw)>8*1024**2:raise RuntimeError('Agent response exceeds limit')
         reply=json.loads(self.cipher.decrypt(raw[:12],raw[12:],PROTOCOL.encode()))
         if reply.get('nonce')!=request_id or reply.get('node')!=self.node or abs(time.time()-reply['time'])>60:raise RuntimeError('Agent response identity or freshness mismatch')
         if not reply.get('ok'):raise RuntimeError(reply.get('error','Agent operation failed'))
         return reply['result']
+
+    def close(self):
+        with self.connection_lock:self.connection.close()
 
     def upload(self,path,stopped=lambda:False):
         path=Path(path)
@@ -50,14 +69,22 @@ class AgentClient:
         return token
 
 
-class NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self,*args,**kwargs):raise RuntimeError('Agent redirects are forbidden')
+def wait_for_events(client,ident,cursor,stopped=lambda:False):
+    """Resume by sequence after transport loss; never replay a mutation."""
+    for attempt in range(3):
+        if stopped():raise InterruptedError('Event wait stopped')
+        try:
+            return client.call('job.poll',{'id':ident,'cursor':cursor,'wait_seconds':20},timeout=25)
+        except (OSError,http.client.HTTPException):
+            if attempt==2:raise
+            time.sleep(attempt+1)
 
 
 class AgentSessions:
     def __init__(self,root,hosts,stopped,progress):
         self.root,self.hosts,self.stopped,self.progress=Path(root),hosts,stopped,progress
         self.expected_revision=None
+        self.updater=None
 
     def reject(self,host,reason):
         host.update(status='unavailable',error=str(reason)[:800])
@@ -109,20 +136,26 @@ class AgentSessions:
         if self.stopped():raise InterruptedError('Agent readiness stopped')
         if not hosts:return []
         import concurrent.futures
-        if self.expected_revision is None:
-            folder=self.root/'scripts'
-            self.expected_revision=hashlib.sha256(b''.join((folder/name).read_bytes() for name in ('launcher_peers.py','launcher_discovery.py','launcher_registration.py','launcher_agent.py','launcher_registry.py'))).hexdigest()
+        if self.updater is None:
+            from agent_updates import LauncherUpdates
+            self.updater=LauncherUpdates(self.root,self.stopped,self.progress)
+            self.expected_revision=self.updater.revision
         expected=self.expected_revision
         def probe(host):
             if self.stopped():raise InterruptedError('Agent readiness stopped')
             try:
-                value=AgentClient(host).call('status')
-                required={'github-jobs','p2p-browser','cancel','events','layer-pull','registry-read'}
-                if value.get('protocol')!=PROTOCOL:raise RuntimeError('Agent protocol mismatch; apply an explicit launcher update')
+                client=AgentClient(host)
+                value=client.call('status')
+                if value.get('protocol')!=PROTOCOL:raise RuntimeError('Agent protocol mismatch')
+                if host['lan_address'] not in value.get('addresses',[]):raise RuntimeError('Agent address is not on an attested physical interface')
+                if value.get('active_jobs'):raise RuntimeError('Agent is busy with an existing job')
+                value=self.updater.ensure(host,client,value)
+                required={'github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','file-queue','snapshot-stage','event-wait'}
+                if value.get('protocol')!=PROTOCOL:raise RuntimeError('Agent protocol mismatch after launcher update')
                 if not value.get('ready'):raise RuntimeError('Agent is not ready or is draining for an update')
                 missing=required-set(value.get('capabilities',[]))
-                if missing:raise RuntimeError('Agent capabilities missing: '+', '.join(sorted(missing))+'; apply an explicit launcher update')
-                if value.get('source_revision')!=expected:raise RuntimeError('Agent source is outdated; apply an explicit launcher update')
+                if missing:raise RuntimeError('Agent capabilities missing: '+', '.join(sorted(missing))+' after launcher update')
+                if value.get('source_revision')!=expected:raise RuntimeError('Launcher update revision verification failed')
                 if value.get('active_jobs'):raise RuntimeError('Agent is busy with an existing job')
                 if host['lan_address'] not in value['addresses']:raise RuntimeError('Agent address is not on an attested physical interface')
                 host['session']={'status':'ready','verified':True,'verified_at':time.time(),'transport':PROTOCOL,'machine':value['machine'],'capabilities':value['capabilities']}

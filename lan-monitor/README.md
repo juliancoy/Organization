@@ -290,7 +290,7 @@ from container images. Browsers execute the verified local image ID with
 
 The coordinator participates through its own enrolled agent, using the same readiness checks and job protocol as other machines.
 
-Distributed-run preparation verifies enrolled launcher agents, excludes unavailable machines and redistributes suites. Provisioning and updates are explicit operations outside Start.
+Distributed-run preparation verifies enrolled launcher agents, excludes unavailable machines and redistributes suites. Start updates outdated enrolled agents through saved SSH access; initial enrollment remains a separate operation.
 
 The API loads current coordinator modules on each new start through `live_distributed.py`; active runs retain their implementation. Agent process code changes only through explicit installed releases.
 
@@ -413,13 +413,13 @@ Routine distributed runs use the existing launcher's encrypted `lifetech-agent.v
 
 The enrollment file supplies the fleet credential and enrolled addresses. This is fleet-level trust: possession of that credential grants agent execution control. Requests and responses use AES-GCM, protocol-specific authenticated data, request IDs, freshness limits and replay rejection. There is no shell-command endpoint or routine SSH fallback. SSH remains in the explicit enrollment/provisioning workflow and unrelated network monitoring collectors.
 
-Start checks the running source revision, Docker availability, physical addresses, machine fingerprint, capabilities and busy state. Current agents are reused. Offline, duplicate, outdated or incapable agents are excluded with a stage/reason; application suites are reassigned to surviving verified agents. Readiness is checked again after image preparation. Successful remaining work with exclusions is **Partial coverage**, not a full-fleet pass. One worker can run application suites; multi-device P2P remains explicitly unmeasured.
+Start checks the running source revision, Docker availability, physical addresses, machine fingerprint, capabilities and busy state. Current agents are reused. Outdated agents are updated before readiness verification. Offline, duplicate, failed-update or incapable agents are excluded with a stage/reason; application suites are reassigned to surviving verified agents. Readiness is checked again after image preparation. Successful remaining work with exclusions is **Partial coverage**, not a full-fleet pass. One worker can run application suites; multi-device P2P remains explicitly unmeasured.
 
 Source code is fetched directly from GitHub by exact commit; image archives and synthetic P2P fixtures use bounded, ordered 1 MiB encrypted chunks and SHA-256 verification. Agents reject unsafe archive paths/links, enforce staging limits and available disk space, and execute immutable worker image IDs. Jobs have run IDs, sequence-numbered event polling, cancellation acknowledgements and a two-hour stop deadline. An event-history gap cannot produce a verified result. Agent restarts mark running work interrupted and clean up owned test containers. Reports distinguish infrastructure unavailability, excluded machines, missing coverage and suite failures.
 
 A run shares one synchronized image resolver across application and P2P preparation. Each image reference refreshes once per run, including concurrent callers. Unchanged image contents reuse worker-local IDs. Changed images publish once to the coordinator's persistent loopback registry; worker Docker daemons request only missing compressed layers through a worker-loopback registry bridge. Registry bytes traverse authenticated AES-GCM agent RPC with bounded chunks and immutable manifest/blob digests. There are no SSH tunnels, LAN registry listeners, Docker daemon configuration changes or full-image transfer archives in this path. Two destination transfers may run concurrently; those are distinct worker copies, not independent internet pulls. P2P browser setup, WebDriver control, fixture delivery and cleanup use the agent API. Application containers are not restarted by Start.
 
-Agent sources update separately from tests. On an enrolled machine, `python3 scripts/launcher_update.py` atomically stages the current peer-agent sources; `--rollback` selects the previous installed release. The supervisor drains new jobs, waits for active jobs/browsers to finish, validates source checksums, and restores the previous release if the replacement fails its startup readiness check. An unchanged installed release does not reload. Updates to image dependencies or the supervisor itself require an explicit launcher-image rebuild/recreation. Initial activation of this migration also requires that rebuild on each machine; editing the coordinator files alone cannot upgrade existing agents.
+Start automatically stages outdated agent sources over existing SSH access (locally for the coordinator), verifies the enrolled account and physical machine identity, and waits up to two minutes for the expected running revision. Current agents are reused; active jobs are not interrupted. Update progress and failures appear in the run record. For a manual update on an enrolled machine, `python3 scripts/launcher_update.py` atomically stages the current peer-agent sources; `--rollback` selects the previous installed release. The supervisor drains new jobs, waits for active jobs/browsers to finish, validates source checksums, and restores the previous release if the replacement fails its startup readiness check. An unchanged installed release does not reload. Updates to image dependencies or the supervisor itself require an explicit launcher-image rebuild/recreation. Initial activation of this migration also requires that rebuild on each machine; editing the coordinator files alone cannot upgrade existing agents.
 
 ### Commit, push and test
 
@@ -439,7 +439,33 @@ Worker preparation is independent: after shared source publication and initial i
 
 **Direct traffic (ignore hops)** is available on the full LAN map and the embedded distributed-tests map. It draws every retained observed source/destination relationship directly, including incoming-only flows, with intermediate route segments and provider grouping hidden. The preference is saved in the browser and honored by both views. Remote endpoints remain visible in the embedded map when this mode is enabled. It changes presentation, not packet capture coverage or physical connectivity.
 
-Runtime optimization: passing-baseline checks use each worker's installed image fingerprint before image preparation. Fully reusable suites need no image pull or delivery; missing or changed inputs still execute. Ordinary jobs always prepare the Python bind-mount probe image when required. Organization API tests use deterministic Node test-file shards across the verified fleet, with two test processes per container; shard 1 also runs type-checking and the bundle check. Shard index and fleet size are fingerprinted so changing membership invalidates shard reuse.
+### Availability-based file scheduling
+
+`work_queue.py` discovers tracked test files from the published Git commits. Each
+file is one independent job; typecheck/build/bundle commands are separate jobs.
+Ordinary checks run once across the fleet, including the coordinator, rather than
+repeating suites on every machine. Only WebRTC remains a coordinated fleet check.
+
+Each machine keeps one agent session and checkout for the run. Dependency installs
+are serialized per package tree and reused by later files. The master feeds the
+next fitting jobs whenever CPU and memory reservations are released. Recent file
+execution times prioritize long jobs; there is no permanent suite assignment or
+fleet-wide preparation barrier. CPU reservations match container limits; memory
+budgets leave 1 GiB available for host services. Resource limits and indivisible
+build/browser steps mean continuous 100% measured CPU usage is not guaranteed.
+
+`job.feed` accepts only identifiers in the pinned catalog, is idempotent per job,
+and closes the session explicitly once its work is complete. Stopping a run stops
+its persistent sessions and owned containers. Worker loss marks dispatched work
+unavailable while other workers continue claiming unassigned files. An exhausted
+fleet or a task that fits no worker fails explicitly instead of hanging.
+
+The dashboard and REST/MCP records expose pending tasks, per-machine capacity,
+active file IDs, individual timings and results. Per-file reruns use the same
+application-owned commands and dependency setup. No suite is split by a fixed
+machine count. Start applies `launcher_update.py` automatically when an enrolled
+agent revision differs. Editing source alone does not update agents or start tests.
+
 
 ### Post-deployment checks
 
@@ -482,4 +508,29 @@ monitor/map/workspace work does not fetch either application repository. The ful
 pinned source manifest remains available for build metadata and provenance.
 Source events record `cache_hit` and whether an existing run seeded the cache.
 
-Application scheduling uses a shared longest-first queue for identity, Python identity, web, visual, workspace and chat. Median successful suite durations from the last 20 records set priority, with conservative defaults for unseen suites. Each idle verified machine claims one suite atomically, prepares only that work's images, and checks its own passing baselines. Each dispatch has a distinct agent job ID and checkout; results aggregate into the parent run. After shared work drains, workers execute their own monitor/map checks and unique Org API shard. P2P remains coordinated after ordinary work. New full runs use this policy; targeted reruns preserve their requested machines and shards. This policy trades additional checkout overhead for reduced idle time; wall-clock savings require measurement.
+### Live coordination and background snapshots
+
+The master keeps one encrypted HTTP/1.1 connection to each active worker. Event
+requests wait on an agent condition variable and return as soon as events arrive;
+20-second empty replies are heartbeats. Dispatch no longer sleeps between polls.
+Transient transport failures reconnect and resume from the acknowledged sequence;
+mutations are not retried automatically and missing events still fail the run.
+
+The master watches committed HEADs every five seconds and requires two stable
+observations before staging. It never commits, pushes, or copies uncommitted edits
+in this background path. Each enrolled worker fetches exact GitHub commits into a
+separate checkout. Unpublished commits produce a visible preparation error and a
+bounded retry. Sources can fetch while a test session is active; dependency
+installation waits until that machine's tests and P2P browsers are idle. Preparation
+uses installed images only, leaving image delivery to the normal LAN-first path.
+
+Successful preparation records the source digest, image IDs and installed package
+trees. A matching run atomically consumes that isolated checkout once; mismatches
+use normal fresh setup. Active checkouts are never edited by the watcher. Agents
+without preparation support only cache sources and never fall through into tests.
+Start can cancel background preparation when it needs to update the launcher.
+
+The dashboard's Next snapshot section and REST/MCP status expose per-worker staging
+state, revisions, missing images and errors. These changes require loading the new
+master code and the launcher update applied by Start. Editing source alone starts
+neither preparation nor a test run.

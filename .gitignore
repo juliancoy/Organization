@@ -35,6 +35,8 @@
 !/scripts/recovery.py
 !/scripts/testing_copy.py
 !/scripts/setup_recovery_timer.py
+!/scripts/dev_data.py
+!/dev-data
 !/scripts/peer_archive.py
 !/scripts/public_data.py
 !/scripts/check_peer_browser.py

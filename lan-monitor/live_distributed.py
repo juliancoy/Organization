@@ -11,11 +11,13 @@ class LiveDistributedTests:
         self.lock = threading.RLock()
         self.runner = self.load()
         self.reruns={}
+        from snapshot_staging import SnapshotStaging
+        self.staging=SnapshotStaging(self.runner.root)
 
     @staticmethod
     def load():
         importlib.invalidate_caches()
-        for name in ('distributed','run_activity','post_deployment','distributed_worker','suite_cache','work_queue','github_sources','distributed_images','visual_artifacts','image_registry','agent_client','p2p_network','docker_utils','docker_utils.images','docker_utils.policy','docker_utils.sdk'):
+        for name in ('distributed','run_activity','post_deployment','distributed_worker','suite_cache','work_queue','granular_dispatch','granular_worker','github_sources','distributed_images','visual_artifacts','image_registry','agent_client','agent_updates','p2p_network','docker_utils','docker_utils.images','docker_utils.policy','docker_utils.sdk'):
             sys.modules.pop(name,None)
         return importlib.import_module('distributed').DistributedTests()
 
@@ -23,6 +25,7 @@ class LiveDistributedTests:
         with self.lock:
             selected=self.reruns.get(ident,self.runner)
             result=selected.view(ident)
+            result['snapshot_staging']=self.staging.view()
             result['active_reruns']=[r.run['id'] for r in self.reruns.values() if r.running]
             return result
 
@@ -52,7 +55,7 @@ class LiveDistributedTests:
                       and (not failed_only or key!='p2p') and (not failed_only or job['status'] in ('failed','timed_out','unavailable','interrupted'))}
                 if not jobs:continue
                 if 'p2p' in jobs:raise ValueError('P2P requires a full distributed run; select an ordinary suite')
-                worker={key:copy.deepcopy(original[key]) for key in ('host','local','org_api_shard') if key in original}
+                worker={key:copy.deepcopy(original[key]) for key in ('host','local') if key in original}
                 worker.update(status='queued',suites=list(jobs),jobs={key:{'name':job['name'],'status':'queued','phase':None,'logs':[]} for key,job in jobs.items()})
                 selected.append(worker)
             if not selected:raise ValueError('No matching suites to rerun')

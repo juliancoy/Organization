@@ -32,6 +32,7 @@ class Agent:
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.lock = threading.RLock()
+        self.changed = threading.Condition(self.lock)
         self.nonces = {}
         self.jobs = {}
         self.uploads = {}
@@ -141,8 +142,9 @@ class Agent:
             return {'protocol':VERSION,'source_revision':self.source_revision,'node':config['name'],'ready':bool(shutil.which('docker')) and not Path('/tmp/launcher-agent-draining').exists(),'time':time.time(),
                     'machine':hashlib.sha256(machine.read_bytes()).hexdigest(),'hostname':socket.gethostname(),
                     'addresses':addresses,'platform':info['OSType']+'/'+info['Architecture'],
-                    'capabilities':['github-jobs','p2p-browser','cancel','events','layer-pull','registry-read'],
-                    'active_jobs':[key for key,j in self.jobs.items() if j['status']=='running'],'active_image_transfers':self.registry_transfers}
+                    'capabilities':['github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','file-queue','snapshot-stage','event-wait'],
+                    'preparations':[key for key,j in self.jobs.items() if j['status']=='running' and j.get('prepare_only')],
+                    'active_jobs':[key for key,j in self.jobs.items() if j['status']=='running' and not j.get('prepare_only')],'active_image_transfers':self.registry_transfers}
         if op.startswith('upload.'):
             return self.upload(op,args)
         if op == 'image.inspect':
@@ -152,7 +154,37 @@ class Agent:
                     image = client.images.get(args['image'])
                     return {'id':image.id,'os':image.attrs['Os'],'architecture':image.attrs['Architecture'],'fingerprint':self.image_fingerprint(image)}
                 except docker.errors.ImageNotFound:return None
+        if op == 'source.stage':
+            args={**args,'manifest':{**args['manifest'],'prepare_only':True}}
+            manifest=args['manifest']
+            with self.lock:
+                for ident,job in self.jobs.items():
+                    if (job.get('prepare_only') and job['status'] in ('running','completed')
+                            and not (self.folder(ident)/'STOP').exists()
+                            and job.get('source_sha256')==manifest.get('source_sha256')
+                            and job.get('images')==manifest['hosts'][args['index']].get('images')):
+                        return {'id':ident,'status':job['status']}
+            return self.start(args)
         if op == 'job.start':return self.start(args)
+        if op == 'job.feed':
+            folder=self.folder(args['id'])
+            with self.lock:
+                job=self.jobs.get(args['id'])
+                if not job or job['status']!='running':raise ValueError('Worker session is not running')
+                if (folder/'STOP').exists():raise ValueError('Worker session is stopping')
+                manifest=json.loads((folder/'manifest.json').read_text())
+                if not manifest.get('granular'):raise ValueError('Worker is not a task-queue session')
+                tasks=args.get('tasks',[])
+                if not isinstance(tasks,list) or len(tasks)>128 or any(not isinstance(t,str) or t not in manifest['task_catalog'] for t in tasks):
+                    raise ValueError('Tasks must belong to the pinned run catalog')
+                inbox=folder/'tasks';inbox.mkdir(exist_ok=True,mode=0o700)
+                if (inbox/'CLOSED').exists() and tasks:raise ValueError('Worker queue is closed')
+                for task in tasks:
+                    # Identifiers are catalog hashes, never shell commands or paths.
+                    if not re.fullmatch('[a-z0-9-]{1,80}',task):raise ValueError('Invalid task identifier')
+                    (inbox/task).touch(exist_ok=True)
+                if args.get('close'):(inbox/'CLOSED').touch()
+                return {'accepted':tasks,'closed':bool(args.get('close'))}
         if op == 'job.poll':
             ident=args['id'];folder=self.folder(ident)
             with self.lock:
@@ -161,13 +193,16 @@ class Agent:
                     state=json.loads((folder/'state.json').read_text())
                     return {**state,'events':[],'cursor':0,'events_lost':True}
                 cursor=int(args.get('cursor',0))
+                wait=min(20,max(0,float(args.get('wait_seconds',0))))
+                self.changed.wait_for(lambda:job['sequence']>cursor or job['status']!='running' or (folder/'STOP').exists(),timeout=wait)
                 events=[{'sequence':n,'event':event} for n,event in job['events'] if n>cursor][:200]
-                return {'status':job['status'],'exit_code':job.get('exit_code'),'error':job.get('error'),
+                return {'status':job['status'],'exit_code':job.get('exit_code'),'error':job.get('error'),'preparation':job.get('preparation'),
                         'events':events,'cursor':events[-1]['sequence'] if events else cursor,
                         'events_lost':bool(job['events'] and cursor<job['events'][0][0]-1)}
         if op == 'job.stop':
             folder=self.folder(args['id']);folder.mkdir(exist_ok=True,mode=0o700)
             (folder/'STOP').touch()
+            with self.changed:self.changed.notify_all()
             self.remove_containers(args['id'])
             return {'acknowledged':True}
         if op == 'p2p.start':return self.p2p_start(args)
@@ -254,7 +289,9 @@ class Agent:
         with self.lock:
             if ident in self.jobs:return {'status':self.jobs[ident]['status'],'id':ident}
             if folder.exists():raise ValueError('Run ID already exists; use a new run')
-            if any(j['status']=='running' for j in self.jobs.values()):raise RuntimeError('Agent already executing a shard')
+            preparing=args['manifest'].get('prepare_only') is True
+            if any(j['status']=='running' and bool(j.get('prepare_only'))==preparing for j in self.jobs.values()):
+                raise RuntimeError('Agent already has an active '+('preparation' if preparing else 'test session'))
             work=folder/'source'
             manifest=args['manifest']
             repositories=manifest.get('repositories',{})
@@ -271,13 +308,21 @@ class Agent:
             target=manifest['hosts'][index]
             config=json.loads(self.config.read_text())
             if manifest['id']!=ident or target['host']!=config['name']:raise ValueError('GitHub manifest targets a different node or run')
+            if not preparing:
+                # Explicit test work takes priority over speculative installers.
+                for key,previous in self.jobs.items():
+                    if previous['status']=='running' and previous.get('prepare_only'):
+                        (self.folder(key)/'STOP').touch()
+                self.changed.notify_all()
             for key in list(self.jobs)[:-9]:
                 if self.jobs[key]['status']!='running':
                     del self.jobs[key];shutil.rmtree(self.folder(key),ignore_errors=True)
             folder.mkdir(mode=0o700)
             (folder/'manifest.json').write_text(json.dumps(manifest))
-            job={'status':'running','events':collections.deque(maxlen=10000),'sequence':0}
+            job={'status':'running','prepare_only':preparing,'events':collections.deque(maxlen=10000),'sequence':0}
+            job.update(source_sha256=digest,images=target.get('images',{}))
             self.jobs[ident]=job
+            with self.changed:self.changed.notify_all()
             self.busy()
             (folder/'state.json').write_text(json.dumps({'status':'running'}))
             threading.Thread(target=self.worker,args=(ident,work,index,job),daemon=True).start()
@@ -295,6 +340,25 @@ class Agent:
                 raise RuntimeError('Source Git operation failed: '+args[0]+'; check access and the pinned commit')
             return result.stdout.strip()
 
+        if not manifest.get('prepare_only'):
+            with self.lock:
+                for key,previous in self.jobs.items():
+                    if previous.get('prepare_only') and previous.get('status')=='completed':
+                        source=self.folder(key)/'source'
+                        marker=source/'.prepared-packages.json'
+                        if not marker.exists():continue
+                        prepared=json.loads(marker.read_text())
+                        target=manifest['hosts'][next(i for i,h in enumerate(manifest['hosts']) if h['host']==json.loads(self.config.read_text())['name'])]
+                        if prepared.get('source_sha256')!=manifest['source_sha256'] or any(prepared.get('images',{}).get(k)!=v for k,v in target['images'].items()):continue
+                        if not all((source/name/'.git').exists() for name in ('.','OrgPortal','PIdP')):continue
+                        source.rename(work)
+                        (work/'distributed-plan.json').write_text(json.dumps(manifest))
+                        previous['status']='consumed'
+                        job['sequence']+=1
+                        job['events'].append((job['sequence'],{'kind':'source','repository':'.','commit':manifest['repositories']['.']['commit'],'status':'prepared_snapshot','cache_hit':True}))
+                        self.changed.notify_all()
+                        return
+
         target=next(host for host in manifest['hosts'] if host['host']==json.loads(self.config.read_text())['name'])
         # The runner always comes from Organization; application repositories are
         # selected by the actual shard, not by the whole fleet's manifest.
@@ -303,6 +367,7 @@ class Agent:
         known=set(application)|{'monitor','map','workspace','p2p'}
         needed={'.'}
         for suite in target['suites']:
+            suite=suite.split('--',1)[0]
             if suite not in known:raise ValueError('Unknown suite source requirements: '+suite)
             if target.get('jobs',{}).get(suite,{}).get('status')=='reused':continue
             if suite in application:needed.add(application[suite])
@@ -314,6 +379,7 @@ class Agent:
                 job['sequence']+=1
                 job['events'].append((job['sequence'],{'kind':'source','repository':name,
                     'commit':repo['commit'],'status':status,**details}))
+                self.changed.notify_all()
 
         for name in sorted(needed,key=lambda value:(len(Path(value).parts),value)):
             repo=manifest['repositories'][name];path=work/name
@@ -372,6 +438,17 @@ class Agent:
             manifest=json.loads((folder/'manifest.json').read_text())
             self.checkout(work,manifest,env,job)
             if (folder/'STOP').exists():raise InterruptedError('Run stopped during GitHub synchronization')
+            if manifest.get('prepare_only'):
+                # Older pinned runners may not implement preparation-only mode.
+                # Cache their Git objects, but never accidentally execute tests.
+                if manifest.get('sources_only') or 'PREPARATION_PROTOCOL = 1' not in (work/'lan-monitor/distributed_worker.py').read_text():
+                    job.update(status='completed',preparation='sources_only');return
+                while True:
+                    if (folder/'STOP').exists() or Path('/tmp/launcher-agent-draining').exists():raise InterruptedError('Preparation superseded or launcher updating')
+                    with self.lock:
+                        busy=any(j is not job and j['status']=='running' and not j.get('prepare_only') for j in self.jobs.values()) or bool(self.browsers)
+                    if not busy:break
+                    time.sleep(.5)
             process=subprocess.Popen([sys.executable,str(work/'lan-monitor/distributed_worker.py'),str(index)],
                 stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,errors='replace',env=env,start_new_session=True)
             def expire():
@@ -385,7 +462,8 @@ class Agent:
                     try:event=json.loads(line)
                     except ValueError:event={'kind':'log','line':line[:2000]}
                     with self.lock:
-                        job['sequence']+=1;job['events'].append((job['sequence'],event))
+                        if event.get('kind')=='prepared':job['preparation']='ready'
+                        job['sequence']+=1;job['events'].append((job['sequence'],event));self.changed.notify_all()
                 code=process.wait(timeout=30)
             finally:timer.cancel()
             job.update(status='stopped' if (folder/'STOP').exists() else 'completed' if code==0 else 'failed',exit_code=code)
@@ -394,6 +472,7 @@ class Agent:
         finally:
             try:self.remove_containers(ident)
             except Exception as error:job.update(status='failed',error='Test container cleanup failed: '+str(error)[:400])
+            with self.changed:self.changed.notify_all()
             self.busy()
             (folder/'state.json').write_text(json.dumps({key:value for key,value in job.items() if key!='events'}))
 

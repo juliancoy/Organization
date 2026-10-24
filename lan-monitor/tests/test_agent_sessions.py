@@ -12,7 +12,7 @@ class AgentReadinessTests(unittest.TestCase):
         folder=root/'scripts'
         revision=hashlib.sha256(b''.join((folder/name).read_bytes() for name in ('launcher_peers.py','launcher_discovery.py','launcher_registration.py','launcher_agent.py','launcher_registry.py'))).hexdigest()
         status={'protocol':'lifetech-agent.v1','ready':True,'source_revision':revision,
-                'capabilities':['github-jobs','p2p-browser','cancel','events','layer-pull','registry-read'],
+                'capabilities':['github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','file-queue','snapshot-stage','event-wait'],
                 'addresses':['10.42.0.1'],'machine':'machine-a','active_jobs':[]}
         def client(host):
             result=Mock()

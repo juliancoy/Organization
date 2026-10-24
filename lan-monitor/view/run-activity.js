@@ -21,11 +21,11 @@ export function renderActivity(run){
   if(fresh&&image.transfer_phase==='finalizing')transferEta=' · Finalizing layers; finish time unavailable';
  }
  const preparing=(run.hosts||[]).filter(h=>h.status==='preparing');
- const stage=complete?'Run '+run.status:run.status==='stopping'?'Stopping workers':run.status==='preparing'?(image&& !['ready','cached'].includes(image.phase)?imageText:run.preparation||'Preparing workers and images'):active.length?active.length+' suites active'+(preparing.length?' · '+preparing.length+' nodes preparing':''):preparing.length?'Preparing '+preparing.length+' nodes independently':'Waiting for worker results';
+ const stage=complete?'Run '+run.status:run.status==='stopping'?'Stopping workers':run.status==='preparing'?(image&& !['ready','cached'].includes(image.phase)?imageText:run.preparation||'Preparing workers and images'):active.length?active.length+' jobs active'+(preparing.length?' · '+preparing.length+' nodes preparing':''):preparing.length?'Preparing '+preparing.length+' nodes independently':'Waiting for worker results';
  // Keep the event list stable between polls so readers retain their scroll position.
  if(root.dataset.run!==run.id){root.dataset.run=run.id;root.replaceChildren();rendered='';
   const heading=make('div','','panel-heading');heading.append(make('h2','Run activity'),make('span','', 'activity-clock'));root.append(heading,make('strong','','activity-stage'),make('p','','activity-detail'));
-  const progress=document.createElement('progress');progress.setAttribute('aria-label','Completed suites');root.append(progress,make('p','','activity-workers'),make('p','','post-deployment-status'));
+  const progress=document.createElement('progress');progress.setAttribute('aria-label','Completed jobs');root.append(progress,make('p','','activity-workers'),make('p','','post-deployment-status'));
   const list=make('ol','','activity-events');list.setAttribute('aria-label','Recorded run events, newest first');root.append(list,make('small','Latest 300 coordinator events are retained with each run. Process output is below.','muted'));
  }
  root.querySelector('.activity-stage').textContent=stage+(!complete?transferEta:'');
@@ -33,12 +33,13 @@ export function renderActivity(run){
  root.querySelector('.activity-clock').textContent=age(elapsed)+' elapsed';
  const last=run.activity?.at(-1)?.time||run.updated||run.started;
  const quiet=Math.max(0,(Date.now()-Date.parse(last))/1000);
- root.querySelector('.activity-detail').textContent=finished+' / '+jobs.length+' suites completed'+(complete?'':' · Last coordinator event '+age(quiet)+' ago')+(!complete&&quiet>=60?' · Waiting for an update; this alone does not mean the operation has stalled.':'');
- const progress=root.querySelector('progress');progress.max=jobs.length||1;progress.value=finished;
+ const total=jobs.length+(run.pending_tasks?.length||0);
+ root.querySelector('.activity-detail').textContent=finished+' / '+total+' jobs completed'+(complete?'':' · Last coordinator event '+age(quiet)+' ago')+(!complete&&quiet>=60?' · Waiting for an update; this alone does not mean the operation has stalled.':'');
+ const progress=root.querySelector('progress');progress.max=total||1;progress.value=finished;
  root.querySelector('.activity-workers').textContent=[...active,...preparing.map(h=>h.host+' · '+(h.preparation||'preparing'))].join('   /   ')||(complete?'Results saved.':'Each node starts independently when its images are ready.');
  const post=run.post_deployment;
  root.querySelector('.post-deployment-status').textContent=post?'Post-deployment: '+post.status.replaceAll('_',' ')+' · '+(post.checks||[]).map(c=>c.name+': '+c.status+' — '+c.detail).join(' / '):complete?'Post-deployment checks run after a passing test run and wait for its deployed commit.':'';
- if(run.pending_suites?.length)root.querySelector('.activity-workers').append(' · Waiting for a worker: '+run.pending_suites.join(', '));
+ if(run.pending_tasks?.length)root.querySelector('.activity-workers').append(' · '+run.pending_tasks.length+' jobs waiting for capacity');
  const events=run.activity||[];
  root.querySelector('small.muted').textContent=events.length?'Latest 300 coordinator events retained with this run. Process output is below.':'Current snapshot only. Full event recording begins with the next run.';
  const fallback=events.length?events:[{time:run.updated||run.started,message:imageText||run.preparation||'Run '+run.status}];

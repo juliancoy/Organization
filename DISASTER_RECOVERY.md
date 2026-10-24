@@ -1,6 +1,6 @@
 # Local disaster recovery and testing copies
 
-The DR archive is a complete-data recovery source, separate from the running local
+The DR archive captures the full configured D1/R2 data inventory, separate from the running local
 test deployment. `local-sync` makes a scoped testing copy from an archive. Neither
 command writes to production. The public organization replica continues separately.
 
@@ -97,6 +97,59 @@ and third-party systems are outside these workspace backups. Published dependenc
 are rebuilt from lockfiles; deployed static assets are rebuilt from source.
 
 ## Testing copy
+
+### Full development data
+
+`./dev-data refresh` creates a full, verified database and object baseline from
+the latest DR snapshot in `/mnt/PILEDRIVE/organization-dev`. It includes every
+table in the four captured production databases and every captured R2 object,
+including private records. Database table counts, integrity and object hashes
+are checked. Media has independent file inodes; editing a dev file cannot alter
+the DR archive. Database baselines and shared dev media are read-only.
+
+```
+./dev-data refresh
+./dev-data checkout
+./dev-data status
+./dev-data shell org
+./dev-data shell pidp
+./dev-data shell chat
+./dev-data shell org-journal
+```
+
+`checkout` creates separate writable SQLite databases, preserving every existing
+workspace. The SQL shell runs in a container with no network or published ports,
+no production environment or operator credentials, writable dev databases, and
+read-only media and original-key bucket indexes. Identity/session rows in these
+full copies remain private production data: use this offline shell rather than
+connecting the databases to production services. This is a complete captured-data
+workspace, not an automatically configured replacement application deployment.
+
+Successful daily DR capture now refreshes the full dev baseline automatically.
+Existing writable checkouts never change during a refresh; explicitly create a
+new checkout when ready to adopt the newer baseline. Dev copies expire after
+seven days and the daily job purges expired copies and unreferenced dev media.
+DR archives remain separate and durable. Authenticated working copies retain
+their reviewed API-based production writes; dev databases have no writeback path.
+
+The backup also discovers application-key candidates in local `.env.cloudflare`,
+`.env`, `.pidp.env` and `.dev.vars` files. Candidate values are archived privately
+under `secrets/local-candidates.json`; conflicting values and their source paths
+are recorded by name. Candidates are never marked production-validated merely
+because a local name matches. `.env.cloudflare` operator keys can export the
+databases and Worker settings, but cannot read deployed application-secret values.
+Email binding configuration is included in Worker settings; email provider state
+is external. In-flight queue payloads remain an explicit recovery gap. Push jobs
+are currently enqueued before their first durable delivery record is created;
+the queue is not a database backup. Closing that gap requires a durable outbox
+written before enqueue, acknowledged on delivery, with reviewed recovery replay.
+
+For missing keys, obtain the original values from the deployment operator or secret
+manager and supply the existing `--secrets-file` escrow option. Validate those
+values in an isolated authentication recovery drill. If originals are irretrievable,
+plan coordinated rotation across both ends of each integration; preserve encryption
+keys needed for existing encrypted records before rotating anything. Future secret
+changes should update the protected escrow as part of the same release.
 
 The default target is `local-community-api`, the workspace's read replica.
 Use `--container NAME` only for another local replica; writable fixture stacks

@@ -25,6 +25,8 @@ Type=oneshot
 WorkingDirectory={ROOT}
 ExecStart={quote(python)} {quote(ROOT/'scripts/recovery.py')} backup
 ExecStartPost=-{quote(python)} {quote(ROOT/'scripts/testing_copy.py')} --purge-expired
+ExecStartPost={quote(python)} {quote(ROOT/'scripts/dev_data.py')} purge
+ExecStartPost={quote(python)} {quote(ROOT/'scripts/dev_data.py')} refresh
 Environment=PATH={Path(node).parent}:/usr/local/bin:/usr/bin:/bin
 Environment=CI=true
 UMask=0077
