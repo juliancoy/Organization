@@ -18,6 +18,13 @@ class LauncherUpdateTests(unittest.TestCase):
             self.assertIs(self.updates.ensure(self.host,Mock(),status),status)
         stage.assert_not_called()
 
+    def test_verified_ipv4_endpoint_overrides_an_ambient_ipv6_only_ssh_setting(self):
+        with patch('agent_updates.subprocess.run',return_value=Mock(returncode=0)) as run:
+            self.updates.stage(self.host,self.status)
+        command=run.call_args.args[0]
+        self.assertIn('AddressFamily=any',command)
+        self.assertIn('HostKeyAlias=worker.local',command)
+
     def test_outdated_launcher_waits_through_restart_and_checks_revision(self):
         ready={**self.status,'source_revision':self.updates.revision}
         client=Mock();client.call.side_effect=[ConnectionError('restarting'),ready]
