@@ -381,7 +381,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(403, 'A same-origin dashboard request is required')
                 return
             try:
-                started = distributed_tests.stop() if path.endswith('/stop') else distributed_tests.start()
+                length=int(self.headers.get('Content-Length','0'))
+                if not 0<=length<=4096:raise ValueError('Invalid body length')
+                options=json.loads(self.rfile.read(length)) if length else {}
+                if not isinstance(options,dict) or set(options)-{'force'} or type(options.get('force',False)) is not bool:raise ValueError('Invalid start options')
+                started = distributed_tests.stop() if path.endswith('/stop') else distributed_tests.start(force=options.get('force',False))
             except (OSError, ValueError) as exc:
                 self.send_error(400, str(exc))
                 return

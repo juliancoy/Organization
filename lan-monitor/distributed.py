@@ -132,14 +132,14 @@ class DistributedTests:
     def artifact(self, run, host, suite, name):
         return self.artifacts.read(run, host, suite, name)
 
-    def start(self, selected_hosts=None, parent_run_id=None, launch=True):
+    def start(self, selected_hosts=None, parent_run_id=None, launch=True, force=False):
         with self.lock:
             if self.running:
                 return False
             hosts = copy.deepcopy(selected_hosts) if selected_hosts is not None else plan(targets())
             self.prune()
             self.run = {'id': dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:8],
-                        'status': 'preparing', 'started': now(), 'finished': None,
+                        'status': 'preparing', 'started': now(), 'finished': None, 'force':force,
                         'hosts': hosts, 'repositories': {}, 'source_sha256': None,
                         'scope': 'Start commits and pushes Organization, OrgPortal and PIdP on their current branches; verified local agents fetch exact GitHub commits into fresh directories. Application suites run in isolated containers without network or deployment credentials. The dedicated P2P suite uses separate browser containers on authenticated agent machines, synthetic fixtures and short-lived dataset invitations; its network access is required for WebRTC.'}
             if parent_run_id:self.run.update(parent_run_id=parent_run_id,targeted=True,status='queued')
@@ -179,6 +179,12 @@ class DistributedTests:
             suite = event.get('suite')
             if suite in host['jobs']:
                 job = host['jobs'][suite]
+                if kind in ('phase','suite') and job.get('phase_started'):
+                    elapsed=max(0,time.time()-job['phase_started'])
+                    if kind=='phase' or event.get('status') in FINAL:
+                        phases=job.setdefault('phase_seconds',{})
+                        phases[job.get('phase','unknown')]=round(phases.get(job.get('phase','unknown'),0)+elapsed,3)
+                        job.pop('phase_started',None)
                 if kind == 'suite':
                     job.update({key: event[key] for key in ('status', 'exit_code', 'duration_seconds') if key in event})
                     if job['status'] == 'passed' and job.get('artifact_error'):
@@ -187,6 +193,7 @@ class DistributedTests:
                         job['started'] = now()
                 elif kind == 'phase':
                     job['phase'] = event.get('phase')
+                    job['phase_started']=time.time()
                 elif kind == 'failure':
                     job.setdefault('failure_details', []).append(str(event.get('line', ''))[:2000])
                     job['failure_details'] = job['failure_details'][:240]
@@ -330,7 +337,7 @@ class DistributedTests:
                         self.save()
                     with self.lock:cache_plan=copy.deepcopy(run)
                     cache=SuiteCache(self.root,self.folder,SUITES)
-                    if not run.get('targeted'):cache.apply(cache_plan,images,{host['host']})
+                    if not run.get('targeted') and not run.get('force'):cache.apply(cache_plan,images,{host['host']})
                     candidate=next(row for row in cache_plan['hosts'] if row['host']==host['host'])
                     needed=list(dict.fromkeys(SUITES[suite]['image'] for suite,job in candidate['jobs'].items() if job['status']!='reused'))
                     if any(job['status']!='reused' and not SUITES[suite].get('coordinated') for suite,job in candidate['jobs'].items()):
@@ -345,7 +352,7 @@ class DistributedTests:
                         host['images']=dict(images.host_images.get(host['host'],{}))
                         run['images'].update(images.images)
                         cache_plan=copy.deepcopy(run)
-                    if not run.get('targeted'):cache.apply(cache_plan,images,{host['host']})
+                    if not run.get('targeted') and not run.get('force'):cache.apply(cache_plan,images,{host['host']})
                     with self.lock:
                         cached=next(row for row in cache_plan['hosts'] if row['host']==host['host'])
                         host['jobs']=cached['jobs']

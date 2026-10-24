@@ -30,12 +30,12 @@ class LiveDistributedTests:
         with self.lock:
             return self.runner.artifact(run, host, suite, name)
 
-    def start(self):
+    def start(self,force=False):
         with self.lock:
             if self.runner.running or any(r.running for r in self.reruns.values()):
                 return False
             self.runner = self.load()
-            return self.runner.start()
+            return self.runner.start(force=force)
 
     def stop(self):
         with self.lock:
