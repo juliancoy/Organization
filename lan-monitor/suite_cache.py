@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import subprocess
 
-COMMON=('docker_utils/','lan-monitor/distributed_worker.py','lan-monitor/suite_cache.py','lan-monitor/work_queue.py','lan-monitor/granular_worker.py','lan-monitor/granular_dispatch.py','lan-monitor/agent_updates.py','lan-monitor/snapshot_staging.py','lan-monitor/visual_artifacts.py',
+COMMON=('docker_utils/','lan-monitor/distributed_worker.py','lan-monitor/suite_cache.py','lan-monitor/work_queue.py','lan-monitor/granular_worker.py','lan-monitor/worker_preparation.py','lan-monitor/granular_dispatch.py','lan-monitor/agent_updates.py','lan-monitor/snapshot_staging.py','lan-monitor/visual_artifacts.py',
         'scripts/launcher_agent.py','scripts/launcher_registry.py','requirements.txt','pyproject.toml')
 INPUTS={
  'monitor':{'.':('lan-monitor/*.py','lan-monitor/tests/')},
@@ -17,7 +17,7 @@ INPUTS={
  'visual':{'OrgPortal':('web/','shared/')},
  'identity':{'PIdP':('serverless/','frontend/','scripts/','shared/','package.json','package-lock.json','tsconfig.json')},
  'identity-python':{'PIdP':('*.py','tests/','scripts/','requirements*.txt','pyproject.toml','Dockerfile')},
- 'p2p':{'.':('lan-monitor/p2p_network.py','lan-monitor/p2p_remote.py','peer-worker/','scripts/launcher_peers.py','scripts/launcher_discovery.py','scripts/peer_archive.py')},
+ 'p2p':{'.':('lan-monitor/early_p2p.py','lan-monitor/p2p_network.py','lan-monitor/p2p_remote.py','peer-worker/','scripts/launcher_peers.py','scripts/launcher_discovery.py','scripts/peer_archive.py')},
 }
 SUCCESS={'passed','reused'}
 
