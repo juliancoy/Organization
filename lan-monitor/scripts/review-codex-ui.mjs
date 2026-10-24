@@ -49,6 +49,7 @@ export async function reviewCodexUi(output){
   await page.screenshot({path:join(output,`codex-machine-${width}.png`),fullPage:false})
   await page.getByRole('button',{name:'Refresh',exact:true}).click();assert(page.url().includes('#machine='))
   await page.getByRole('link',{name:'← All machines',exact:true}).click();await page.locator('.machine-card').first().waitFor();assert.equal(await page.locator('.machine-card:visible').count(),5)
+  await page.locator('.machine-card').first().click();await page.getByRole('heading',{name:'worker.local',level:2,exact:true}).waitFor();await page.goBack();await page.locator('.machine-card').first().waitFor()
 
   statusUnauthorized=true;await page.getByRole('button',{name:'Refresh',exact:true}).click()
   await page.waitForFunction(()=>document.getElementById('feedback')?.textContent.includes('Pair this browser'))
@@ -85,7 +86,7 @@ export async function reviewCodexUi(output){
   await page.getByRole('button',{name:'Lock',exact:true}).click();assert.equal(await page.locator('.codex-workspace').isVisible(),false)
   assert.equal(await page.locator('textarea').inputValue(),'')
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false)
-  assert.deepEqual(errors,[]);results.push({width,status:'passed',checks:['connect','empty-state','search','select-thread','stable-refresh','draft-retained','delivery-retained','send-once','lock','no-overflow','no-script-errors','empty-search','disconnected-thread','long-list-pagination']});await context.close()
+  assert.deepEqual(errors,[]);results.push({width,status:'passed',checks:['connect','empty-state','search','select-thread','stable-refresh','draft-retained','delivery-retained','send-once','lock','no-overflow','no-script-errors','empty-search','disconnected-thread','long-list-pagination','lan-machine-colors','machine-detail','machine-back','machine-refresh']});await context.close()
  }}finally{await browser.close();server.closeAllConnections();await new Promise(r=>server.close(r));await writeFile(join(output,'codex-review.json'),JSON.stringify({mode:'synthetic-local-only',results},null,2)+'\n')}
  return results
 }

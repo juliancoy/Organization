@@ -43,7 +43,7 @@ retains its existing dark, teal-accented identity.
 ## Remote LAN status
 
 The header's Swarm status link opens `/swarm-status` on the same remote origin.
-`/api/v1/swarm/status` accepts authenticated GETs using the existing owner or
+`/api/v1/swarm/status` accepts authenticated GETs using the existing
 paired-browser session. It projects devices, observed ping responses, interface
 traffic/capacity and worker-test status from two fixed loopback coordinator GETs.
 No general LAN proxy, scan trigger, command endpoint or coordinator logs/session
