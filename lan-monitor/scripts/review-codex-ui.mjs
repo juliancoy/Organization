@@ -34,6 +34,7 @@ export async function reviewCodexUi(output){
   await page.goto(base);await page.screenshot({path:join(output,`codex-locked-${width}.png`),fullPage:false})
   await page.locator('.codex-unlock input').fill('synthetic-only');await page.getByRole('button',{name:'Connect',exact:true}).click()
   await page.locator('.codex-thread').first().waitFor()
+  assert(await page.locator('.codex-thread').evaluateAll(nodes=>nodes.every(node=>[...node.children].every(child=>child.getBoundingClientRect().bottom<=node.getBoundingClientRect().bottom))), 'Conversation rows must contain their text without overlap')
   const workspace=await page.locator('.codex-workspace').boundingBox(),pagination=await page.locator('.codex-pagination').boundingBox();assert(pagination.y+pagination.height<=workspace.y+workspace.height+1,'Pagination must remain inside the workspace with twenty threads')
   await page.screenshot({path:join(output,`codex-list-${width}.png`),fullPage:false})
   await page.getByRole('searchbox').fill('missing thread');assert.equal(await page.locator('.codex-no-results').isVisible(),true)
