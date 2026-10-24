@@ -178,6 +178,25 @@ class NetworkP2P:
         if value!=expected:raise RuntimeError('Received fixture bytes differ from the source')
         for attempt in range(10):
             observed=resource['browser'].js(STATS)
+            local=next(p for p in self.report['participants'] if p['host']==resource['host']['host'])
+            # Chrome can hide a peer-reflexive remote address. Corroborate it
+            # against the selected local candidate reported by that peer.
+            for link in observed:
+                pair=link.get('pair') or {}
+                remote_candidate=pair.get('remote') or {}
+                if remote_candidate.get('address') or remote_candidate.get('candidateType')!='prflx':continue
+                participant=next((p for p in self.report['participants'] if p.get('peer')==link['peer']),None)
+                other=next((r for r in self.resources if participant and r['host']['host']==participant['host']),None)
+                if not other:continue
+                for reverse in other['browser'].js(STATS):
+                    candidate=(reverse.get('pair') or {}).get('local') or {}
+                    if (reverse['peer']==local['peer'] and reverse.get('state')=='connected'
+                        and (reverse.get('pair') or {}).get('state')=='succeeded'
+                        and candidate.get('port')==remote_candidate.get('port')
+                        and candidate.get('protocol')==remote_candidate.get('protocol')
+                        and candidate.get('address') in participant['addresses']):
+                        remote_candidate['address']=candidate['address']
+                        link['remote_address_evidence']='Opposite peer selected local ICE candidate'
             try:
                 links=direct_evidence(observed,self.report['participants'],resource['host']['host'])
                 break
