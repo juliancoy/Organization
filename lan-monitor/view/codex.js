@@ -52,7 +52,7 @@ async function load() {
   list.replaceChildren();
   for (const thread of value.threads) {
     const button = el('button', '', 'codex-thread'); button.type = 'button'; button.setAttribute('aria-pressed', String(selected === thread.id));
-    button.append(el('strong', thread.name || thread.title || 'Untitled thread'), el('span', (thread.activity === 'running' ? '● Last observed running' : thread.activity === 'idle' ? 'Past turn completed' : 'State unknown') + ' · ' + new Date(thread.updated_at * 1000).toLocaleString()), el('small', thread.cwd));
+    button.append(el('strong', thread.display_title || 'Untitled conversation'), el('span', (thread.activity === 'running' ? '● Last observed running' : thread.activity === 'idle' ? 'Past turn completed' : 'State unknown') + ' · ' + new Date(thread.updated_at * 1000).toLocaleString()), el('small', thread.cwd));
     button.dataset.activity=thread.activity; button.onclick = () => choose(thread.id).catch(failure); list.append(button);
   }
   if (!value.threads.length) list.append(el('p', 'No local conversations found.'));
@@ -75,9 +75,9 @@ async function readThread() {
   const thread = await api('threads/' + encodeURIComponent(id));
   if (epoch !== generation || selected !== id) return;
   empty.hidden=true; transcript.hidden=false;
-  const metadata=JSON.stringify([id,thread.name,thread.title,thread.cwd,thread.model,thread.owner_connected,thread.ide_context,thread.history_limited]);
+  const metadata=JSON.stringify([id,thread.display_title,thread.cwd,thread.model,thread.owner_connected,thread.ide_context,thread.history_limited]);
   if(renderedThread!==metadata){
-  info.replaceChildren(el('h2', thread.name || thread.title || 'Untitled thread'), el('p', thread.cwd + ' · ' + (thread.model || 'Thread model'), 'muted'));
+  info.replaceChildren(el('h2', thread.display_title || 'Untitled conversation'), el('p', thread.cwd + ' · ' + (thread.model || 'Thread model'), 'muted'));
   const owner = el('p', thread.owner_connected ? 'Connected to the local VS Code thread' : 'Open this thread in local VS Code to send instructions.'); info.append(owner);
   if (thread.ide_context) { const details = el('details'), summary = el('summary', 'VS Code context'); details.append(summary, el('pre', typeof thread.ide_context === 'string' ? thread.ide_context : JSON.stringify(thread.ide_context, null, 2))); info.append(details); }
   if (thread.history_limited) info.append(el('small', 'Showing the latest 60 messages from the recent history window.'));

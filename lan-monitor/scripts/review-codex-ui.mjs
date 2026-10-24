@@ -12,6 +12,7 @@ export async function reviewCodexUi(output){
  const commands=[],results=[];let ownerConnected=true
  const threads=[{id:'design',name:'Improve the remote control workspace',cwd:'/workspace/Organization',updated_at:1792880000,activity:'running'},{id:'release',name:'Review the release checks',cwd:'/workspace/OrgPortal',updated_at:1792876000,activity:'idle'}]
  threads.push(...Array.from({length:18},(_,index)=>({id:'history-'+index,name:'Earlier workspace task '+(index+1),cwd:'/workspace/Organization',updated_at:1792800000-index*300,activity:'idle'})))
+ for(const thread of threads){thread.display_title=thread.name;thread.name='Raw database name';thread.title='Initial prompt text'}
  const server=createServer(async(req,res)=>{
   try{
    const url=new URL(req.url,'http://localhost')
@@ -43,6 +44,8 @@ export async function reviewCodexUi(output){
   await page.getByRole('searchbox').fill('release');assert.equal(await page.locator('.codex-thread:visible').count(),1)
   await page.getByRole('searchbox').fill('');await page.locator('.codex-thread').first().click()
   await page.locator('.codex-message').first().waitFor()
+  assert.equal(await page.locator('.codex-thread-info h2').textContent(),'Improve the remote control workspace')
+  assert.equal(await page.locator('.codex-thread').first().locator('strong').textContent(),'Improve the remote control workspace')
   await page.locator('.codex-compose textarea').fill('Keep this draft while refreshing.')
   await page.getByLabel('Instruction delivery').selectOption('send')
   await page.locator('.codex-message').first().evaluate(node=>node.dataset.retained='yes')

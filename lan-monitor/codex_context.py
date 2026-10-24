@@ -145,6 +145,35 @@ def connection():
     return db
 
 
+def indexed_titles():
+    """Read Codex's append-only display-name index without changing its state."""
+    titles = {}
+    try:
+        with (HOME / 'session_index.jsonl').open(encoding='utf-8') as stream:
+            for line in stream:
+                try:
+                    item = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(item, dict):
+                    continue
+                ident, name = item.get('id'), item.get('thread_name')
+                if isinstance(ident, str) and isinstance(name, str) and name.strip():
+                    titles[ident] = name
+    except (OSError, UnicodeError):
+        pass
+    return titles
+
+
+def display_title(row, titles):
+    # A persisted thread name is authoritative; the index supplies names not
+    # yet reflected in the DB. The raw title is often the initial prompt.
+    for name in (row.get('name'), titles.get(row['id']), row.get('title')):
+        if isinstance(name, str) and name.strip():
+            return name
+    return 'Untitled conversation'
+
+
 def thread(ident):
     if not isinstance(ident, str) or not re.fullmatch(r'[a-f0-9-]{36}', ident):
         raise ContextError('Invalid thread ID.')
@@ -152,7 +181,9 @@ def thread(ident):
         row = db.execute('SELECT id, title, name, cwd, updated_at, source, model, rollout_path FROM threads WHERE id=?', (ident,)).fetchone()
     if not row:
         raise ContextError('Thread not found.')
-    return dict(row)
+    result = dict(row)
+    result['display_title'] = display_title(result, indexed_titles())
+    return result
 
 
 def history(row):
@@ -204,8 +235,10 @@ def listing(offset=0):
     with closing(connection()) as db:
         rows = db.execute('SELECT id, title, name, cwd, updated_at, source, model, rollout_path FROM threads ORDER BY updated_at DESC LIMIT 21 OFFSET ?', (offset,)).fetchall()
     result = []
+    titles = indexed_titles()
     for raw in rows[:20]:
         row = dict(raw)
+        row['display_title'] = display_title(row, titles)
         try:
             state = history(row)
             row['activity'] = state['activity']
