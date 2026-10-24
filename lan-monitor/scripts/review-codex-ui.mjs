@@ -46,6 +46,7 @@ export async function reviewCodexUi(output){
   await page.screenshot({path:join(output,`codex-lan-${width}.png`),fullPage:false})
   await page.locator('.machine-card').first().focus();await page.keyboard.press('Enter');await page.getByRole('heading',{name:'worker.local',exact:true,level:2}).waitFor()
   assert.equal(await page.locator('.machine-task[data-state=running]').count(),1)
+  await page.screenshot({path:join(output,`codex-machine-${width}.png`),fullPage:false})
   await page.getByRole('button',{name:'Refresh',exact:true}).click();assert(page.url().includes('#machine='))
   await page.getByRole('link',{name:'← All machines',exact:true}).click();await page.locator('.machine-card').first().waitFor();assert.equal(await page.locator('.machine-card:visible').count(),5)
 

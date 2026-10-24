@@ -54,3 +54,22 @@ This telemetry uses the existing authenticated HTTPS transport, not the APK's
 WebRTC data channel. The latter remains an APK-transfer protocol. A future P2P
 telemetry option would need an explicitly authorized, read-only protocol and
 failure/reconnection handling; no claim of WebRTC telemetry is made here.
+
+### Machine cards
+
+LAN status starts with one combined card for each observed device/worker identity.
+Worker addresses match network addresses first; a unique mDNS hostname alias is
+used when an address is unavailable. Ambiguous names are not silently merged.
+Worker-only machines remain visible even if the network scan did not observe them.
+
+Filled cards use the existing distributed-test palette. A failed task takes
+precedence, followed by running, queued, stopped, unavailable and passed states;
+counts retain mixed task states. Queued and stopped share the existing neutral
+color, with explicit labels. Ended runs cannot display queued/running work as
+still active. An unused worker or missing ping response does not imply passed,
+stopped or failed tasks. The overview labels recorded runs.
+
+Card links open a hash-addressed machine detail view with reachability, available
+CPU/memory and task states. Native Back and All machines preserve the overview;
+refresh retains the selected machine. Keyboard activation moves focus to the
+machine heading. Network interface details remain available under Network overview.
