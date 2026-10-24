@@ -1,3 +1,4 @@
+import {summarizeProgress} from './run-progress.js';
 const done=new Set(['passed','partial','failed','stopped','interrupted','unavailable','timed_out','reused']);
 const make=(tag,text,cls='')=>{const node=document.createElement(tag);node.textContent=text;node.className=cls;return node;};
 const age=seconds=>seconds<60?Math.floor(seconds)+'s':seconds<3600?Math.floor(seconds/60)+'m '+Math.floor(seconds%60)+'s':Math.floor(seconds/3600)+'h '+Math.floor(seconds%3600/60)+'m';
@@ -6,7 +7,7 @@ export function renderActivity(run){
  const root=document.getElementById('run-activity');
  if(!run){root.replaceChildren(make('h2','Run activity'),make('p','No run selected.','muted'));rendered='';return;}
  const jobs=(run.hosts||[]).flatMap(h=>Object.values(h.jobs||{}));
- const finished=jobs.filter(j=>done.has(j.status)).length;
+ const aggregate=summarizeProgress(run),finished=aggregate.completed;
  const active=(run.hosts||[]).flatMap(h=>Object.values(h.jobs||{}).filter(j=>['running','preparing'].includes(j.status)).map(j=>h.host+' · '+j.name+(j.phase?' · '+j.phase:'')));
  const complete=done.has(run.status);
  const image=run.image_progress;
@@ -33,9 +34,9 @@ export function renderActivity(run){
  root.querySelector('.activity-clock').textContent=age(elapsed)+' elapsed';
  const last=run.activity?.at(-1)?.time||run.updated||run.started;
  const quiet=Math.max(0,(Date.now()-Date.parse(last))/1000);
- const total=jobs.length+(run.pending_tasks?.length||0);
- root.querySelector('.activity-detail').textContent=finished+' / '+total+' jobs completed'+(complete?'':' · Last coordinator event '+age(quiet)+' ago')+(!complete&&quiet>=60?' · Waiting for an update; this alone does not mean the operation has stalled.':'');
- const progress=root.querySelector('progress');progress.max=total||1;progress.value=finished;
+ const total=aggregate.total;
+ root.querySelector('.activity-detail').textContent=(total===null?'Preparing the job plan':finished+' / '+total+' jobs completed')+(complete?'':' · Last coordinator event '+age(quiet)+' ago')+(!complete&&quiet>=60?' · Waiting for an update; this alone does not mean the operation has stalled.':'');
+ const progress=root.querySelector('progress');progress.max=total||1;if(total===null)progress.removeAttribute('value');else progress.value=finished;
  root.querySelector('.activity-workers').textContent=[...active,...preparing.map(h=>h.host+' · '+(h.preparation||'preparing'))].join('   /   ')||(complete?'Results saved.':'Each node starts independently when its images are ready.');
  const post=run.post_deployment;
  root.querySelector('.post-deployment-status').textContent=post?'Post-deployment: '+post.status.replaceAll('_',' ')+' · '+(post.checks||[]).map(c=>c.name+': '+c.status+' — '+c.detail).join(' / '):complete?'Post-deployment checks run after a passing test run and wait for its deployed commit.':'';

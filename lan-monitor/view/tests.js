@@ -1,3 +1,5 @@
+import {renderOverallProgress} from './overall-progress.js';
+import {summarizeProgress} from './run-progress.js';
 import {authorizedAction} from './authorized-action.js';
 import {snapshotFetch} from './snapshot-fetch.js';
 import {renderVisualArtifacts} from './visual-artifacts.js';
@@ -9,6 +11,7 @@ import {renderFailures} from './failure-display.js';
 const $=id=>document.getElementById(id);
 const terminal=new Set(['reused','partial','passed','failed','unavailable','timed_out','interrupted','stopped']);
 const suiteEntries=host=>Object.entries(host.jobs||{}).sort(([,a],[,b])=>Number(terminal.has(a.status))-Number(terminal.has(b.status)));
+let liveData=null;
 let data=null,selected=new URLSearchParams(location.search).get('host')||null,chosen=new URLSearchParams(location.search).get('run')||'',polling=false;
 let terminalChoice='';
 const historyReports=new Map(),historyPending=new Set();
@@ -21,7 +24,7 @@ async function loadHistoryReasons(){
   for(let i=0;i<wanted.length;i+=2){
    await Promise.all(wanted.slice(i,i+2).map(async item=>{
     historyPending.add(item.id);
-    try{const response=await fetch('/api/distributed-tests?id='+encodeURIComponent(item.id),{cache:'no-store',signal:AbortSignal.timeout(5000)});if(!response.ok)throw Error();const result=await response.json();if(result.run)historyReports.set(item.id,{stamp:historyStamp(item),summary:summarizeFailure(result.run)});}
+    try{const response=await snapshotFetch('/api/distributed-tests?id='+encodeURIComponent(item.id),{cache:'no-store',signal:AbortSignal.timeout(5000)});if(!response.ok)throw Error();const result=await response.json();if(result.run)historyReports.set(item.id,{stamp:historyStamp(item),summary:summarizeFailure(result.run)});}
     catch{historyReports.set(item.id,{stamp:historyStamp(item),unavailable:true});}
     finally{historyPending.delete(item.id);}
    }));
@@ -84,6 +87,7 @@ function renderHistory(){
 $('latest-run').onclick=()=>chooseRun('');
 function render(){
  const run=data?.run;
+ renderOverallProgress(liveData?.run||run);
  document.dispatchEvent(new CustomEvent('test-context',{detail:{run,host:selected}}));
  renderActivity(run);
  const staging=data?.snapshot_staging;
@@ -110,8 +114,9 @@ function render(){
  const mobiles=hosts.filter(host=>host.kind==='android').length;
  $('command-scope').textContent=mobiles===hosts.length?'Physical Android browser · USB via compai · one test at a time':'Shared file queue · '+(hosts.length-mobiles)+' computer workers'+(mobiles?' · '+mobiles+' physical mobile device':'')+' · coordinator participates';
  const jobs=hosts.flatMap(host=>Object.values(host.jobs||{}));
+ const aggregate=summarizeProgress(run);
  $('summary').replaceChildren();
- for(const [name,value]of [['Worker machines',hosts.length],['Fresh passes / reused',jobs.filter(j=>j.status==='passed').length+' / '+jobs.filter(j=>j.status==='reused').length],['Unsuccessful jobs',jobs.filter(j=>['failed','unavailable','timed_out','interrupted'].includes(j.status)).length],['Completed',jobs.filter(j=>terminal.has(j.status)).length+' / '+(jobs.length+(run.pending_tasks?.length||0))],['Waiting for capacity',run.pending_tasks?.length||0],['Running jobs',hosts.reduce((n,h)=>n+(h.active_tasks?.length||0),0)],['Repositories pushed',Object.values(run.repositories||{}).filter(repo=>repo.stage==='pushed').length+' / '+Math.max(3,Object.keys(run.repositories||{}).length)]]){const card=el('div','','metric');card.append(el('span',name),el('strong',String(value)));$('summary').append(card);}
+ for(const [name,value]of [['Worker machines',hosts.length],['Fresh passes / reused',jobs.filter(j=>j.status==='passed').length+' / '+jobs.filter(j=>j.status==='reused').length],['Unsuccessful jobs',jobs.filter(j=>['failed','unavailable','timed_out','interrupted'].includes(j.status)).length],['Completed',aggregate.total===null?'Preparing':aggregate.completed+' / '+aggregate.total],['Waiting for capacity',run.pending_tasks?.length||0],['Running jobs',hosts.reduce((n,h)=>n+(h.active_tasks?.length||0),0)],['Repositories pushed',Object.values(run.repositories||{}).filter(repo=>repo.stage==='pushed').length+' / '+Math.max(3,Object.keys(run.repositories||{}).length)]]){const card=el('div','','metric');card.append(el('span',name),el('strong',String(value)));$('summary').append(card);}
  if(selected!=='compai.local'&&!hosts.some(host=>host.host===selected))selected=hosts[0]?.host;
  const focusedHost=document.activeElement?.closest('#topology [data-terminal-host]')?.dataset.terminalHost;
  $('topology').replaceChildren(...(hosts.some(host=>host.local)?[]:[coordinatorNode()]));
@@ -157,7 +162,9 @@ async function refresh(){
   const response=await snapshotFetch('/api/distributed-tests'+(requested?'?id='+encodeURIComponent(requested):''),{cache:'no-store'});
   if(!response.ok)throw Error('Could not load distributed test results ('+response.status+')');
   const result=await response.json();
-  if(requested===chosen){data=result;render();}
+  let latest=result;
+  if(requested){const current=await snapshotFetch('/api/distributed-tests',{cache:'no-store'});if(!current.ok)throw Error('Could not refresh the live run');latest=await current.json();}
+  if(requested===chosen){data=requested?{...result,running:latest.running,history:latest.history,active_reruns:latest.active_reruns}:result;liveData=latest;render();}
  }catch(error){if(requested===chosen)$('error').textContent=error.message;}
  finally{polling=false;if(requested!==chosen)void refresh();}
 }

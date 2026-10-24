@@ -338,3 +338,12 @@ Codex service. The pinned QR encoder generates SVG locally and needs no image or
 npm dependencies. The user service sets PYTHONPATH to that private dependency
 folder. Ordinary test containers have neither issuer credentials nor the owner
 launcher configuration; loopback access alone cannot issue a code.
+
+Pairing issuance also requires an authenticated owner browser, not merely a
+loopback connection. Launch `./run.py --swarm` on CompAI: the OS-owner process
+creates a private, single-use bootstrap and opens the launcher with it. The
+fragment is removed, the bootstrap is consumed, and a 30-minute capability is
+held only in that tab's memory. Ordinary native HTTP requests and host-networked
+test containers cannot mint phone setup codes by forging Host/Origin headers.
+Reload or expiry requires reopening through `run.py --swarm`. The generated
+phone session continues to last 30 days independently.

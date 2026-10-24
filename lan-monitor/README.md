@@ -629,3 +629,23 @@ required. Restrictive NATs may require a standard TURN relay; the deployed
 signaling service currently reports no configured TURN relay. Ethernet plus
 Xfinity Wi-Fi can be used together: keep the test LAN route on Ethernet and the
 internet default route on Wi-Fi. A captive hotspot sign-in is still required.
+
+### Aggregate progress and result caching
+
+`http://map.local/tests` redirects to the test dashboard with query selections
+preserved. Its top progress panel always follows the latest run across all
+machines, even while older results are selected below. It counts logical jobs
+once across reassignment attempts, includes unassigned work in the denominator,
+and separates passed, reused, failed, active, queued, unavailable and stopped
+work. Preparation stays indeterminate until the task plan is known. Elapsed time
+and the last observed change in job output/state are shown without inferring that
+a quiet process is stuck.
+
+Run reports are saved atomically on disk independently of the browser. The UI
+shares completed historical responses in memory for five minutes (at most ten
+results); live runs and pending post-deployment checks retain short polling.
+The selected historical response never supplies current run-control state or
+replaces the live aggregate. Explicit reload bypasses the application cache.
+Execution reuse remains based on verified passing results with matching relevant
+source, dependencies, image contents and machine identity. A forced run bypasses
+reuse and is labeled as such in the aggregate.

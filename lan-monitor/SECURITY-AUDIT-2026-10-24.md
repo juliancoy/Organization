@@ -75,3 +75,11 @@ devices. The attached phone verified pairing and authentication across reload.
 Unauthenticated public history returns 401; other master APIs return 404; LAN
 Codex still returns 403. Local validation passed 135 monitor tests, including
 four new remote authorization and command-target regression tests.
+
+The owner launcher now offers QR issuance through a separate credential-checked
+loopback broker on port 8092. This is an owner-level capability, provisioned only
+to the coordinator. The launcher requires a tab capability obtained from a
+private one-use OS-owner launch (`run.py --swarm`) before invoking the broker.
+Loopback, Host/Origin headers, and fleet membership alone cannot authorize this
+action. Browser capabilities stay in tab memory, expire in 30 minutes, and are
+invalidated by launcher restart. The public tunnel does not route to the broker.
