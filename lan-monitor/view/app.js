@@ -19,7 +19,7 @@ if (embeddedLAN) {
   document.documentElement.classList.add('embedded-lan');
   const controls=document.createElement('div');controls.className='embedded-map-controls';
   const count=document.createElement('span');count.id='lan-node-count';count.setAttribute('role','status');controls.append(count);
-  controls.append($('all-connections').closest('label'));
+  controls.append($('lan-only').closest('label'),$('all-connections').closest('label'));
   for(const id of ['mine','pause','fit','zoom-in','zoom-out'])controls.append($(id));
   document.querySelector('.scene').append(controls);
 }
@@ -27,6 +27,8 @@ const settings=loadSettings();
 if(embeddedLAN)Object.assign(settings,{layer:'links',geographic:false,groupProviders:false,labels:true});
 let layer = settings.layer;
 let allConnections=settings.allConnections;
+let lanOnly=settings.lanOnly;
+$('lan-only').checked=lanOnly;
 let geographic = settings.geographic&&!allConnections, land, geoRequested=false;
 let groupProviders = settings.groupProviders;
 let resolveNames=settings.resolveNames;
@@ -53,7 +55,7 @@ $('layer').value=layer;
 $('repulsion').value=settings.repulsion;
 $('force-value').value=settings.repulsion;
 function persistSettings(){
-  const saved=saveSettings({layer,allConnections,geographic,groupProviders,labels,paused:settings.paused,resolveNames,repulsion:Number($('repulsion').value)});
+  const saved=saveSettings({layer,lanOnly,allConnections,geographic,groupProviders,labels,paused:settings.paused,resolveNames,repulsion:Number($('repulsion').value)});
   $('settings-status').textContent=saved?'Settings saved in this browser.':'Browser storage is unavailable; settings last for this session.';
 }
 function requestGeography(){
@@ -97,7 +99,12 @@ function choose(id) {
   sync();
 }
 function sync() {
-  const rawView = networkView(data, perspective, layer, allConnections);
+  let rawView = networkView(data, perspective, layer, allConnections);
+  if(lanOnly){
+    const visible=rawView.nodes.filter(node=>!node.external);
+    const ids=new Set(visible.map(node=>node.id));
+    rawView={...rawView,nodes:visible,edges:rawView.edges.filter(edge=>ids.has(edge.a)&&ids.has(edge.b))};
+  }
   perspective = rawView.id;
   const remote=rawView.nodes.filter(node=>!node.mac&&node.ip);
   const ipv6=remote.filter(node=>node.ip.includes(':'));
@@ -109,10 +116,10 @@ function sync() {
 
   view = groupProviders&&!allConnections ? groupNetwork(rawView) : rawView;
   if(embeddedLAN){
-    view={...view,nodes:view.nodes.filter(node=>allConnections||!node.external)};
+    view={...view,nodes:view.nodes.filter(node=>!lanOnly&&allConnections||!node.external)};
     const ids=new Set(view.nodes.map(node=>node.id));
     view.edges=view.edges.filter(edge=>ids.has(edge.a)&&ids.has(edge.b));
-    $('lan-node-count').textContent=view.nodes.length+(allConnections?' traffic nodes · direct endpoints':' LAN nodes');
+    $('lan-node-count').textContent=view.nodes.length+(!lanOnly&&allConnections?' traffic nodes · direct endpoints':' LAN nodes');
   }
   if (!view.nodes.some(node => node.id === selectedId)) selectedId = view.id;
 
@@ -708,3 +715,5 @@ async function pollArtefactContext(){
   setTimeout(pollArtefactContext,5000);
 }
 void pollArtefactContext();poll(); requestAnimationFrame(frame);
+
+$('lan-only').onchange=event=>{lanOnly=event.target.checked;persistSettings();clearEdgeHover();if(data)sync();};

@@ -20,6 +20,8 @@ TOOLS=[
  ('list_machines','Machine inventory','Inspect observed LAN machines and machines recorded in the latest run. Does not probe or initialize agents.',{},[]),
  ('list_suites','Configured suites','List application-owned suites and their container images; arbitrary commands cannot be submitted.',{},[]),
  ('start_run','Start distributed tests','Start the configured distributed run. The coordinator COMMITS AND PUSHES the current Organization, OrgPortal and PIdP branches to GitHub, prepares agents/images, and runs suites. Does not deploy production services.',{},[]),
+ ('rerun_suite','Rerun one suite','Queue an independent fresh execution on the original worker using current published sources. Commits and pushes current branches. No deployment or email checks.',{'run_id':RUN_ID,'host':{'type':'string','minLength':1,'maxLength':253},'suite':{'type':'string','minLength':1,'maxLength':80}},['run_id','host','suite']),
+ ('rerun_failed','Rerun failed suites','Queue failed ordinary suites from a recorded run. P2P requires a full run. Commits and pushes current branches; no deployment or email checks.',{'run_id':RUN_ID},['run_id']),
  ('stop_run','Stop a specific run','Request cancellation of the currently running test run by ID. Refuses to stop a newer, different run.',{'run_id':RUN_ID},['run_id']),
 ]
 
@@ -33,9 +35,9 @@ class APIError(Exception):
 def tool_definitions():
     return [{'name':name,'title':title,'description':description,
              'inputSchema':{'type':'object','properties':properties,'required':required,'additionalProperties':False},
-             'annotations':{'readOnlyHint':name not in ('start_run','stop_run'),
-                            'destructiveHint':name in ('start_run','stop_run'),
-                            'idempotentHint':name!='start_run','openWorldHint':name=='start_run'}}
+             'annotations':{'readOnlyHint':name not in ('start_run','stop_run','rerun_suite','rerun_failed'),
+                            'destructiveHint':name in ('start_run','stop_run','rerun_suite','rerun_failed'),
+                            'idempotentHint':name not in ('start_run','rerun_suite','rerun_failed'),'openWorldHint':name in ('start_run','rerun_suite','rerun_failed')}}
             for name,title,description,properties,required in TOOLS]
 
 
@@ -73,14 +75,17 @@ class MasterAPI:
                 fields=('ip','ipv6','hostname','self','status')
                 return {'observed':[ {key:device.get(key) for key in fields if key in device} for device in self.devices().get('devices',[])],
                         'run_id':run.get('id'),'workers':[self.machine(host) for host in run.get('hosts',[])]}
+            if name in ('rerun_suite','rerun_failed'):
+                ident=self.tests.rerun(args['run_id'],args.get('host'),args.get('suite'),failed_only=name=='rerun_failed')
+                return {'accepted':True,'run_id':ident,'parent_run_id':args['run_id']}
             if name in ('start_run','stop_run'):
                 with self.lock:
                     if name=='start_run':
                         accepted=self.tests.start()
                     else:
-                        current=self.tests.view().get('run') or {}
+                        current=self.tests.view(args['run_id']).get('run') or {}
                         if current.get('id')!=args['run_id']:raise APIError(409,'run_mismatch','This ID is not the current run; no run was stopped')
-                        accepted=self.tests.stop()
+                        accepted=self.tests.stop_run(args['run_id'])
                     if not accepted:raise APIError(409,'run_conflict','A run is already active' if name=='start_run' else 'Run is not active or is already stopping')
                     return {'accepted':True,**self.status()}
             if name=='get_status':return self.status()
@@ -143,6 +148,8 @@ class MasterAPI:
                     return 200,self.call('get_logs',args)
         elif method=='POST':
             parameters(())
+            if path==API+'/rerun-suite':return 202,self.call('rerun_suite',body)
+            if path==API+'/rerun-failed':return 202,self.call('rerun_failed',body)
             if body not in ({},None):raise APIError(400,'invalid_body','This endpoint accepts an empty JSON object')
             if path==API+'/runs':return 202,self.call('start_run')
             if path.startswith(API+'/runs/') and path.endswith('/stop'):
@@ -153,7 +160,7 @@ class MasterAPI:
     @staticmethod
     def openapi():
         paths={}
-        routes=[('get','/status','get_status'),('get','/runs','list_runs'),('post','/runs','start_run'),
+        routes=[('post','/rerun-suite','rerun_suite'),('post','/rerun-failed','rerun_failed'),('get','/status','get_status'),('get','/runs','list_runs'),('post','/runs','start_run'),
                 ('get','/runs/{run_id}','get_run'),('get','/runs/{run_id}/logs','get_logs'),
                 ('post','/runs/{run_id}/stop','stop_run'),('get','/machines','list_machines'),('get','/suites','list_suites')]
         definitions={tool['name']:tool for tool in tool_definitions()}
@@ -165,7 +172,9 @@ class MasterAPI:
             for key,schema in tool['inputSchema']['properties'].items():
                 if key=='run_id':parameters.append({'name':key,'in':'path','required':True,'schema':schema})
                 else:parameters.append({'name':key,'in':'query','required':key in tool['inputSchema']['required'],'schema':schema})
-            if parameters:operation['parameters']=parameters
+            if name in ('rerun_suite','rerun_failed'):
+                operation['requestBody']={'required':True,'content':{'application/json':{'schema':tool['inputSchema']}}}
+            elif parameters:operation['parameters']=parameters
             paths.setdefault(API+path,{})[method]=operation
         return {'openapi':'3.1.0','info':{'title':'Map Distributed Test Master','version':'1.0.0'},'servers':[{'url':'/'}],
                 'security':[{'bearerAuth':[]}],'components':{'securitySchemes':{'bearerAuth':{'type':'http','scheme':'bearer'}}},'paths':paths}

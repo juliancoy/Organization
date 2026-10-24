@@ -273,6 +273,13 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/cpu':
             body = json.dumps(cpu_monitor.view()).encode()
             content_type = 'application/json'
+        elif path == '/api/distributed-tests/artifacts':
+            query = parse_qs(urlsplit(self.path).query)
+            try:
+                body, content_type = distributed_tests.artifact(*(query.get(key, [''])[0] for key in ('run','host','suite','name')))
+            except (ValueError, FileNotFoundError):
+                self.send_error(404, 'Visual artifact not found')
+                return
         elif path == '/api/distributed-tests':
             try:
                 data = distributed_tests.view(parse_qs(urlsplit(self.path).query).get('id', [None])[0])
@@ -348,6 +355,20 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if handle_master(self,master_api):return
         path = urlsplit(self.path).path
+        if path=='/api/distributed-tests/rerun':
+            if self.headers.get('Origin')!='http://'+self.headers.get('Host',''):
+                self.send_error(403);return
+            try:
+                length=int(self.headers.get('Content-Length','0'))
+                if not 0<length<=4096:raise ValueError('Invalid body length')
+                args=json.loads(self.rfile.read(length))
+                operation='rerun_suite' if 'suite' in args else 'rerun_failed'
+                result=master_api.call(operation,args)
+                body=json.dumps(result).encode()
+                self.send_response(202);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
+            except Exception:
+                self.send_error(400,'Rerun could not be queued; check the selected run, host and suite')
+            return
         if path not in ('/api/resolve', '/api/geography', '/api/refresh', '/api/web-checks', '/api/benchmark/start', '/api/benchmark/upload', '/api/distributed-tests/start', '/api/distributed-tests/stop'):
             self.send_error(404)
             return

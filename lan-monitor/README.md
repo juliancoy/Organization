@@ -452,3 +452,15 @@ Optional configuration: `~/.config/map-master/post-deployment.json` (keep privat
 ```
 
 Email configuration enables one call per run to the existing authenticated campaign `/test` endpoint, defaulting to the connected sender's own mailbox. No audience-send endpoint is used. It polls the newly created test delivery for up to three minutes. Provider acceptance is checked; inbox arrival is not measured. Missing email configuration produces partial coverage with an explicit blocked email check. The bearer token stays on the coordinator and is never sent to test workers or included in run records. Post-deployment results are separate from isolated suite results; an overall suite pass does not imply deployment or email delivery passed.
+
+### Portal layout renders
+
+The `visual` suite runs OrgPortal's offline synthetic layout renderer in the
+existing pinned Playwright image. Its contact sheets and individual PNG/JSON
+artifacts appear under the suite's run details. Only loopback fixture traffic is
+needed; test-phase Docker networking remains disabled. No real user data or
+credentials are used. Transfers use 8 KiB chunks with SHA-256 verification,
+4 MiB per file, 32 MiB per host/suite and at most 64 files. Artifacts share the
+run retention policy. Successful rendering still requires human visual review.
+See `OrgPortal/docs/LAYOUT_REVIEW.md` for direct visual review without starting
+the distributed workflow.

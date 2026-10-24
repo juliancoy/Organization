@@ -117,3 +117,5 @@ restarted or deployed while implementing this API. The existing per-run code
 loader continues to load current coordinator code without restarting active runs.
 
 Run results may include `status: reused`, `input_fingerprint`, and `reused_from` for unchanged suites. These are historical passing baselines, not fresh executions. History exposes separate `passed` and `reused` counts, and `get_run` retains that provenance.
+
+Independent reruns: MCP `rerun_suite` takes `run_id`, `host`, `suite`; `rerun_failed` takes `run_id`. REST equivalents are POST `/api/v1/master/rerun-suite` and `/api/v1/master/rerun-failed` with those JSON arguments. Each returns a new `run_id` and `parent_run_id`. Inspect it with `get_run`/`get_logs`, cancel with `stop_run`. Busy workers are reserved until their existing run completes; queued reruns do not alter the parent record. Current branches are committed/pushed as for a full run. Reruns force selected ordinary suites to execute and omit deployment/email checks. P2P requires a full run. Queue capacity is ten active reruns; queued work is in-process and does not automatically resume after service restart.

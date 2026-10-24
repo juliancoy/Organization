@@ -13,6 +13,7 @@ import uuid
 from distributed_worker import SUITES
 from distributed_images import ImageDistributor
 from run_activity import capture
+from visual_artifacts import VisualArtifacts
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE = Path(__file__).with_name('.runtime') / 'distributed'
@@ -41,9 +42,9 @@ def plan(hosts):
     hosts = copy.deepcopy(hosts)
     for host in hosts:
         host.update(status='queued', suites=['monitor', 'map', 'p2p'], jobs={})
-    for index, suite in enumerate(['web', 'identity', 'chat', 'workspace', 'identity-python']):
+    for index, suite in enumerate(['web', 'visual', 'identity', 'chat', 'workspace', 'identity-python']):
         # Browser/identity work goes to the last host; frontend to the middle.
-        slot = {'org-api': 0, 'chat': 0, 'web': 1, 'workspace': 3, 'identity': 2, 'identity-python': 2}[suite] % len(hosts)
+        slot = {'org-api': 0, 'chat': 0, 'web': 1, 'visual': 1, 'workspace': 3, 'identity': 2, 'identity-python': 2}[suite] % len(hosts)
         hosts[slot]['suites'].append(suite)
     for index,host in enumerate(hosts):
         host['suites'].insert(0,'org-api')
@@ -56,16 +57,18 @@ def plan(hosts):
 
 
 class DistributedTests:
-    def __init__(self, root=ROOT, state=STATE):
+    def __init__(self, root=ROOT, state=STATE, recover=True):
         self.root, self.folder = Path(root), Path(state)
         self.lock = threading.RLock()
         self.running = False
         self.run = None
         self.last_save = 0
+        self.publication_lock=threading.Lock()
         self.folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.artifacts = VisualArtifacts(self.folder)
         self.prune()
         files = sorted(self.folder.glob('*.json'))
-        if files:
+        if files and recover:
             try:
                 self.run = json.loads(files[-1].read_text())
                 if self.run.get('status') in ('running', 'preparing', 'stopping'):
@@ -86,6 +89,7 @@ class DistributedTests:
         for index, path in enumerate(files):
             if index >= 100 or path.stat().st_mtime < cutoff:
                 path.unlink()
+                __import__('shutil').rmtree(self.folder / (path.stem + '-artifacts'), ignore_errors=True)
 
     def save(self):
         if not self.run:
@@ -125,19 +129,23 @@ class DistributedTests:
                     pass
             return {'running': self.running, 'run': current, 'history': history, 'history_limit': HISTORY_LIMIT, 'retention_days': 30}
 
-    def start(self):
+    def artifact(self, run, host, suite, name):
+        return self.artifacts.read(run, host, suite, name)
+
+    def start(self, selected_hosts=None, parent_run_id=None, launch=True):
         with self.lock:
             if self.running:
                 return False
-            hosts = plan(targets())
+            hosts = copy.deepcopy(selected_hosts) if selected_hosts is not None else plan(targets())
             self.prune()
             self.run = {'id': dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:8],
                         'status': 'preparing', 'started': now(), 'finished': None,
                         'hosts': hosts, 'repositories': {}, 'source_sha256': None,
                         'scope': 'Start commits and pushes Organization, OrgPortal and PIdP on their current branches; verified local agents fetch exact GitHub commits into fresh directories. Application suites run in isolated containers without network or deployment credentials. The dedicated P2P suite uses separate browser containers on authenticated agent machines, synthetic fixtures and short-lived dataset invitations; its network access is required for WebRTC.'}
+            if parent_run_id:self.run.update(parent_run_id=parent_run_id,targeted=True,status='queued')
             self.running = True
             self.save()
-            threading.Thread(target=self.execute, daemon=True).start()
+            if launch:threading.Thread(target=self.execute, daemon=True).start()
             return True
 
     def stop(self):
@@ -173,6 +181,8 @@ class DistributedTests:
                 job = host['jobs'][suite]
                 if kind == 'suite':
                     job.update({key: event[key] for key in ('status', 'exit_code', 'duration_seconds') if key in event})
+                    if job['status'] == 'passed' and job.get('artifact_error'):
+                        job['status'] = 'failed'
                     if job['status'] == 'running':
                         job['started'] = now()
                 elif kind == 'phase':
@@ -182,11 +192,21 @@ class DistributedTests:
                     job['failure_details'] = job['failure_details'][:240]
                 elif kind == 'counts':
                     job['test_counts'] = {key: value for key, value in event.get('counts', {}).items() if key in ('tests', 'passed', 'failed', 'skipped') and isinstance(value, int) and value >= 0}
+                elif kind in ('artifact_begin', 'artifact_chunk', 'artifact_end') and suite == 'visual':
+                    try:
+                        artifact = self.artifacts.receive(self.run['id'], host['host'], suite, event)
+                        if artifact:
+                            job.setdefault('artifacts', []).append(artifact)
+                            job['visual_review'] = 'Human review required; rendering success is not design approval'
+                    except (ValueError, OSError) as exc:
+                        job['artifact_error'] = True
+                        job.setdefault('failure_details', []).append('Visual artifact: ' + str(exc)[:300])
+                        job['failure_details'] = job['failure_details'][:240]
                 elif kind == 'log':
                     job['logs'].append(str(event.get('line', ''))[:2000])
                     job['logs'] = job['logs'][-80:]
             self.run['updated'] = now()
-            if kind != 'log' or time.monotonic() - self.last_save > 1:
+            if kind not in ('log', 'artifact_chunk') or time.monotonic() - self.last_save > 1:
                 self.save()
 
     def host(self, index, host, manifest, ident):
@@ -274,7 +294,7 @@ class DistributedTests:
                     self.save()
             reachable = sessions.accessible()
             exclude(hosts,reachable,'preflight')
-            hosts = plan(reachable) if reachable else []
+            hosts = reachable if run.get('targeted') else plan(reachable) if reachable else []
             images.hosts = hosts
             publish()
             initialized = sessions.verify(hosts) if hosts else []
@@ -291,7 +311,8 @@ class DistributedTests:
                     run['repositories'][name]=record
                     run['preparation']='GitHub: '+name+' · '+record['stage']
                     self.save()
-            repositories=publish_github(self.root,run['id'],lambda:bool(run.get('stop_requested')),publication_progress)
+            with self.publication_lock:
+                repositories=publish_github(self.root,run['id'],lambda:bool(run.get('stop_requested')),publication_progress)
             with self.lock:
                 run['repositories']=repositories
                 run['source_sha256']=source_digest(repositories)
@@ -309,7 +330,7 @@ class DistributedTests:
                         self.save()
                     with self.lock:cache_plan=copy.deepcopy(run)
                     cache=SuiteCache(self.root,self.folder,SUITES)
-                    cache.apply(cache_plan,images,{host['host']})
+                    if not run.get('targeted'):cache.apply(cache_plan,images,{host['host']})
                     candidate=next(row for row in cache_plan['hosts'] if row['host']==host['host'])
                     needed=list(dict.fromkeys(SUITES[suite]['image'] for suite,job in candidate['jobs'].items() if job['status']!='reused'))
                     if any(job['status']!='reused' and not SUITES[suite].get('coordinated') for suite,job in candidate['jobs'].items()):
@@ -324,7 +345,7 @@ class DistributedTests:
                         host['images']=dict(images.host_images.get(host['host'],{}))
                         run['images'].update(images.images)
                         cache_plan=copy.deepcopy(run)
-                    cache.apply(cache_plan,images,{host['host']})
+                    if not run.get('targeted'):cache.apply(cache_plan,images,{host['host']})
                     with self.lock:
                         cached=next(row for row in cache_plan['hosts'] if row['host']==host['host'])
                         host['jobs']=cached['jobs']
@@ -348,7 +369,7 @@ class DistributedTests:
                 # P2P alone needs the participant set; ordinary suites have already
                 # completed on each ready worker without waiting for slower nodes.
                 with self.lock:
-                    peers=[h['jobs']['p2p'] for h in hosts if h['status']!='unavailable']
+                    peers=[h['jobs']['p2p'] for h in hosts if h['status']!='unavailable' and 'p2p' in h['jobs']]
                     if peers and not all(j['status']=='reused' for j in peers):
                         for job in peers:
                             if job['status']=='reused':
@@ -356,7 +377,7 @@ class DistributedTests:
                                 job.pop('reused_from',None)
                     run.setdefault('reuse',{})['suites']=sum(j['status']=='reused' for h in run['hosts'] for j in h['jobs'].values())
                     self.save()
-                self.network(run,images)
+                if any('p2p' in h['jobs'] for h in hosts):self.network(run,images)
             with self.lock:
                 run['status'] = ('failed' if any(host['status'] not in ('passed','partial') for host in hosts) else
                                  'partial' if excluded or any(host['status']=='partial' for host in hosts) else 'passed')
@@ -383,7 +404,7 @@ class DistributedTests:
                 self.running = False
                 self.run['finished'] = now()
                 self.save()
-                if self.run['status']=='passed':
+                if self.run['status']=='passed' and not self.run.get('targeted'):
                     completed=self.run
                     def post_deployment():
                         from post_deployment import execute

@@ -38,8 +38,11 @@ class DistributedTestsTests(unittest.TestCase):
         hosts = plan([{'host': name + '.local', 'user': 'julian'} for name in ['a', 'b', 'c']])
         for host in hosts:
             self.assertIn('monitor', host['suites']); self.assertIn('map', host['suites'])
-        for suite in ['web', 'org-api', 'chat', 'workspace', 'identity', 'identity-python']:
+        for suite in ['web', 'chat', 'workspace', 'identity', 'identity-python']:
             self.assertEqual(sum(suite in host['suites'] for host in hosts), 1)
+        self.assertTrue(all('org-api' in host['suites'] for host in hosts))
+        self.assertEqual([host['org_api_shard'] for host in hosts],
+                         [{'index':i,'count':3} for i in range(1,4)])
 
     def test_github_urls_and_pinned_source_manifest(self):
         from github_sources import github_url,source_digest

@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import subprocess
 
-COMMON=('docker_utils/','lan-monitor/distributed_worker.py','lan-monitor/suite_cache.py',
+COMMON=('docker_utils/','lan-monitor/distributed_worker.py','lan-monitor/suite_cache.py','lan-monitor/visual_artifacts.py',
         'scripts/launcher_agent.py','scripts/launcher_registry.py','requirements.txt','pyproject.toml')
 INPUTS={
  'monitor':{'.':('lan-monitor/*.py','lan-monitor/tests/')},
@@ -14,6 +14,7 @@ INPUTS={
  'org-api':{'OrgPortal':('org-worker/','chat-worker/','shared/','docs/','scripts/','package.json','package-lock.json','tsconfig.json')},
  'chat':{'OrgPortal':('chat-worker/','shared/','package.json','package-lock.json','tsconfig.json')},
  'web':{'OrgPortal':('web/','shared/','docs/','scripts/','package.json','package-lock.json','tsconfig.json')},
+ 'visual':{'OrgPortal':('web/','shared/')},
  'identity':{'PIdP':('serverless/','frontend/','scripts/','shared/','package.json','package-lock.json','tsconfig.json')},
  'identity-python':{'PIdP':('*.py','tests/','scripts/','requirements*.txt','pyproject.toml','Dockerfile')},
  'p2p':{'.':('lan-monitor/p2p_network.py','lan-monitor/p2p_remote.py','peer-worker/','scripts/launcher_peers.py','scripts/launcher_discovery.py','scripts/peer_archive.py')},

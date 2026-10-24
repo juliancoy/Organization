@@ -34,6 +34,9 @@ SUITES = {
     'web': {'name': 'Portal frontend', 'cwd': 'OrgPortal/web', 'image': NODE,
             'prepare': ['sh', '-c', 'npm ci --prefix ../org-worker --omit=dev --no-audit --no-fund && npm ci --no-audit --no-fund'],
             'test': ['sh', '-c', 'npm test -- --maxWorkers=2 && npm run build']},
+    'visual': {'name': 'Portal layout renders', 'cwd': 'OrgPortal/web', 'image': BROWSER,
+               'prepare': ['npm', 'ci', '--no-audit', '--no-fund'],
+               'test': ['node', 'scripts/render-layout-fixtures.mjs', '/work/visual-artifacts']},
     'identity': {'name': 'Identity API and browser regression', 'cwd': 'PIdP/serverless', 'image': BROWSER,
                  'prepare': ['npm', 'ci', '--no-audit', '--no-fund'],
                  'test': ['sh', '-c', 'npm run typecheck && node --import tsx --test test/*.test.mjs test/*.test.ts']},
@@ -229,6 +232,13 @@ def main():
         status = run(work, suite_id, 'prepare', spec, manifest['id'], env)
         if status == 0:
             status = run(work, suite_id, 'test', spec, manifest['id'], env)
+        if suite_id == 'visual':
+            try:
+                from visual_artifacts import publish
+                publish(work / 'visual-artifacts', suite_id, emit)
+            except Exception as exc:
+                emit('failure', suite=suite_id, line='Visual artifacts: ' + clean(str(exc)))
+                if status == 0: status = 125
         emit('suite', suite=suite_id, status='passed' if status == 0 else 'timed_out' if status == 124 else 'failed',
              exit_code=status, duration_seconds=round(time.monotonic() - started, 3))
     emit('complete', observed=datetime.datetime.now(datetime.timezone.utc).isoformat())
