@@ -563,3 +563,29 @@ The dashboard's Next snapshot section and REST/MCP status expose per-worker stag
 state, revisions, missing images and errors. These changes require loading the new
 master code and the launcher update applied by Start. Editing source alone starts
 neither preparation nor a test run.
+
+### Attached Pixel 3 browser worker
+
+The coordinator discovers an ADB-authorized Pixel 3 over USB. Its device card is
+visible on the network map and the distributed-tests page, with connection state,
+last result, screenshot preview, and **Run Pixel tests**. It has one browser slot;
+Docker build and backend jobs stay on the computer workers.
+
+A full run includes the connected Pixel automatically. To request only the phone,
+use the device button, REST `POST /api/v1/master/test-requests` with
+`{"suites":["mobile"],"force":true}`, or MCP `request_tests` with those arguments.
+These use the existing commit-and-push request queue. An explicitly requested
+mobile run fails if the phone is absent; an ordinary full run without the phone
+continues with the computer fleet.
+
+The coordinator exports the published OrgPortal commit into an isolated directory,
+installs locked frontend dependencies in a Bookworm Node container, and serves
+synthetic application fixtures through a temporary USB reverse connection.
+Playwright controls actual Android Chrome through a local ADB forward. The initial
+checks cover organization, people and event screens, application links, viewport
+overflow, and a touch gesture opening a submission. This is real-device browser
+coverage; it does not yet cover interactive identity login or mobile WebRTC.
+
+The run owns a new Chrome tab and closes it afterward. It removes its USB forwards
+and restores the prior keep-awake setting. Screenshots, per-check durations and a
+JSON report are retained with the run; the device card links to that exact run.

@@ -282,7 +282,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
         elif path == '/api/mobile-tests':
             from mobile_worker import view
-            body=json.dumps(view()).encode()
+            data=view()
+            data['requests']=[{'id':r['id'],'status':r['status']} for r in distributed_tests.requests.records() if 'mobile' in r.get('selection',{}).get('suites',[]) and r['status'] in ('queued','running')]
+            body=json.dumps(data).encode()
             content_type='application/json'
         elif path == '/api/distributed-tests':
             try:

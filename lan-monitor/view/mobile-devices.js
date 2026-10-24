@@ -8,9 +8,10 @@ async function refresh(){
   if(!response.ok)throw Error('Mobile worker discovery unavailable');
   const data=await response.json(),device=data.devices?.[0],host=data.latest?.host,job=host?.jobs?.mobile;
   const running=job?.status==='running',connected=device?.connected;
+  queued=Boolean(data.requests?.some(r=>r.status==='queued'));
   if(running)queued=false;
   const card=node('div','','mobile-card');card.dataset.state=running?'running':connected?'ready':'offline';
-  const phone=node('div','','mobile-phone');phone.setAttribute('aria-hidden','true');phone.append(node('span',running?'▶':'✓'));
+  const phone=node('div','','mobile-phone');phone.setAttribute('aria-hidden','true');phone.append(node('span',running?'▶':job?.status==='passed'?'✓':'●'));
   const body=node('div','','mobile-body');body.append(node('div','PHYSICAL DEVICE · ANDROID CHROME','mobile-eyebrow'));
   const title=node('div','','mobile-title');title.append(node('h2',device?.name||'Pixel 3'),node('span',running?'Testing now':connected?'USB connected':'Disconnected','mobile-badge'));body.append(title);
   body.append(node('p',connected?`Android ${device.android} · USB to compai · 1 browser slot`:'Connect and authorize the Pixel over USB to run real-device checks.','mobile-meta'));
@@ -30,7 +31,7 @@ async function refresh(){
    try{const res=await fetch('/api/mobile-tests/start',{method:'POST'});if(!res.ok)throw Error(await res.text());queued=true;await refresh();}
    catch(error){result.textContent=error.message;}finally{requesting=false;}
   };
-  const link=node('a','Results & screenshots');link.href='/tests.html';link.className='mobile-results-link';
+  const link=node('a','Results & screenshots');link.href='/tests.html'+(data.latest?.run_id?'?run='+encodeURIComponent(data.latest.run_id)+'&host='+encodeURIComponent(host.host)+'#details-title':'');link.className='mobile-results-link';
   actions.append(button,link);body.append(actions);
   card.append(phone,body);
   const screenshot=job?.artifacts?.find(a=>a.name==='submission-touch.png')||job?.artifacts?.find(a=>a.name.endsWith('.png'));

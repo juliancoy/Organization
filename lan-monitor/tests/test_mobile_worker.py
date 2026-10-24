@@ -32,3 +32,14 @@ class MobileTests(TestCase):
         with patch('mobile_worker.discover',return_value={'devices':[]}):
             mobile=MobileRun(Mock())
             self.assertIsNone(mobile.host)
+
+    def test_mobile_only_run_publishes_sources_without_requiring_docker_agents(self):
+        from distributed import DistributedTests
+        service=SimpleNamespace(root=Path('/repo'),folder=Path('/reports'),lock=threading.RLock(),publication_lock=threading.Lock(),save=Mock(),running=True,
+            run={'id':'run','hosts':[],'selection':{'paths':[],'suites':['mobile']}})
+        phone={'host':'phone','status':'passed','jobs':{'mobile':{'status':'passed'}}}
+        with patch('github_sources.publish',return_value={}) as publish,patch('github_sources.source_digest',return_value='digest'),patch('mobile_worker.MobileRun',return_value=SimpleNamespace(host=phone,join=Mock())):
+            DistributedTests.execute(service)
+        self.assertEqual(service.run['status'],'passed')
+        self.assertEqual(len(publish.call_args.args),4)
+        self.assertFalse(service.running)

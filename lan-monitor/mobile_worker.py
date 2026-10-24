@@ -105,7 +105,7 @@ class MobileRun:
                      '--user',str(os.getuid())+':'+str(os.getgid()),'--cap-drop','ALL','--security-opt','no-new-privileges',
                      '-v',str(work)+':/work','-v',str(cache)+':/cache','-w','/work/web','-e','HOME=/tmp',
                      '-e','PLAYWRIGHT_CDP_URL=http://127.0.0.1:'+forward,'-e','MOBILE_SERVER_PORT='+str(port),
-                     image,'sh','-c','npm ci --cache /cache --no-audit --no-fund && node scripts/test-android.mjs']
+                     image,'timeout','900','sh','-c','npm ci --cache /cache --no-audit --no-fund && node scripts/test-android.mjs']
             job['phase']='dependencies and real-device checks';self.save()
             process=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
             done=threading.Event()
@@ -129,6 +129,7 @@ class MobileRun:
             publish(work/'mobile-artifacts','mobile',lambda kind,**fields:service.update(host,{'kind':kind,**fields}))
             report=work/'mobile-artifacts/mobile-report.json'
             if report.exists():job['checks']=json.loads(report.read_text())['checks']
+            if job.get('artifact_error'):raise RuntimeError('Mobile screenshot transfer failed')
             if code:raise RuntimeError('Android browser checks failed; see device report and screenshots')
             if not job['checks'] or any(c['status']!='passed' for c in job['checks']):raise RuntimeError('No complete passing Android result')
             job.update(status='passed',test_counts={'tests':len(job['checks']),'passed':len(job['checks']),'failed':0,'skipped':0})
