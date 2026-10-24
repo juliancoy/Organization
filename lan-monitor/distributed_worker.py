@@ -154,7 +154,14 @@ def run(work, suite_id, phase, spec, run_id, env, cancel=None):
         def watch_stop():
             while process.poll() is None:
                 if (work.parent / 'STOP').exists() or (cancel is not None and cancel.is_set()):
-                    os.killpg(process.pid, signal.SIGTERM)
+                    # docker run forwards SIGTERM to container PID 1, which may
+                    # ignore it. Remove the owned container before joining setup.
+                    if not native:
+                        try:
+                            subprocess.run(['docker', 'rm', '-f', name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+                        finally:
+                            if process.poll() is None:os.killpg(process.pid, signal.SIGKILL)
+                    elif process.poll() is None:os.killpg(process.pid, signal.SIGTERM)
                     return
                 time.sleep(0.25)
         threading.Thread(target=watch_stop, daemon=True).start()
