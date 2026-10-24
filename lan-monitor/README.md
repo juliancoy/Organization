@@ -464,3 +464,20 @@ credentials are used. Transfers use 8 KiB chunks with SHA-256 verification,
 run retention policy. Successful rendering still requires human visual review.
 See `OrgPortal/docs/LAYOUT_REVIEW.md` for direct visual review without starting
 the distributed workflow.
+
+### Worker Git object cache
+
+Agent jobs retain a bare cache per GitHub URL under the agent job root's
+`git-cache/` directory. Existing run checkouts can seed missing commits locally;
+only commits absent from both are fetched from GitHub. The exact pinned commit
+is verified, and per-repository file locks serialize cache updates. Each run
+gets a fresh detached checkout with its own index and refs; immutable Git objects
+are hardlinked locally where supported, with no external object alternates.
+Deleting an old run does not invalidate another checkout. Cache directories are
+independent of per-run retention.
+
+A shard always checks out Organization for the runner. OrgPortal is fetched only
+for organization/chat/web/visual suites; PIdP only for identity suites. Root-only
+monitor/map/workspace work does not fetch either application repository. The full
+pinned source manifest remains available for build metadata and provenance.
+Source events record `cache_hit` and whether an existing run seeded the cache.

@@ -2,6 +2,7 @@
 import base64
 import collections
 import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -283,30 +284,80 @@ class Agent:
             return {'id':ident,'status':'running'}
 
     def checkout(self,work,manifest,env,job):
-        def git(path,*args):
+        def git(path,*args,local=False,required=True):
             if (work.parent/'STOP').exists():raise InterruptedError('GitHub synchronization stopped')
-            result=subprocess.run(['git','-c','core.hooksPath=/dev/null','-c','protocol.file.allow=never',
+            result=subprocess.run(['git','-c','core.hooksPath=/dev/null',
+                                   '-c','protocol.file.allow='+('always' if local else 'never'),
                                    '-c','submodule.recurse=false','-C',str(path),*args],
                                   capture_output=True,text=True,env=env,timeout=180)
-            if result.returncode:raise RuntimeError('GitHub '+args[0]+' failed for '+str(path.relative_to(work) or '.')+'; check access and the pinned commit')
+            if result.returncode:
+                if not required:return None
+                raise RuntimeError('Source Git operation failed: '+args[0]+'; check access and the pinned commit')
             return result.stdout.strip()
-        for name in sorted(manifest['repositories'],key=lambda value:(len(Path(value).parts),value)):
+
+        target=next(host for host in manifest['hosts'] if host['host']==json.loads(self.config.read_text())['name'])
+        # The runner always comes from Organization; application repositories are
+        # selected by the actual shard, not by the whole fleet's manifest.
+        application={'org-api':'OrgPortal','chat':'OrgPortal','web':'OrgPortal',
+                     'visual':'OrgPortal','identity':'PIdP','identity-python':'PIdP'}
+        known=set(application)|{'monitor','map','workspace','p2p'}
+        needed={'.'}
+        for suite in target['suites']:
+            if suite not in known:raise ValueError('Unknown suite source requirements: '+suite)
+            if target.get('jobs',{}).get(suite,{}).get('status')=='reused':continue
+            if suite in application:needed.add(application[suite])
+        cache_root=self.root/'git-cache'
+        cache_root.mkdir(exist_ok=True,mode=0o700)
+
+        def event(name,repo,status,**details):
+            with self.lock:
+                job['sequence']+=1
+                job['events'].append((job['sequence'],{'kind':'source','repository':name,
+                    'commit':repo['commit'],'status':status,**details}))
+
+        for name in sorted(needed,key=lambda value:(len(Path(value).parts),value)):
             repo=manifest['repositories'][name];path=work/name
             if path.is_symlink():raise ValueError('Repository path must not be a symlink')
             path.mkdir(parents=True,exist_ok=True,mode=0o755)
-            if any(path.iterdir()):raise ValueError('GitHub checkout directory must be fresh: '+name)
-            with self.lock:
-                job['sequence']+=1
-                job['events'].append((job['sequence'],{'kind':'source','repository':name,'commit':repo['commit'],'status':'fetching'}))
-            git(path,'init','--quiet')
-            git(path,'remote','add','origin',repo['url'])
-            git(path,'fetch','--no-tags','--depth=1','origin',repo['commit'])
-            if git(path,'rev-parse','FETCH_HEAD')!=repo['commit']:raise ValueError('GitHub fetched a different commit')
+            if any(path.iterdir()):raise ValueError('Checkout directory must be fresh: '+name)
+            identity=hashlib.sha256(repo['url'].encode()).hexdigest()
+            cache=cache_root/(identity+'.git')
+            if cache.is_symlink():raise ValueError('Git cache must not be a symlink')
+            # One cache per repository URL, retained independently of run cleanup.
+            # No network operation occurs when the exact pinned commit is present.
+            with (cache_root/(identity+'.lock')).open('a') as lock:
+                fcntl.flock(lock,fcntl.LOCK_EX)
+                if not cache.exists():
+                    cache.mkdir(mode=0o700)
+                    git(cache,'init','--bare','--quiet')
+                    git(cache,'remote','add','origin',repo['url'])
+                if git(cache,'remote','get-url','origin')!=repo['url']:
+                    raise ValueError('Git cache origin differs from the source manifest')
+                cached=git(cache,'cat-file','-e',repo['commit']+'^{commit}',required=False) is not None
+                seeded=False
+                if not cached:
+                    for previous in sorted(self.root.glob('*/source'),reverse=True)[:30]:
+                        source=previous/name
+                        if source==path or source.is_symlink() or not (source/'.git').is_dir():continue
+                        if git(source,'remote','get-url','origin',required=False)!=repo['url']:continue
+                        if git(source,'cat-file','-e',repo['commit']+'^{commit}',required=False) is None:continue
+                        git(cache,'fetch','--no-tags','--depth=1',str(source),
+                            repo['commit']+':refs/cache/'+repo['commit'],local=True)
+                        cached=True;seeded=True;break
+                event(name,repo,'cached' if cached else 'fetching',cache_hit=cached,seeded_from_previous_run=seeded)
+                if not cached:
+                    git(cache,'fetch','--no-tags','--depth=1','origin',
+                        repo['commit']+':refs/cache/'+repo['commit'])
+                if git(cache,'rev-parse',repo['commit']+'^{commit}')!=repo['commit']:
+                    raise ValueError('Git cache returned a different commit')
+                # Local cloning hardlinks immutable objects where supported. Each
+                # run owns its refs/index/worktree and has no external alternates.
+                git(work,'clone','--local','--no-checkout',str(cache),str(path),local=True)
+            git(path,'remote','set-url','origin',repo['url'])
             git(path,'checkout','--detach','--force',repo['commit'])
-            if git(path,'rev-parse','HEAD')!=repo['commit'] or git(path,'status','--porcelain'):raise ValueError('Checkout verification failed: '+name)
-            with self.lock:
-                job['sequence']+=1
-                job['events'].append((job['sequence'],{'kind':'source','repository':name,'commit':repo['commit'],'status':'verified'}))
+            if git(path,'rev-parse','HEAD')!=repo['commit'] or git(path,'status','--porcelain'):
+                raise ValueError('Checkout verification failed: '+name)
+            event(name,repo,'verified',cache_hit=cached)
         (work/'distributed-plan.json').write_text(json.dumps(manifest))
 
     def worker(self, ident, work, index, job):
