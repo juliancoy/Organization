@@ -13,10 +13,11 @@ export async function reviewCodexUi(output){
  const threads=[{id:'design',name:'Improve the remote control workspace',cwd:'/workspace/Organization',updated_at:1792880000,activity:'running'},{id:'release',name:'Review the release checks',cwd:'/workspace/OrgPortal',updated_at:1792876000,activity:'idle'}]
  threads.push(...Array.from({length:18},(_,index)=>({id:'history-'+index,name:'Earlier workspace task '+(index+1),cwd:'/workspace/Organization',updated_at:1792800000-index*300,activity:'idle'})))
  for(const thread of threads){thread.display_title=thread.name;thread.name='Raw database name';thread.title='Initial prompt text'}
+ const lanFixture={updated:'2026-10-24T20:00:00Z',devices:['worker','queued','stopped','failed','passed'].map((name,index)=>({hostname:name+'.local',address:'10.0.0.'+(index+2),reachable:true})),network:{interface:'eth0',subnet:'10.0.0.0/24',gateway:'10.0.0.1',interfaces:[{name:'eth0',rx_mbps:1.25,tx_mbps:0.5,capacity_mbps:1000}]},run:{id:'fixture-run',status:'running',hosts:['running','queued','stopped','failed','passed'].map((status,index)=>({host:['worker','queued','stopped','failed','passed'][index]+'.local',status,jobs:[{name:'Fixture tests',status}]}))}};
  const server=createServer(async(req,res)=>{
   try{
    const url=new URL(req.url,'http://localhost')
-   if(url.pathname==='/api/v1/swarm/status'){res.setHeader('Content-Type','application/json');res.statusCode=statusUnauthorized?401:200;res.end(JSON.stringify({updated:'2026-10-24T20:00:00Z',devices:[{hostname:'worker.local',address:'10.0.0.2',reachable:true}],network:{interface:'eth0',subnet:'10.0.0.0/24',gateway:'10.0.0.1',interfaces:[{name:'eth0',rx_mbps:1.25,tx_mbps:0.5,capacity_mbps:1000}]},run:{id:'fixture-run',status:'running',hosts:[{host:'worker.local',status:'running',jobs:[{name:'Fixture tests',status:'running'}]}]}}));return}
+   if(url.pathname==='/api/v1/swarm/status'){res.setHeader('Content-Type','application/json');res.statusCode=statusUnauthorized?401:200;res.end(JSON.stringify(lanFixture));return}
    if(url.pathname==='/swarm-status'){res.setHeader('Content-Type','text/html');res.end(await readFile(join(view,'swarm-status.html')));return}
    if(url.pathname.startsWith('/api/')){
     res.setHeader('Content-Type','application/json')
@@ -25,23 +26,29 @@ export async function reviewCodexUi(output){
     res.end(JSON.stringify(item?{...item,model:'Codex',owner_connected:ownerConnected,messages:[{role:'user',text:'Make the remote workspace easier to scan and use on a phone.'},{role:'assistant',text:'I’ll organize the conversation list, clarify connection status and keep the instruction composer stable while updates arrive.\n\nThe active conversation will stay visible, and your draft will be preserved.'}]}:{threads,next_offset:null,machine:'Fixture workstation',connected:true}));return
    }
    if(url.pathname==='/'){res.setHeader('Content-Type','text/html');res.end('<!doctype html><html lang="en"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Codex UI review</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/codex.css"><body><main><section id="codex-context"></section></main><script type="module" src="/codex.js"></script></body></html>');return}
-   if(!['/style.css','/codex.css','/codex.js','/swarm-status.css','/swarm-status.js'].includes(url.pathname)){res.writeHead(404).end();return}
+   if(!['/style.css','/codex.css','/codex.js','/swarm-status.css','/swarm-status.js','/swarm-machines.js'].includes(url.pathname)){res.writeHead(404).end();return}
    res.setHeader('Content-Type',url.pathname.endsWith('.js')?'text/javascript':'text/css');res.end(await readFile(join(view,url.pathname.slice(1))))
   }catch(error){res.writeHead(500).end(error.message)}
  })
  await new Promise(r=>server.listen(0,'127.0.0.1',r));const base=`http://127.0.0.1:${server.address().port}`
- const browser=await chromium.launch({headless:true,...(process.env.CHROME_PATH?{executablePath:process.env.CHROME_PATH}:{})})
+ const browser=await chromium.launch({headless:true,args:['--disable-gpu'],...(process.env.CHROME_PATH?{executablePath:process.env.CHROME_PATH}:{})})
  try{for(const width of [390,1440]){
   const context=await browser.newContext({viewport:{width,height:1000},reducedMotion:'reduce'}),page=await context.newPage(),errors=[]
   page.on('pageerror',e=>errors.push(e.message))
-  await page.goto(base);
+  await page.goto(base);await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
   const mapLink=page.getByRole('link',{name:'Swarm status ↗',exact:true});assert.equal(await mapLink.getAttribute('href'),'/swarm-status');assert.equal(await mapLink.getAttribute('target'),'_blank');assert.equal(await mapLink.isVisible(),true)
   await page.screenshot({path:join(output,`codex-locked-${width}.png`),fullPage:false})
   await page.goto(base+'/swarm-status');await page.getByRole('heading',{name:'LAN status',exact:true}).waitFor()
-  await page.waitForFunction(()=>document.getElementById('interfaces')?.textContent.includes('1.25 Mb/s'))
+  await page.waitForFunction(()=>document.querySelectorAll('.machine-card').length===5)
+  for(const state of ['running','queued','stopped','failed','passed'])assert.equal(await page.locator('.machine-card[data-state='+state+']').count(),1)
   assert(await page.locator('#devices').textContent().then(text=>text.includes('worker.local')))
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false)
   await page.screenshot({path:join(output,`codex-lan-${width}.png`),fullPage:false})
+  await page.locator('.machine-card').first().focus();await page.keyboard.press('Enter');await page.getByRole('heading',{name:'worker.local',exact:true,level:2}).waitFor()
+  assert.equal(await page.locator('.machine-task[data-state=running]').count(),1)
+  await page.getByRole('button',{name:'Refresh',exact:true}).click();assert(page.url().includes('#machine='))
+  await page.getByRole('link',{name:'← All machines',exact:true}).click();await page.locator('.machine-card').first().waitFor();assert.equal(await page.locator('.machine-card:visible').count(),5)
+
   statusUnauthorized=true;await page.getByRole('button',{name:'Refresh',exact:true}).click()
   await page.waitForFunction(()=>document.getElementById('feedback')?.textContent.includes('Pair this browser'))
   assert.equal(await page.locator('#devices').textContent(),'');statusUnauthorized=false;await page.goto(base)

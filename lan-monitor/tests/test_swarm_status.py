@@ -16,14 +16,14 @@ class RemoteStatusBoundaryTests(unittest.TestCase):
             self.assertEqual(self.request('/api/v1/swarm/status'), 401)
             self.assertEqual(self.request('/api/v1/swarm/status', 'POST', 'owner'*16, 'https://compai.example', body={}), 404)
             snapshot.assert_not_called()
-            self.assertEqual(self.request('/api/v1/swarm/status', token='owner'*16), 200)
-            cookie='__Host-compai_device='+codex_devices.owner_session()
+            self.assertEqual(self.request('/api/v1/swarm/status', token='owner'*16), 401)
+            cookie='__Host-compai_device='+codex_devices.session(codex_devices.issue())
             self.assertEqual(self.request('/api/v1/swarm/status', cookie=cookie), 200)
             self.assertEqual(self.request('/api/v1/swarm/status', cookie=cookie, origin='https://evil.example'), 403)
 
     def test_unavailable_coordinator_returns_retryable_error(self):
         with patch('swarm_status.snapshot', side_effect=OSError('private upstream detail')):
-            self.assertEqual(self.request('/api/v1/swarm/status', token='owner'*16), 503)
+            self.assertEqual(self.request('/api/v1/swarm/status', cookie=self.cookie), 503)
 
 
 class SnapshotProjectionTests(unittest.TestCase):

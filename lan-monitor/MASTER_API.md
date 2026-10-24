@@ -282,13 +282,14 @@ The HTTPS tunnel routes only to the loopback service `codex_remote.py` on port
 8091. It does not publish the distributed test master or Docker. The existing
 LAN Codex route stays blocked.
 
-Unlock with the separate `~/.config/map-master/codex-token`; the master and
-launcher credentials do not authorize this page. The owner token is exchanged once for a revocable, 30-day device session in a
-Secure, HttpOnly, SameSite=Strict cookie. The owner token is then cleared from
-browser memory. A device can instead use a ten-minute, one-use pairing invitation
-issued locally on CompAI; its fragment is removed immediately, and the owner
-token is never sent to that device. Reloads restore the paired session. Lock
-revokes that browser. No owner credential is placed in a URL or browser storage. Read history, choose a thread, then Send a new
+Pair only the Galaxy using a ten-minute, one-use QR invitation issued locally
+on CompAI. Remote owner-token login is disabled. Each successful pairing
+atomically replaces all previous device sessions; only one session is authorized.
+The paired browser receives a revocable, 30-day Secure, HttpOnly, SameSite=Strict
+cookie. The invitation fragment is removed immediately, and the owner token is
+never sent to the device. Reloads restore the paired session; Lock revokes it.
+Replacing or revoking a session also invalidates its active transfer authorization.
+No owner credential is placed in a URL or browser storage. Read history, choose a thread, then Send a new
 message or Steer a running turn. Existing VS Code thread permissions apply.
 
 The public service requires its configured HTTPS Host, validates browser Origin

@@ -38,3 +38,12 @@ class DevicePairingTests(unittest.TestCase):
         for value in [None,False,0,{},[],"",'invalid']:
             with self.subTest(token_type=type(value).__name__),self.assertRaises(ValueError):devices.session(value)
         self.assertFalse(self.path.exists())
+
+    def test_new_pairing_atomically_replaces_the_only_remote_session(self):
+        first=devices.session(devices.issue())
+        next_pair=devices.issue()
+        self.assertTrue(devices.valid(first))
+        second=devices.session(next_pair)
+        self.assertFalse(devices.valid(first))
+        self.assertTrue(devices.valid(second))
+        self.assertEqual(len(json.loads(self.path.read_text())['sessions']),1)

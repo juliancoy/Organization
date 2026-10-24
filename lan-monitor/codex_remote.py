@@ -17,7 +17,7 @@ from master_api import authorized
 VIEW=Path(__file__).with_name('view')
 ASSETS={'/':'codex.html','/codex.html':'codex.html','/codex.js':'codex.js','/codex.css':'codex.css','/style.css':'style.css','/test-deployment.js':'test-deployment.js',
         '/test-deployment.css':'test-deployment.css','/swarm-control':'swarm-control.html','/swarm-control.svg':'swarm-control.svg'}
-ASSETS.update({'/swarm-status':'swarm-status.html','/swarm-status.js':'swarm-status.js','/swarm-status.css':'swarm-status.css'})
+ASSETS.update({'/swarm-status':'swarm-status.html','/swarm-status.js':'swarm-status.js','/swarm-status.css':'swarm-status.css','/swarm-machines.js':'swarm-machines.js'})
 API='/api/v1/master/codex/'
 
 class Handler(BaseHTTPRequestHandler):
@@ -45,12 +45,12 @@ class Handler(BaseHTTPRequestHandler):
         path=urlsplit(self.path).path
         if self.command=='GET' and path in ASSETS:
             name=ASSETS[path];return self.reply(200,(VIEW/name).read_bytes(),mimetypes.guess_type(name)[0] or 'application/octet-stream')
-        pairing=self.command=='POST' and path in ('/pair','/session','/logout')
+        pairing=self.command=='POST' and path in ('/pair','/logout')
         deployment=path in ('/api/v1/test-app/status','/api/v1/test-app/offer','/api/v1/test-app/download')
         valid_read=self.command=='GET' and (path=='/api/v1/swarm/status' or path==API+'threads' or path.startswith(API+'threads/') or path in ('/api/v1/test-app/status','/api/v1/test-app/download'))
         valid_write=self.command=='POST' and path in (API+'commands','/api/v1/test-app/offer')
         if not (valid_read or valid_write or pairing):return self.reply(404,{'error':{'message':'Not found'}})
-        if path not in ('/pair','/logout') and not (authorized(self.headers,'codex') or codex_devices.valid(self.device())):return self.reply(401,{'error':{'message':'Codex owner token required'}})
+        if path not in ('/pair','/logout') and not codex_devices.valid(self.device()):return self.reply(401,{'error':{'message':'Pair the Galaxy using the QR code on CompAI'}})
         body=None
         try:
             if valid_write or pairing:
@@ -68,7 +68,7 @@ class Handler(BaseHTTPRequestHandler):
                     if self.device():codex_devices.revoke(self.device())
                     return self.reply(200,{'ok':True},cookie='__Host-compai_device=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0')
                 if path=='/pair' and (not isinstance(body,dict) or set(body)!={'token'}):raise ValueError()
-                token=(codex_devices.session(body['token']) if path=='/pair' else codex_devices.owner_session())
+                token=codex_devices.session(body['token'])
                 return self.reply(200,{'ok':True},cookie='__Host-compai_device='+token+'; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age='+str(codex_devices.LIFETIME))
             if path=='/api/v1/swarm/status':
                 from swarm_status import snapshot
@@ -80,8 +80,8 @@ class Handler(BaseHTTPRequestHandler):
                     data,_=artifact()
                     return self.reply(200,data,'application/vnd.android.package-archive')
                 if path.endswith('/status'):return self.reply(200,manager().status())
-                device=self.device();credentials=dict(self.headers)
-                valid=lambda: codex_devices.valid(device) or authorized(credentials,'codex')
+                device=self.device()
+                valid=lambda: codex_devices.valid(device)
                 return self.reply(200,manager().offer(body,valid))
             code,value=codex_context.rest(self.command,path,parse_qs(urlsplit(self.path).query),body)
             self.reply(code,value)

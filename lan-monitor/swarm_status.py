@@ -32,6 +32,8 @@ def snapshot():
         'run': {'id': run.get('id'), 'status': run.get('status', 'No run recorded'),
                 'started': run.get('started'), 'finished': run.get('finished'),
                 'hosts': [{'host': host.get('host'), 'status': host.get('status'),
+                           'address': host.get('lan_address'), 'cpus': host.get('cpus'),
+                           'memory_mb': host.get('capacity', {}).get('memory_mb'),
                            'jobs': [{'name': job.get('name') or key, 'status': job.get('status')}
                                     for key, job in list(host.get('jobs', {}).items())[:100]]}
                           for host in run.get('hosts', [])[:64]]}}

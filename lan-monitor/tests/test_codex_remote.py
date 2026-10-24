@@ -17,6 +17,7 @@ class RemoteBoundaryTests(unittest.TestCase):
         p=Path(self.temp.name)/'token';p.write_text('owner'*16)
         env=patch.dict(os.environ,{'MAP_CODEX_TOKEN_FILE':str(p)});env.start();self.addCleanup(env.stop)
         device_path=patch.object(codex_devices,'FILE',Path(self.temp.name)/'devices.json');device_path.start();self.addCleanup(device_path.stop)
+        self.cookie='__Host-compai_device='+codex_devices.session(codex_devices.issue())
         self.server=ThreadingHTTPServer(('127.0.0.1',0),Handler);self.server.public_origin='https://compai.example'
         threading.Thread(target=self.server.serve_forever,daemon=True).start()
         self.addCleanup(self.server.server_close);self.addCleanup(self.server.shutdown)
@@ -38,9 +39,9 @@ class RemoteBoundaryTests(unittest.TestCase):
         with patch('codex_remote.codex_context.rest',return_value=(202,{'accepted':True})) as rest:
             path='/api/v1/master/codex/commands'
             for origin in [None,'https://evil.example']:
-                self.assertEqual(self.request(path,'POST','owner'*16,origin,body={'text':'x'}),403)
+                self.assertEqual(self.request(path,'POST',origin=origin,body={'text':'x'},cookie=self.cookie),403)
             rest.assert_not_called()
-            self.assertEqual(self.request(path,'POST','owner'*16,'https://compai.example',body={'text':'x'}),202)
+            self.assertEqual(self.request(path,'POST',origin='https://compai.example',body={'text':'x'},cookie=self.cookie),202)
             rest.assert_called_once()
     def test_deployment_requires_owner_and_same_origin_offer(self):
         from unittest.mock import Mock
@@ -50,11 +51,11 @@ class RemoteBoundaryTests(unittest.TestCase):
         broker=Mock();broker.status.return_value={'app':None,'peers':[]}
         broker.offer.return_value={'type':'answer','sdp':'fixture'}
         with patch('swarm_test_deployment.manager',return_value=broker):
-            self.assertEqual(self.request(endpoint+'status',token='owner'*16),200)
-            self.assertEqual(self.request(endpoint+'offer','POST','owner'*16,body={}),403)
-            self.assertEqual(self.request(endpoint+'offer','POST','owner'*16,'https://evil.example',body={}),403)
+            self.assertEqual(self.request(endpoint+'status',cookie=self.cookie),200)
+            self.assertEqual(self.request(endpoint+'offer','POST',body={},cookie=self.cookie),403)
+            self.assertEqual(self.request(endpoint+'offer','POST',origin='https://evil.example',body={},cookie=self.cookie),403)
             broker.offer.assert_not_called()
-            self.assertEqual(self.request(endpoint+'offer','POST','owner'*16,'https://compai.example',body={'type':'offer','sdp':'fixture'}),200)
+            self.assertEqual(self.request(endpoint+'offer','POST',origin='https://compai.example',body={'type':'offer','sdp':'fixture'},cookie=self.cookie),200)
             broker.offer.assert_called_once()
         self.assertEqual(self.request(endpoint+'../download',token='owner'*16),404)
 
@@ -86,6 +87,26 @@ class RemoteBoundaryTests(unittest.TestCase):
             self.assertTrue(broker.offer.call_args.args[1]())
         self.assertEqual(self.request('/logout','POST',origin='https://compai.example',body={},cookie=cookie),200)
         self.assertEqual(self.request('/api/v1/master/codex/threads',cookie=cookie),401)
+
+    def test_owner_bearer_and_session_minting_cannot_bypass_pairing(self):
+        with patch('codex_remote.codex_context.rest') as rest:
+            self.assertEqual(self.request('/api/v1/master/codex/threads',token='owner'*16),401)
+            self.assertEqual(self.request('/session','POST',token='owner'*16,origin='https://compai.example',body={}),404)
+            rest.assert_not_called()
+
+    def test_repairing_rejects_old_browser_and_revokes_live_transfer(self):
+        broker=Mock();broker.offer.return_value={'type':'answer','sdp':'fixture'}
+        with patch('swarm_test_deployment.manager',return_value=broker):
+            self.assertEqual(self.request('/api/v1/test-app/offer','POST',origin='https://compai.example',body={'type':'offer','sdp':'fixture'},cookie=self.cookie),200)
+            authorized_transfer=broker.offer.call_args.args[1]
+            self.assertTrue(authorized_transfer())
+            pair=codex_devices.issue()
+            self.assertEqual(self.request('/pair','POST',origin='https://compai.example',body={'token':pair}),200)
+            replacement=self.last_cookie.split(';',1)[0]
+            self.assertFalse(authorized_transfer())
+        with patch('codex_remote.codex_context.rest',return_value=(200,{'threads':[]})):
+            self.assertEqual(self.request('/api/v1/master/codex/threads',cookie=self.cookie),401)
+            self.assertEqual(self.request('/api/v1/master/codex/threads',cookie=replacement),200)
 
 class CommandDeliveryTests(unittest.TestCase):
     def test_new_message_carries_target_thread_id(self):
