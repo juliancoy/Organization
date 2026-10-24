@@ -66,3 +66,8 @@ header{height:auto;min-height:86px;flex-wrap:wrap;padding-top:14px;padding-botto
 .embedded-map-controls .geo-control{width:auto;font-size:11px;padding:7px 9px;background:#17232ced}.embedded-map-controls .geo-control input{margin:0}
 
 #host-terminal,#container-hover,#container-hover[data-view="website"]{position:static;inset:auto;z-index:auto;width:auto;max-width:100%;max-height:none;box-shadow:none;box-sizing:border-box;margin:20px 0;padding:20px;overflow:visible}#host-terminal{grid-column:1/-1;min-width:0;background:#0b131b;border:1px solid #374650;border-radius:12px}#host-terminal>strong,#container-hover>strong{padding-right:0}#container-hover{border:1px solid #374650}.layout>#host-terminal{margin:20px}#host-terminal .preview-hint{color:#9eb2bd!important}
+
+#cpu-readout .cpu-host,#cpu-readout small,#cpu-coverage{font-size:14px;line-height:1.6;color:#c5d6df}
+.embedded-map-controls button,.embedded-map-controls .geo-control,.embedded-map-controls span{font-size:13px;min-height:38px}
+.edge-hover,.edge-hover small,.edge-hover-scope,.edge-hover-artefact strong,.edge-hover-artefact>span{font-size:13px;line-height:1.6;color:#c7d8e2}
+.embedded-lan .inspector-panel{font-size:14px;line-height:1.6}

@@ -623,7 +623,7 @@ function frame(time) {
       ctx.arc(p.x, p.y, radius + 12, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.min(1, node.test.transfer.mbps / 1000)); ctx.stroke(); ctx.lineWidth = 1;
     }
     if ((labels && matches(node)) || node.perspective || node.you) {
-      ctx.font = '12px system-ui';
+      ctx.font = '14px system-ui';
       const important = node.perspective || node.you;
       const text = ((layer==='ip'&&!allConnections)&&node.ip_hop ? 'IP hop '+node.ip_hop+' · '+label(node) : label(node)) + (node.you ? ' · You' : '');
       const textLimit=(layer==='ip'&&!allConnections)?140:180;
@@ -643,7 +643,7 @@ function frame(time) {
       ctx.textAlign = 'center'; ctx.fillStyle = '#d7e3eb';
       ctx.fillText(text, box.x+box.w/2, box.y+14, textLimit);
       if (important) {
-        ctx.font = '10px system-ui'; ctx.fillStyle = '#8fa6b5';
+        ctx.font = '12px system-ui'; ctx.fillStyle = '#bdcdd7';
         ctx.fillText((node.ip || '')+(!allConnections&&layer!=='ip'&&node.ip_hop ? ' · IP hop '+node.ip_hop : node.id===data.router?.mac ? ' · L2 bridge' : ''), box.x+box.w/2, box.y+30,textLimit);
         if (node.test) {
           ctx.fillStyle = node.test.status === 'passed' ? '#a6dfc4' : '#a5afba';
