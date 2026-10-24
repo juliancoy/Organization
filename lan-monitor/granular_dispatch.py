@@ -28,6 +28,7 @@ def execute(service, hosts, images):
             host['active_tasks'] = []
         service.save()
 
+    preparation_bases=list(dict.fromkeys(SUITES[t].get('base',t) for t in run['pending_tasks']))
     network=EarlyP2P(service,hosts,images,include_p2p)
 
     if not tasks:
@@ -61,7 +62,7 @@ def execute(service, hosts, images):
                 host.update(status='preparing', preparation='Preparing persistent file worker')
                 service.save()
             # Machines initialize independently. No fleet-wide image/setup barrier.
-            bases = list(dict.fromkeys(SUITES[t].get('base', t) for t in tasks))
+            bases = preparation_bases
             for image in dict.fromkeys([PYTHON] + [SUITES[b]['image'] for b in bases]):
                 if run.get('stop_requested'):return
                 images.ensure(image, [host])

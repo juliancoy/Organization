@@ -1,5 +1,5 @@
-import {NodeLines} from './node-lines.js';
-const nodeLines=new NodeLines();
+import {EdgeLines} from './edge-lines.js';
+const edgeLines=new EdgeLines();
 import {selectHostTerminal} from './host-terminal.js';
 import {networkView, label, edgeStyle, nodeVisual, trafficParticles} from './model.js';
 import {loadSettings,saveSettings} from './settings.js';
@@ -154,7 +154,7 @@ function sync() {
   }
   edges = view.edges;
   edgeHistory.update(edges,nodes,data);
-  nodeLines.update(nodes,data);
+  edgeLines.update(edges);
   if (gesture?.node) gesture.node = nodes.find(node => node.id === gesture.node.id);
   document.body.dataset.ready = 'true';
   document.body.dataset.viewer = data.viewer.id;
@@ -568,21 +568,9 @@ function frame(time) {
     const adjacent = edge.a === selectedId || edge.b === selectedId;
     ctx.globalAlpha = matches(a) && matches(b) ? adjacent ? .95 : .5 : .12;
     ctx.lineCap = 'round';
-    ctx.strokeStyle = trafficColor || '#40525f'; ctx.lineWidth = style.outer;
-    ctx.setLineDash(['outbound','observed-connection','provider-relationship'].includes(edge.kind) ? [2, 7] : edge.kind?.startsWith('route') ? [9, 6] : edge.capacity_mbps ? [] : [5, 7]);
-    ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
-    ctx.setLineDash([]);
+    edgeLines.draw(ctx,edge,p,q,nodeScreenRadius(a),nodeScreenRadius(b),view.id);
     const chart=edgeChart(edge,edgeHistory.get(edge),p,q,nodeScreenRadius(a),nodeScreenRadius(b));
-    if(chart){
-      nextEdgeCharts.push(chart);
-      const active=hoveredEdge&&edgeID(hoveredEdge.edge)===edgeID(edge);
-      ctx.save();ctx.globalAlpha*=active?1:.9;ctx.strokeStyle=style.color;ctx.lineWidth=active?2.6:1.6;
-      for(const segment of chart.segments){
-        ctx.beginPath();segment.forEach((point,i)=>i?ctx.lineTo(point.x,point.y):ctx.moveTo(point.x,point.y));ctx.stroke();
-        if(segment.length===1){ctx.fillStyle=style.color;ctx.beginPath();ctx.arc(segment[0].x,segment[0].y,2,0,Math.PI*2);ctx.fill();}
-      }
-      ctx.restore();
-    }
+    if(chart)nextEdgeCharts.push(chart);
     // Only measured endpoint flows establish a traffic direction.
     for (const flow of trafficParticles(edge)) {
       const start = flow.a === edge.a ? p : q, end = flow.a === edge.a ? q : p;
@@ -611,7 +599,11 @@ function frame(time) {
     const p = screen(node), radius = nodeScreenRadius(node);
     const alpha = !matches(node) ? .12 : node.visibility === 'inventory' ? .5 : 1;
     ctx.globalAlpha = alpha;
-    nodeLines.draw(ctx,node,p,radius);
+    ctx.fillStyle=color(node);ctx.beginPath();ctx.arc(p.x,p.y,radius,0,Math.PI*2);ctx.fill();
+    ctx.strokeStyle=node.visual.ring;ctx.lineWidth=2.5;ctx.setLineDash(node.visual.health==='unknown'?[3,4]:[]);
+    ctx.beginPath();ctx.arc(p.x,p.y,radius+5,0,Math.PI*2);ctx.stroke();ctx.setLineDash([]);
+    if(node.perspective){ctx.strokeStyle='#ecf1f5';ctx.beginPath();ctx.arc(p.x,p.y,radius+10,0,Math.PI*2);ctx.stroke();}
+    ctx.lineWidth=1;
     if ((labels && matches(node)) || node.perspective || node.you) {
       ctx.font = '14px system-ui';
       const important = node.perspective || node.you;

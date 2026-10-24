@@ -259,8 +259,8 @@ does not start a server, container, test, or deployment.
 
 ### Cross-device WebRTC tests
 
-`Start all tests` includes a coordinated **Cross-device WebRTC P2P** suite after
-application shards finish. It requires at least two distinct authenticated agent
+`Start all tests` includes a coordinated **Cross-device WebRTC P2P** suite alongside
+application file jobs. It starts as soon as its browser images are ready. It requires at least two distinct authenticated agent
 machine identities. Each participant runs a disposable, non-root browser container with
 all Linux capabilities dropped. This dedicated suite uses the host network for
 real ICE connectivity; ordinary application test containers remain offline.
@@ -459,7 +459,7 @@ Only a recorded actual pass with the same fingerprint is reused. A newer execute
 
 This scheduling decision happens after source publication and image/agent verification, so preparation may still perform network work even when suites are reused. An already-running run keeps its pinned implementation; this policy applies to subsequent runs. The first run with fingerprints creates passing baselines for later reuse.
 
-Worker preparation is independent: after shared source publication and initial identity verification, each machine receives its required images and starts its ordinary suites as soon as it is ready. A slow or failed transfer on another machine does not block it. Shared image refresh/publication happens once; delivery runs outside that image lock. Cross-machine P2P checks wait for the participant preparation and ordinary jobs to finish.
+Worker preparation is independent: after shared source publication and initial identity verification, each machine receives its required images and starts its ordinary suites as soon as it is ready. A slow or failed transfer on another machine does not block it. Shared image refresh/publication happens once; delivery runs outside that image lock. Cross-machine P2P prepares its browsers concurrently with ordinary workers and does not wait for application jobs to finish.
 
 **Direct traffic (ignore hops)** is available on the full LAN map and the embedded distributed-tests map. It draws every retained observed source/destination relationship directly, including incoming-only flows, with intermediate route segments and provider grouping hidden. The preference is saved in the browser and honored by both views. Remote endpoints remain visible in the embedded map when this mode is enabled. It changes presentation, not packet capture coverage or physical connectivity.
 
@@ -471,7 +471,12 @@ Ordinary checks run once across the fleet, including the coordinator, rather tha
 repeating suites on every machine. Only WebRTC remains a coordinated fleet check.
 
 Each machine keeps one agent session and checkout for the run. Dependency installs
-are serialized per package tree and reused by later files. The master feeds the
+run in one background installer per worker and are reused by later files. Dependency-free
+components become ready first. The master only assigns files whose dependencies are
+ready, so installation waits do not consume test slots. It reserves 1 CPU and
+1536 MiB for the installer, plus 2 CPUs and 2048 MiB while P2P is active, releasing
+each reservation when that activity finishes. Per-component installation durations
+are recorded on each host as `dependency_preparation`. The master feeds the
 next fitting jobs whenever CPU and memory reservations are released. Recent file
 execution times prioritize long jobs; there is no permanent suite assignment or
 fleet-wide preparation barrier. CPU reservations match container limits; memory
