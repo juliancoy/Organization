@@ -87,6 +87,9 @@ class TestRequests:
                     if not run.get('finished'): return
                     record.update(status=run['status'], finished_at=run['finished'],
                                   duration_seconds=max(0, datetime.fromisoformat(run['finished']).timestamp() - datetime.fromisoformat(run['started']).timestamp()))
+                    from runtime_stats import seconds
+                    record['queue_seconds']=seconds(record['submitted_at'],record.get('started_at'))
+                    record['total_seconds']=seconds(record['submitted_at'],record['finished_at'])
                     self.save(record)
                 if record['status'] != 'queued': continue
                 if self.tests.runner.running or any(r.running for r in self.tests.reruns.values()): return

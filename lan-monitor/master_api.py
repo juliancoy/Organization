@@ -13,6 +13,7 @@ TOKEN_FILE=Path.home()/'.config/map-master/api-token'
 API='/api/v1/master'
 RUN_ID={'type':'string','pattern':r'^[0-9TZ-]+-[a-f0-9]{8}$','description':'Recorded run ID; omit to select the latest run.'}
 TOOLS=[
+ ('get_runtime_stats','Test runtime statistics','Read persistent per-task and per-machine runtime samples, median and p95. Reused results are excluded from timing percentiles.',{'host':{'type':'string','minLength':1,'maxLength':253},'task':{'type':'string','minLength':1,'maxLength':100}},[]),
  ('create_backups','Back up enrolled devices','Replicate the latest complete DR snapshot as encrypted, verified persistent copies on every enrolled test device. Private decryption keys stay on the recovery host.',{},[]),
  ('get_backups','Backup status','Read persistent per-device backup progress, verification receipts and failures.',{},[]),
  ('request_tests','Request focused tests','Queue tests for repository-relative code paths or named suites. COMMITS AND PUSHES current sources before execution. Uses available workers; no deployment or email checks.',{'paths':{'type':'array','items':{'type':'string'},'maxItems':100},'suites':{'type':'array','items':{'type':'string'},'maxItems':100},'force':{'type':'boolean','default':False}},[]),
@@ -83,6 +84,9 @@ class MasterAPI:
                         from fleet_backups import FleetBackups
                         self._backups=FleetBackups(self.tests)
                 return self._backups.start() if name=='create_backups' else self._backups.view()
+            if name=='get_runtime_stats':
+                from runtime_stats import report
+                return report(self.tests.runner.folder,**args)
             if name=='request_tests':return self.tests.requests.submit(**args)
             if name=='list_test_requests':return self.tests.requests.view()
             if name=='get_test_request':return self.tests.requests.view(args['request_id'])
@@ -152,6 +156,7 @@ class MasterAPI:
             return codex_context.rest(method,path,query,body)
         if method=='GET':
             if path==API+'/backups':return 200,self.call('get_backups')
+            if path==API+'/runtime-stats':return 200,self.call('get_runtime_stats',parameters(('host','task')))
             if path==API+'/test-requests':return 200,self.call('list_test_requests')
             if path.startswith(API+'/test-requests/'):
                 return 200,self.call('get_test_request',{'request_id':path.rsplit('/',1)[1]})

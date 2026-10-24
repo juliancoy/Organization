@@ -106,6 +106,11 @@ class DistributedTests:
         temporary.chmod(0o600)
         temporary.replace(path)
         self.last_save = time.monotonic()
+        if self.run.get('finished'):
+            from runtime_stats import record
+            try:record(self.folder,self.run)
+            except Exception:
+                __import__('logging').exception('Unable to persist runtime statistics for %s',self.run['id'])
 
     def view(self, ident=None):
         with self.lock:
@@ -195,6 +200,11 @@ class DistributedTests:
                         job.pop('phase_started',None)
                 if kind == 'suite':
                     job.update({key: event[key] for key in ('status', 'exit_code', 'duration_seconds') if key in event})
+                    if event.get('timing_source')=='worker_monotonic' and isinstance(event.get('phase_seconds'),dict):
+                        from runtime_stats import number
+                        job['phase_seconds']={k:v for k,v in event['phase_seconds'].items() if k in ('test','prepare','waiting_for_dependencies') and number(v) is not None}
+                        job['timing_source']='worker_monotonic'
+                    if job['status'] in FINAL:job['finished']=now()
                     if job['status'] == 'passed' and job.get('artifact_error'):
                         job['status'] = 'failed'
                     if job['status'] == 'running':

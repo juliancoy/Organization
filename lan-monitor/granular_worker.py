@@ -32,7 +32,8 @@ class Dependencies:
                 self.results={name:0 for name in prepared.get('packages',[])}
 
 
-    def ensure(self, task, spec):
+    def ensure(self, task, spec, timings=None):
+        timings = timings if timings is not None else {}
         base = spec.get('base', task)
         # Shared package trees have one installer. Install development dependencies
         # once, avoiding npm ci deleting another file job's running dependencies.
@@ -45,7 +46,9 @@ class Dependencies:
             with self.guard:
                 lock = self.locks.setdefault(package, threading.Lock())
             emit('phase', suite=task, phase='waiting_for_dependencies')
+            waiting=time.monotonic()
             with lock:
+                timings['waiting_for_dependencies']=timings.get('waiting_for_dependencies',0)+time.monotonic()-waiting
                 if package not in self.results:
                     setup = {**spec, 'cwd': SUITES[package]['cwd']}
                     if package in ('chat', 'org-api', 'web', 'identity'):
@@ -57,7 +60,9 @@ class Dependencies:
                         setup['prepare'] = ['sh', '-c', command]
                     else:
                         setup['prepare'] = SUITES[package].get('prepare')
-                    self.results[package] = run(self.work, task, 'prepare', setup, self.manifest['id'], self.env)
+                    preparing=time.monotonic()
+                    try:self.results[package] = run(self.work, task, 'prepare', setup, self.manifest['id'], self.env)
+                    finally:timings['prepare']=timings.get('prepare',0)+time.monotonic()-preparing
                 if self.results[package]:
                     return self.results[package]
         return 0
@@ -87,8 +92,9 @@ def execute(work, manifest, target, env, specs):
         spec['image'] = target['images'][spec['image']]
         emit('suite', suite=task, name=spec['name'], status='running')
         code = 125
+        timings={'waiting_for_dependencies':0.0,'prepare':0.0}
         try:
-            code = dependencies.ensure(task, spec)
+            code = dependencies.ensure(task, spec, timings)
             if not code:
                 if spec.get('base') == 'web' and spec.get('file'):
                     # Vitest CLI paths are substring filters; an exact include
@@ -101,7 +107,9 @@ def execute(work, manifest, target, env, specs):
                 if spec.get('check'):
                     # Metadata was generated in setup; don't rewrite it under readers.
                     spec['test'] = ['npm', '--ignore-scripts', 'run', spec['check']]
-                code = run(work, task, 'test', spec, manifest['id'], env)
+                testing=time.monotonic()
+                try:code = run(work, task, 'test', spec, manifest['id'], env)
+                finally:timings['test']=time.monotonic()-testing
             if task == 'visual':
                 from visual_artifacts import publish
                 publish(work / 'visual-artifacts', task, emit)
@@ -109,7 +117,8 @@ def execute(work, manifest, target, env, specs):
             emit('failure', suite=task, line=clean(str(error)))
             code = 125
         emit('suite', suite=task, status='stopped' if (work.parent/'STOP').exists() else 'passed' if code == 0 else 'timed_out' if code == 124 else 'failed',
-             exit_code=code, duration_seconds=round(time.monotonic() - started, 3))
+             exit_code=code, duration_seconds=round(time.monotonic() - started, 3),
+             phase_seconds={key:round(value,6) for key,value in timings.items()},timing_source='worker_monotonic')
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=limits['cpus']) as pool:
         while not (work.parent / 'STOP').exists():
