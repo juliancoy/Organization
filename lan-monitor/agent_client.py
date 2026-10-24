@@ -54,17 +54,21 @@ class AgentClient:
     def close(self):
         with self.connection_lock:self.connection.close()
 
-    def upload(self,path,stopped=lambda:False):
+    def upload(self,path,stopped=lambda:False,max_bytes_per_second=None):
+        if max_bytes_per_second is not None and max_bytes_per_second<=0:raise ValueError('Upload rate must be positive')
         path=Path(path)
         with path.open('rb') as stream:digest=hashlib.file_digest(stream,'sha256').hexdigest()
         token=self.call('upload.begin',{'size':path.stat().st_size,'sha256':digest})['upload']
-        offset=0
+        offset=0;started=time.monotonic()
         with path.open('rb') as stream:
             while data:=stream.read(1024*1024):
                 if stopped():raise InterruptedError('Agent upload stopped')
                 result=self.call('upload.chunk',{'upload':token,'offset':offset,'data':base64.b64encode(data).decode()},timeout=120)
                 offset+=len(data)
                 if result['offset']!=offset:raise RuntimeError('Agent upload offset mismatch')
+                if max_bytes_per_second:
+                    delay=offset/max_bytes_per_second-(time.monotonic()-started)
+                    if delay>0:time.sleep(delay)
         self.call('upload.finish',{'upload':token},timeout=180)
         return token
 

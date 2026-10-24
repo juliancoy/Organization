@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock,patch
 from master_api import APIError,MasterAPI,tool_definitions
 from fleet_backups import FleetBackups
 
@@ -28,6 +28,19 @@ class FleetMasterTests(unittest.TestCase):
             self.assertEqual(result['status'],'verified')
             self.assertEqual(result['receipt']['path'],'/mnt/recovery/generation')
             self.assertEqual(result['bytesStored'],100)
+
+    def test_upload_rate_bounds_authenticated_request_frequency(self):
+        from agent_client import AgentClient
+        with tempfile.TemporaryDirectory() as temporary:
+            path=Path(temporary)/'ciphertext';path.write_bytes(b'x'*1024)
+            client=object.__new__(AgentClient)
+            def call(op,args,**kwargs):
+                return {'upload':'token'} if op=='upload.begin' else {'offset':1024} if op=='upload.chunk' else {'verified':True}
+            client.call=call
+            with patch('agent_client.time.monotonic',return_value=0),patch('agent_client.time.sleep') as sleep:
+                self.assertEqual(client.upload(path,max_bytes_per_second=1024),'token')
+                sleep.assert_called_once_with(1)
+            with self.assertRaises(ValueError):client.upload(path,max_bytes_per_second=0)
 
     def test_coordinator_restart_marks_unfinished_transfer_for_resume(self):
         with tempfile.TemporaryDirectory() as temporary:

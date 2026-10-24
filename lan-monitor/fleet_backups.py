@@ -46,7 +46,7 @@ class FleetBackups:
                 row={**recorded.get(name,{}),'host':name,'agent_endpoint':'http://'+address+':8790','local':name==config['name'],'lan_address':address}
                 hosts.append(row)
             self.update(status='replicating',snapshot=snapshot.name,encryptedBytes=sum(p['size'] for p in manifest['parts']),parts=len(manifest['parts']),devices={h['host']:{'status':'queued','bytesStored':0} for h in hosts},message='Replicating encrypted archives through authenticated test agents')
-            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:list(pool.map(lambda h:self.device(h,folder,manifest),hosts))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:list(pool.map(lambda h:self.device(h,folder,manifest),hosts))
             states=[v['status'] for v in self.state['devices'].values()]
             self.update(status='complete' if all(s=='verified' for s in states) else 'partial',durationSeconds=round(time.monotonic()-started,2),finishedAt=dt.datetime.now(dt.timezone.utc).isoformat())
         except Exception as error:
@@ -78,7 +78,8 @@ class FleetBackups:
             self.update(name,status='copying',machine=status['machine'],bytesStored=stored,path=begin['path'])
             for part in manifest['parts']:
                 if part['sha256'] not in missing:continue
-                token=client.upload(folder/(part['sha256']+'.enc'))
+                # Stay below the agent's bounded 120-second replay-cache quota.
+                token=client.upload(folder/(part['sha256']+'.enc'),max_bytes_per_second=24*1024**2)
                 client.call('backup.put',{'snapshot':manifest['snapshot'],'sha256':part['sha256'],'upload':token},timeout=120)
                 stored+=part['size'];self.update(name,bytesStored=stored)
             self.update(name,status='verifying')
