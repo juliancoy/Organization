@@ -510,7 +510,7 @@ class Agent:
                     git(path,'config','remote.origin.partialclonefilter','blob:none')
                 git(path,'fetch','--no-tags','--depth=1',*(['--filter=blob:none'] if sparse else []),'origin' if sparse else str(cache),repo['commit'],local=True)
             if sparse:
-                git(path,'sparse-checkout','set','--no-cone','/run.py','/usa/','/css/','/tests/usajobs-mobile.test.cjs',local=True)
+                git(path,'sparse-checkout','set','--no-cone','/run.py','/usa/','/css/','/js/reusableComponents.js','/tests/usajobs-mobile.test.cjs',local=True)
             # Resolve sparse blobs through the verified local cache, which can
             # fetch missing objects from its pinned GitHub promisor remote.
             git(path,'checkout','--detach','--force',repo['commit'],local=sparse)

@@ -18,7 +18,7 @@ class CheckoutTests(unittest.TestCase):
                 return subprocess.check_output(['git','-c','core.hooksPath=/dev/null','-C',str(path),*args],stderr=subprocess.PIPE,text=True).strip()
             source=root/'fixture';source.mkdir();git(source,'init','--quiet')
             (source/'fixture.txt').write_text('pinned content\n')
-            for name in ('usa/index.html','css/master.css','run.py','tests/usajobs-mobile.test.cjs','unrelated-media.bin'):
+            for name in ('usa/index.html','css/master.css','js/reusableComponents.js','run.py','tests/usajobs-mobile.test.cjs','unrelated-media.bin'):
                 target=source/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_text('fixture')
             git(source,'add','.');git(source,'-c','user.name=Fixture','-c','user.email=fixture@example.test','commit','-qm','fixture')
             commit=git(source,'rev-parse','HEAD');url='https://github.com/example/fixture.git'
