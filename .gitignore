@@ -81,3 +81,5 @@
 !/scripts/launcher_registry.py
 !/onboard_node.sh
 !/scripts/onboard_node.py
+
+!/tests/test_browser_transport.py

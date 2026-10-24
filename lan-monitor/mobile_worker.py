@@ -89,14 +89,14 @@ class MobileRun:
             if archive.wait(timeout=10):raise RuntimeError('Pinned source export failed')
             host['source_sync']={'OrgPortal':{'commit':repo['commit'],'status':'verified'}}
             # USB debugging remains local; the phone only sees the synthetic server.
-            adb('shell','input','keyevent','KEYCODE_WAKEUP',serial=serial)
-            if not self.device.get('browser_ready'):
-                adb('shell','am','start','-a','android.intent.action.VIEW','-d','about:blank','com.android.chrome',serial=serial)
             forward=adb('forward','tcp:0','localabstract:chrome_devtools_remote',serial=serial)
             if not forward.isdigit():raise RuntimeError('Could not allocate Chrome debugging forward')
             port=free_port();adb('reverse','tcp:'+str(port),'tcp:'+str(port),serial=serial)
             stay=adb('shell','settings','get','global','stay_on_while_plugged_in',serial=serial)
             adb('shell','settings','put','global','stay_on_while_plugged_in','3',serial=serial)
+            adb('shell','input','keyevent','KEYCODE_WAKEUP',serial=serial)
+            adb('shell','wm','dismiss-keyguard',serial=serial)
+            adb('shell','am','start','-a','android.intent.action.VIEW','-d','about:blank','com.android.chrome',serial=serial)
             from docker_utils import ensure_image
             image=ensure_image('node:22-bookworm')
             cache=service.folder.parent/'mobile-npm-cache';cache.mkdir(exist_ok=True)

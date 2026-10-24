@@ -35,6 +35,24 @@ def verify_controller(value, config):
 
 
 
+
+def browser_request(container,path,data,method):
+    # Execute inside the owned browser namespace: rootless host networking is
+    # separate from the physical host's loopback namespace.
+    script="""import json,sys,urllib.request,urllib.error
+value=json.loads(sys.argv[1])
+body=json.dumps(value['data']).encode() if value['data'] is not None else None
+request=urllib.request.Request('http://127.0.0.1:4449'+value['path'],data=body,method=value['method'],headers={'Content-Type':'application/json'})
+try:
+ response=urllib.request.urlopen(request,timeout=150)
+except urllib.error.HTTPError as error:
+ response=error
+with response:print(response.read(4*1024*1024+1).decode())
+"""
+    code,output=container.exec_run(['/usr/bin/python3','-c',script,json.dumps({'path':path,'data':data,'method':method})],user='1200:1201')
+    if code or len(output)>4*1024*1024:raise RuntimeError('Owned browser WebDriver request failed')
+    return json.loads(output)
+
 def worker_policy(config, power_root=Path('/sys/class/power_supply')):
     """Local owner policy; unknown laptop power fails closed in automatic mode."""
     path=Path(config).parent/'worker-policy.json'
@@ -289,11 +307,9 @@ class Agent:
             if not isinstance(path,str) or not re.fullmatch(r'/(?:status|session(?:/[A-Za-z0-9_/-]+)?)',path):raise ValueError('Invalid WebDriver path')
             method=args.get('method','POST')
             if method not in ('GET','POST','DELETE'):raise ValueError('Invalid WebDriver method')
-            data=json.dumps(args['data']).encode() if args.get('data') is not None else None
-            request=urllib.request.Request('http://127.0.0.1:4449'+path,data=data,method=method,headers={'Content-Type':'application/json'})
-            try:
-                with urllib.request.urlopen(request,timeout=150) as response:return json.load(response)
-            except urllib.error.HTTPError as error:return json.load(error)
+            record=json.loads((folder/'browser.json').read_text())
+            with self.client() as client:
+                return browser_request(client.containers.get(record['container']),path,args.get('data'),method)
         if op == 'p2p.stop':
             ident=args['id']+'-p2p';folder=self.folder(ident)
             self.remove_containers(args['id'])
