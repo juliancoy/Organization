@@ -1,4 +1,4 @@
-import {showHostTerminal,hideHostTerminal,pinHostTerminal} from './host-terminal.js';
+import {selectHostTerminal} from './host-terminal.js';
 import {networkView, label, edgeStyle, nodeVisual, trafficParticles} from './model.js';
 import {loadSettings,saveSettings} from './settings.js';
 import {groupNetwork} from './providers.js';
@@ -456,11 +456,11 @@ canvas.onpointerdown = event => {
 canvas.onpointermove = event => {
   if (!gesture) {
     const point=position(event),node=hit(point);
-    if(node){clearEdgeHover();if(node.hostname)showHostTerminal(node.hostname);else hideHostTerminal();}
-    else{hideHostTerminal();hoverPoint=point;hoveredEdge=hitEdge(point,edgeCharts);if(!hoveredEdge)edgeHover.hide();canvas.style.cursor=hoveredEdge?'help':'grab';}
+    if(node)clearEdgeHover();
+    else{hoverPoint=point;hoveredEdge=hitEdge(point,edgeCharts);if(!hoveredEdge)edgeHover.hide();canvas.style.cursor=hoveredEdge?'help':'grab';}
     return;
   }
-  clearEdgeHover();hideHostTerminal();
+  clearEdgeHover();
   const point = position(event);
   gesture.moved ||= Math.hypot(point.x - gesture.start.x, point.y - gesture.start.y) > 6;
   if (gesture.moved) {
@@ -472,8 +472,8 @@ canvas.onpointermove = event => {
   }
   gesture.point = point;
 };
-canvas.onpointerup = () => { const selected = gesture?.node, moved = gesture?.moved,edge=gesture?.edge,point=gesture?.point; gesture = null; if (selected && !moved) {choose(selected.id);if(selected.hostname)pinHostTerminal(selected.hostname);}else if(edge&&!moved){hoverPoint=point;hoveredEdge=edge;edgeHover.show(edge,point,nodes,data,coordinatorContext);canvas.setAttribute('aria-describedby','edge-hover');} };
-canvas.addEventListener('pointerleave',()=>{hideHostTerminal();clearEdgeHover();canvas.style.cursor='grab';});
+canvas.onpointerup = () => { const selected = gesture?.node, moved = gesture?.moved,edge=gesture?.edge,point=gesture?.point; gesture = null; if (selected && !moved) {choose(selected.id);if(selected.hostname)selectHostTerminal(selected.hostname);}else if(edge&&!moved){hoverPoint=point;hoveredEdge=edge;edgeHover.show(edge,point,nodes,data,coordinatorContext);canvas.setAttribute('aria-describedby','edge-hover');} };
+canvas.addEventListener('pointerleave',()=>{clearEdgeHover();canvas.style.cursor='grab';});
 canvas.tabIndex=0;canvas.addEventListener('keydown',event=>{if(event.key==='Escape')clearEdgeHover();});
 canvas.onpointercancel = () => { gesture = null;clearEdgeHover(); };
 canvas.addEventListener('wheel', event => {
