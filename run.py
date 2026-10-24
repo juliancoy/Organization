@@ -163,6 +163,16 @@ def start_site_previews(args):
         print(f'Local {brand.title()}: https://localhost:{port}/')
 
 
+def start_codecollective_preview():
+    site = ROOT / 'CodeCollective'
+    spec = importlib.util.spec_from_file_location('codecollective_local_run', site / 'run.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.ensure_datacenters_image()
+    module.start_static_site(8877)
+    print('Local USAJOBS visualizer: http://localhost:8877/usa/')
+
+
 def main(argv=None):
     args = parse_args(argv)
     if args.peer_register:
@@ -215,6 +225,7 @@ def main(argv=None):
         f'https://{host}:{port}' for port in (8769, 8770) for host in ('localhost', '127.0.0.1')))
     module.run(args.prefix, args.network)
     start_site_previews(args)
+    start_codecollective_preview()
     print(f'\nLocal portal: {base}/')
     print(f'Local administrator: {ROOT / "local-login"} --admin')
     if os.getenv('ORGANIZATION_LAUNCHER_CONTAINER'):
