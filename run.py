@@ -124,6 +124,8 @@ def parse_args(argv=None):
         parser.error('--release-checkout requires --release')
     if args.release and (args.vm or args.login):
         parser.error('--release cannot be combined with --vm or --login')
+    if args.port in (8769, 8770):
+        parser.error('--port conflicts with the MedTech (8769) or LifeTech (8770) preview')
     if not 1024 <= args.port <= 65535:
         parser.error('--port must be between 1024 and 65535')
     if args.no_open and not args.login:
@@ -135,6 +137,30 @@ def parse_args(argv=None):
     if args.vm_image_archive and (not args.vm or not args.vm_image_archive.is_file()):
         parser.error('--vm-image-archive requires --vm and an existing docker-save archive')
     return args
+
+
+def start_site_previews(args):
+    """Build and serve both public sites using the existing local services."""
+    site = ROOT / 'BmoreMedTech'
+    if not (site / 'run.py').is_file():
+        raise RuntimeError('Missing BmoreMedTech checkout. Run ./pull-all first.')
+    from service_names import service_name
+    spec = importlib.util.spec_from_file_location('local_site_run', site / 'run.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    for brand, port, hostname in [('medtech', 8769, 'medtech.social'), ('lifetech', 8770, 'lifetech.fyi')]:
+        options = argparse.Namespace(
+            site_brand=brand, site_port=port, site_container_name=f'{brand}-website',
+            node_image=module.DEFAULT_NODE_IMAGE, orgportal_dir=str(ROOT / 'OrgPortal'),
+            tenant_host=hostname, medtech_only=False, system_network=args.network,
+            org_api_origin=f'http://{service_name(args.prefix, "org")}:{os.getenv("ORGPORTAL_WORKER_PORT") or "8001"}',
+            pidp_origin=f'http://{service_name(args.prefix, "pidp-dev")}:8000',
+            portal_origin=f'http://{service_name(args.prefix, "portal-dev")}:5173',
+            chat_origin=f'http://{service_name(args.prefix, "chat")}:8003',
+        )
+        module.build_site(options, validate=False)
+        module.start_site(options)
+        print(f'Local {brand.title()}: https://localhost:{port}/')
 
 
 def main(argv=None):
@@ -186,6 +212,7 @@ def main(argv=None):
     from launcher_peers import start
     stop_peers = start(args.prefix)
     module.run(args.prefix, args.network)
+    start_site_previews(args)
     print(f'\nLocal portal: {base}/')
     print(f'Local administrator: {ROOT / "local-login"} --admin')
     if os.getenv('ORGANIZATION_LAUNCHER_CONTAINER'):

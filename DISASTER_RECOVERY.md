@@ -98,6 +98,16 @@ are rebuilt from lockfiles; deployed static assets are rebuilt from source.
 
 ## Testing copy
 
+The default target is `local-community-api`, the workspace's read replica.
+Use `--container NAME` only for another local replica; writable fixture stacks
+are rejected. The local storage backup command uses the same default target,
+and scheduled DR capture includes this replica's local SQLite stores when it
+is running.
+
+Keep writable fixture stacks on their own Docker database volumes. Existing
+fixture volumes are not reset or certified synthetic by `local-sync`; create
+a fresh disposable fixture stack when a clean synthetic dataset is required.
+
 ```sh
 ./local-sync --org lifetech --include-private --dry-run
 ./local-sync --org lifetech --include-private

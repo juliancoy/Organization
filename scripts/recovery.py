@@ -241,8 +241,8 @@ def capture_local(target):
             out=target/'local/peers'/name;out.parent.mkdir(parents=True,mode=0o700,exist_ok=True)
             shutil.copyfile(peers/name,out);out.chmod(0o600)
             result.setdefault('peerSecrets',[]).append(str(out.relative_to(target)))
-    if 'lifetech-community-api' in running:
-        command(['python3',ROOT/'OrgPortal/scripts/backup-local-storage.py','--output',target/'local/organization'])
+    if 'local-community-api' in running:
+        command(['python3',ROOT/'OrgPortal/scripts/backup-local-storage.py','--container','local-community-api','--output',target/'local/organization'])
         result['organization']='local/organization'
     if 'lifetech-identity-db' in running:
         config=json.loads(command(['docker','inspect','lifetech-identity-db']).decode())[0]

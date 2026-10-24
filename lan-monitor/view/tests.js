@@ -66,7 +66,11 @@ function renderHistory(){
   const button=el('button','','run-history-item '+item.status);button.type='button';button.dataset.run=item.id;
   const active=chosen?chosen===item.id:data.run?.id===item.id;
   button.setAttribute('aria-pressed',String(active));
-  button.append(el('strong',new Date(item.started).toLocaleString()),badge(item.status),el('code',item.id));
+  const heading=el('span','','run-history-heading');
+  const start=Date.parse(item.started),end=item.finished?Date.parse(item.finished):terminal.has(item.status)?NaN:Date.now();
+  const elapsed=Number.isFinite(start)&&Number.isFinite(end)?Math.max(0,(end-start)/1000):null;
+  heading.append(el('strong',new Date(item.started).toLocaleString()),el('span',seconds(elapsed)+(!terminal.has(item.status)&&elapsed!==null?' elapsed':''),'suite-duration'));
+  button.append(heading,badge(item.status),el('code',item.id));
   button.append(el('small',Number.isInteger(item.suites)?item.passed+' / '+item.suites+' suites passed'+(item.reused?' · '+item.reused+' unchanged':'')+(item.failed?' · '+item.failed+' failed / unavailable':''):'Open recorded results'));
   const reason=item.id===data.run?.id?summarizeFailure(data.run):historyReports.get(item.id)?.summary;
   if(reason){const preview=el('span',reason.headline.slice(0,200),'run-failure-preview');preview.title=reason.headline;button.append(preview);}
@@ -114,11 +118,16 @@ function render(){
  if(completed)suites.append(el('span','Completed · '+entries.length,'suite-group-label'));
  for(const [id,job] of entries){
   const tile=el('span','','suite-tile '+job.status);tile.dataset.suite=id;tile.dataset.completed=String(completed);tile.setAttribute('role','listitem');
-  tile.append(el('strong',job.name),el('span',label(job.status),'suite-state'));
+  const heading=el('span','','suite-card-heading');
+  const elapsed=duration(job);
+  const timing=job.status==='reused'?'Reused':elapsed===null?'Not started':seconds(elapsed)+(!terminal.has(job.status)?' elapsed':'');
+  heading.append(el('strong',job.name),el('span',timing,'suite-duration'));
+  tile.append(heading,el('span',label(job.status),'suite-state'));
+  if(job.phase_seconds){const phases=Object.entries(job.phase_seconds).map(([phase,value])=>(phase==='prepare'?'Setup':phase==='test'?'Tests':phase)+' '+seconds(value));if(phases.length)tile.append(el('small',phases.join(' · ')));}
   const counts=job.test_counts;
   const detail=[job.phase,counts?`${counts.passed??'—'} passed · ${counts.failed??0} failed`:null].filter(Boolean).join(' · ');
   if(detail)tile.append(el('small',detail));
-  tile.title=job.name+' · '+label(job.status)+(detail?' · '+detail:'');suites.append(tile);
+  tile.title=job.name+' · '+label(job.status)+' · '+timing+(detail?' · '+detail:'');suites.append(tile);
  }
  node.append(suites);}
  node.onclick=()=>{selected=host.host;render();};$('topology').append(node);}

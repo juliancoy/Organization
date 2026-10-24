@@ -57,6 +57,16 @@ An optional directory argument chooses another existing checkout parent.
 ./run.py --login admin --no-open  # print a one-use browser link
 ```
 
+The launcher also builds and starts both public site previews from the shared
+`BmoreMedTech` checkout:
+
+- MedTech: https://localhost:8769 (`dist`, tenant `medtech.social`)
+- LifeTech: https://localhost:8770 (`dist-lifetech`, tenant `lifetech.fyi`)
+
+Both use the existing local OrgPortal, PIdP and chat services. Preview startup
+builds the sites without running tests or deploying. After changing launcher
+code, use `./run.py --recreate-launcher` to activate it.
+
 Local sign-in requires the running loopback deployment and its local Docker
 containers. Administrator provisioning is explicit and local; it grants no
 production access. The launcher preserves the historical `bmoremedtech-` Docker

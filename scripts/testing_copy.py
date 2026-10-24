@@ -95,7 +95,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--store',type=Path,default=Path(os.environ.get('ORGANIZATION_DR_DIR',DEFAULT_STORE)))
     p.add_argument('--from',dest='snapshot');p.add_argument('--org');p.add_argument('--include-private',action='store_true')
-    p.add_argument('--container',default='lifetech-community-api');p.add_argument('--dry-run',action='store_true')
+    p.add_argument('--container',default='local-community-api');p.add_argument('--dry-run',action='store_true')
     p.add_argument('--purge-expired',action='store_true')
     args=p.parse_args();inspect_target(args.container)
     if args.purge_expired:
