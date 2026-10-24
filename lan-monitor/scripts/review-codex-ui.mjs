@@ -47,6 +47,7 @@ export async function reviewCodexUi(output){
   assert.equal(await page.getByLabel('Instruction delivery').inputValue(),'send')
   assert.equal(await page.locator('textarea').inputValue(),'Keep this draft while refreshing.')
   if(width<800)await page.locator('.codex-thread').first().click()
+  assert.match(await page.locator('.codex-message>div').last().evaluate(node=>getComputedStyle(node).fontFamily),/system-ui/)
   await page.screenshot({path:join(output,`codex-conversation-${width}.png`),fullPage:false})
   const before=commands.length;await page.getByRole('button',{name:'Send instruction',exact:true}).click()
   await page.waitForFunction(()=>document.querySelector('textarea')?.value==='')
