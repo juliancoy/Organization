@@ -18,6 +18,17 @@ class FleetMasterTests(unittest.TestCase):
         with self.assertRaises(APIError):api.rest('POST','/api/v1/master/backups',{'path':'/etc'})
         self.assertFalse(next(t for t in tool_definitions() if t['name']=='create_backups')['annotations']['readOnlyHint'])
         self.assertIn('/api/v1/master/backups',api.openapi()['paths'])
+    def test_coordinator_keeps_verified_package_on_its_recovery_drive(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            service=FleetBackups(Mock(),temporary)
+            service.state={'status':'replicating','devices':{'self.local':{}}}
+            manifest={'snapshot':'20261024T180859Z','parts':[{'sha256':'a'*64,'size':100}]}
+            service.device({'host':'self.local','local':True},Path('/mnt/recovery/generation'),manifest)
+            result=service.view()['devices']['self.local']
+            self.assertEqual(result['status'],'verified')
+            self.assertEqual(result['receipt']['path'],'/mnt/recovery/generation')
+            self.assertEqual(result['bytesStored'],100)
+
     def test_coordinator_restart_marks_unfinished_transfer_for_resume(self):
         with tempfile.TemporaryDirectory() as temporary:
             folder=Path(temporary);(folder/'latest.json').write_text(json.dumps({'status':'replicating','devices':{'a.local':{'bytesStored':100}}}))

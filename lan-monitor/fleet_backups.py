@@ -56,6 +56,10 @@ class FleetBackups:
         from agent_updates import LauncherUpdates
         name=host['host'];started=time.monotonic();client=None
         try:
+            if host.get('local'):
+                receipt={'verified':True,'snapshot':manifest['snapshot'],'parts':len(manifest['parts']),'bytes':sum(p['size'] for p in manifest['parts']),'path':str(folder)}
+                self.update(name,status='verified',bytesStored=receipt['bytes'],path=str(folder),receipt=receipt,durationSeconds=round(time.monotonic()-started,2))
+                return
             self.update(name,status='connecting')
             client=AgentClient(host);status=client.call('status')
             if status['node']!=name:raise RuntimeError('Authenticated node identity mismatch')
