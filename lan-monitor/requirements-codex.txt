@@ -1,0 +1,2 @@
+# SVG generation only; no image, browser, or npm dependencies.
+qrcode==8.2
