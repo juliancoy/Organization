@@ -72,6 +72,32 @@ class Handler(BaseHTTPRequestHandler):
     do_GET=handle_request
     do_POST=handle_request
 
+def pairing_payload(origin):
+    import base64,qrcode,qrcode.image.svg,time
+    url=origin+'/#pair='+codex_devices.issue()
+    svg=qrcode.make(url,image_factory=qrcode.image.svg.SvgPathFillImage).to_string()
+    return {'url':url,'expires_at':time.time()+600,'qr':'data:image/svg+xml;base64,'+base64.b64encode(svg).decode()}
+
+
+class LocalPairingHandler(Handler):
+    """Coordinator-only issuer. Test containers cannot use loopback as authority."""
+    def do_GET(self):self.reply(405,{'error':{'message':'POST required'}})
+    def do_POST(self):
+        if self.path!='/pairing':return self.reply(404,{'error':{'message':'Not found'}})
+        if self.headers.get_all('Host',[])!=['127.0.0.1:8092'] or self.headers.get('Origin') is not None:
+            return self.reply(403,{'error':{'message':'Native coordinator request required'}})
+        if not authorized(self.headers,'pairing'):return self.reply(401,{'error':{'message':'Pairing issuer credential required'}})
+        try:
+            if self.headers.get('Transfer-Encoding') or self.headers.get('Content-Type')!='application/json':raise ValueError()
+            if len(self.headers.get_all('Content-Length',[]))!=1:raise ValueError()
+            size=int(self.headers['Content-Length'])
+            if not 0<size<=16:raise ValueError()
+            self.connection.settimeout(5)
+            if json.loads(self.rfile.read(size))!={}:raise ValueError()
+            self.reply(200,pairing_payload(self.server.public_origin))
+        except (ValueError,TimeoutError):self.reply(400,{'error':{'message':'Invalid pairing request'}})
+
+
 if __name__=='__main__':
     import sys
     if len(sys.argv)>1 and sys.argv[1]=='revoke-devices':
@@ -86,4 +112,7 @@ if __name__=='__main__':
     parsed=urlsplit(origin)
     if parsed.scheme!='https' or not parsed.hostname or parsed.path or parsed.query or parsed.fragment or parsed.username:raise ValueError('Configure one HTTPS origin')
     server=ThreadingHTTPServer(('127.0.0.1',8091),Handler);server.daemon_threads=True;server.public_origin=origin
+    import threading
+    issuer=ThreadingHTTPServer(('127.0.0.1',8092),LocalPairingHandler);issuer.daemon_threads=True;issuer.public_origin=origin
+    threading.Thread(target=issuer.serve_forever,daemon=True).start()
     server.serve_forever()

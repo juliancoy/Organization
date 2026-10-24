@@ -316,3 +316,25 @@ values are stored only as hashes in the owner-only `codex-devices.json` file.
 Use `python3 lan-monitor/codex_remote.py revoke-devices` locally to revoke all
 phones, or Lock on the site to revoke only that browser. Never share a setup
 link: whoever redeems it gets owner-level Codex control for that device.
+
+The CompAI local launcher (`http://127.0.0.1:8791/launcher`) includes **Pair a phone
+with CompAI**. **Generate phone setup code** displays the one-use QR, setup link,
+copy action and ten-minute countdown. Expired codes disappear; a new code
+replaces the previous unused invitation. The code is generated entirely locally.
+
+Code issuance uses a separate loopback service on port 8092, with its own scoped
+`~/.config/map-master/pairing-token`. Only the CompAI owner launcher receives a
+private copy as `~/.config/lifetech-launcher/owner-pairing-token`. This credential
+is not the fleet key, master token, or Codex owner token and is not provisioned
+to workers. Browser-direct requests to the issuer are rejected; it is not routed
+through the public tunnel. The launcher checks its coordinator role and its
+existing loopback Host/Origin restrictions before requesting a code.
+
+For a new coordinator installation, create the scoped credential with
+`python3 lan-monitor/master_api.py create-token --scope pairing`, copy it to the
+owner launcher's private configuration as above with mode 0600, and install
+`requirements-codex.txt` into `~/.local/share/compai-codex/python` for the dedicated
+Codex service. The pinned QR encoder generates SVG locally and needs no image or
+npm dependencies. The user service sets PYTHONPATH to that private dependency
+folder. Ordinary test containers have neither issuer credentials nor the owner
+launcher configuration; loopback access alone cannot issue a code.

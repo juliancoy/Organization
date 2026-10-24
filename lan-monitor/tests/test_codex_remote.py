@@ -7,7 +7,7 @@ import threading
 import unittest
 from unittest.mock import patch,Mock
 from http.server import ThreadingHTTPServer
-from codex_remote import Handler
+from codex_remote import Handler,LocalPairingHandler
 import codex_devices
 import codex_context
 
@@ -75,3 +75,31 @@ class CommandDeliveryTests(unittest.TestCase):
             self.assertTrue(result['accepted'])
             params=client.request.call_args.args[1]
             self.assertEqual(params['turnStart']['request']['threadId'],params['conversationId'])
+
+class LocalIssuerTests(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        key=Path(self.temp.name)/'issuer-token';key.write_text('issuer'*16)
+        p=patch.dict(os.environ,{'MAP_PAIRING_TOKEN_FILE':str(key)});p.start();self.addCleanup(p.stop)
+        self.server=ThreadingHTTPServer(('127.0.0.1',0),LocalPairingHandler);self.server.public_origin='https://compai.example'
+        threading.Thread(target=self.server.serve_forever,daemon=True).start()
+        self.addCleanup(self.server.server_close);self.addCleanup(self.server.shutdown)
+    def request(self,token=None,origin=None,host='127.0.0.1:8092',body=None):
+        c=http.client.HTTPConnection(*self.server.server_address);headers={'Host':host,'Content-Type':'application/json'}
+        if token:headers['Authorization']='Bearer '+token
+        if origin:headers['Origin']=origin
+        c.request('POST','/pairing',body=json.dumps({} if body is None else body),headers=headers)
+        r=c.getresponse();status=r.status;r.read();c.close();return status
+    def test_loopback_and_fleet_credentials_do_not_grant_pairing(self):
+        with patch('codex_remote.pairing_payload') as issue:
+            self.assertEqual(self.request(),401)
+            self.assertEqual(self.request('master'*16),401)
+            self.assertEqual(self.request('launcher'*16),401)
+            self.assertEqual(self.request('issuer'*16,origin='http://127.0.0.1:8791'),403)
+            self.assertEqual(self.request('issuer'*16,host='evil.example'),403)
+            self.assertEqual(self.request('issuer'*16,body={'command':'x'}),400)
+            issue.assert_not_called()
+    def test_scoped_native_request_issues_code(self):
+        with patch('codex_remote.pairing_payload',return_value={'url':'https://compai.example/#pair=synthetic'}) as issue:
+            self.assertEqual(self.request('issuer'*16),200)
+            issue.assert_called_once_with('https://compai.example')
