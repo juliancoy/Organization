@@ -33,3 +33,8 @@ class DevicePairingTests(unittest.TestCase):
         old=devices.issue();new=devices.issue()
         with self.assertRaises(ValueError):devices.session(old)
         session=devices.session(new);devices.revoke();self.assertFalse(devices.valid(session))
+
+    def test_null_and_malformed_pair_tokens_never_create_sessions(self):
+        for value in [None,False,0,{},[],"",'invalid']:
+            with self.subTest(token_type=type(value).__name__),self.assertRaises(ValueError):devices.session(value)
+        self.assertFalse(self.path.exists())

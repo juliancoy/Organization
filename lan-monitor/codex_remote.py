@@ -64,7 +64,7 @@ class Handler(BaseHTTPRequestHandler):
                     if self.device():codex_devices.revoke(self.device())
                     return self.reply(200,{'ok':True},cookie='__Host-compai_device=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0')
                 if path=='/pair' and (not isinstance(body,dict) or set(body)!={'token'}):raise ValueError()
-                token=codex_devices.session(body['token'] if path=='/pair' else None)
+                token=(codex_devices.session(body['token']) if path=='/pair' else codex_devices.owner_session())
                 return self.reply(200,{'ok':True},cookie='__Host-compai_device='+token+'; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age='+str(codex_devices.LIFETIME))
             code,value=codex_context.rest(self.command,path,parse_qs(urlsplit(self.path).query),body)
             self.reply(code,value)

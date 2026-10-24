@@ -37,15 +37,22 @@ def issue():
         value['pairs']={digest(token):time.time()+600};save(value)
     return token
 
-def session(pair=None):
+def new_session(value):
+    if len(value['sessions'])>=100:raise ValueError('Device limit reached; revoke an old session first')
     token=secrets.token_urlsafe(32)
-    with state() as value:
-        if pair is not None:
-            if not isinstance(pair,str) or len(pair)>128 or digest(pair) not in value['pairs']:raise ValueError('Pairing link expired or already used. Request a fresh link from CompAI.')
-            del value['pairs'][digest(pair)]
-        if len(value['sessions'])>=100:raise ValueError('Device limit reached; revoke an old session first')
-        value['sessions'][digest(token)]=time.time()+LIFETIME;save(value)
+    value['sessions'][digest(token)]=time.time()+LIFETIME;save(value)
     return token
+
+def session(pair):
+    if not isinstance(pair,str) or not 20<=len(pair)<=128:raise ValueError('Invalid pairing token')
+    with state() as value:
+        if digest(pair) not in value['pairs']:raise ValueError('Pairing link expired or already used. Request a fresh link from CompAI.')
+        del value['pairs'][digest(pair)]
+        return new_session(value)
+
+def owner_session():
+    # Call only after owner authentication; never use for public pairing input.
+    with state() as value:return new_session(value)
 
 def valid(token):
     if not isinstance(token,str) or not 20<=len(token)<=128:return False

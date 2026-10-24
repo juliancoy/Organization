@@ -47,6 +47,9 @@ class RemoteBoundaryTests(unittest.TestCase):
         self.assertEqual(self.request('/'),200)
 
     def test_pairing_cookie_reloads_without_owner_token_and_logout_revokes_it(self):
+        for bad in [None,False,0,{},[],""]:
+            self.assertEqual(self.request('/pair','POST',origin='https://compai.example',body={'token':bad}),400)
+            self.assertIsNone(self.last_cookie)
         pair=codex_devices.issue()
         self.assertEqual(self.request('/pair','POST',origin='https://evil.example',body={'token':pair}),403)
         self.assertEqual(self.request('/pair','POST',origin='https://compai.example',body={'token':pair}),200)
