@@ -71,7 +71,7 @@ class Agent:
         path=Path('/tmp/launcher-agent-busy.json');temporary=path.with_suffix('.tmp')
         with self.lock:
             temporary.write_text(json.dumps({'jobs':[key for key,job in self.jobs.items() if job['status']=='running'],
-                                             'browsers':sorted(self.browsers),'transfers':self.registry_transfers,'time':time.time()}));temporary.replace(path)
+                                             'browsers':sorted(self.browsers),'transfers':self.registry_transfers+len(self.uploads),'time':time.time()}));temporary.replace(path)
 
     @staticmethod
     def image_fingerprint(image):
@@ -153,9 +153,11 @@ class Agent:
             return {'protocol':VERSION,'source_revision':self.source_revision,'node':config['name'],'ready':bool(shutil.which('docker')) and not Path('/tmp/launcher-agent-draining').exists(),'time':time.time(),
                     'machine':hashlib.sha256(machine.read_bytes()).hexdigest(),'hostname':socket.gethostname(),
                     'addresses':addresses,'platform':info['OSType']+'/'+info['Architecture'],
-                    'capabilities':['github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','file-queue','snapshot-stage','event-wait'],
+                    'capabilities':['github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','file-queue','snapshot-stage','event-wait','encrypted-backup'],
                     'preparations':[key for key,j in self.jobs.items() if j['status']=='running' and j.get('prepare_only')],
-                    'active_jobs':[key for key,j in self.jobs.items() if j['status']=='running' and not j.get('prepare_only')],'active_image_transfers':self.registry_transfers}
+                    'active_jobs':[key for key,j in self.jobs.items() if j['status']=='running' and not j.get('prepare_only')],'active_image_transfers':self.registry_transfers,'active_uploads':len(self.uploads)}
+        if op.startswith('backup.'):
+            return self.backup(op,args)
         if op.startswith('upload.'):
             return self.upload(op,args)
         if op == 'image.inspect':
@@ -240,6 +242,66 @@ class Agent:
             return {'acknowledged':True}
         raise ValueError('Unsupported agent operation')
 
+    def backup(self,op,args):
+        """Owner-authenticated encrypted replicas; fixed private storage, no extraction."""
+        root=Path(self.config).parent/'backups';root.mkdir(exist_ok=True,mode=0o700)
+        def checked(value):
+            if not isinstance(value,dict) or value.get('version')!=1 or not re.fullmatch(r'[0-9]{8}T[0-9]{6}Z',str(value.get('snapshot',''))):raise ValueError('Invalid backup identity')
+            if value.get('encryption')!='AES-256-GCM/RSA-OAEP-SHA256' or not all(re.fullmatch('[a-f0-9]{64}',str(value.get(k,''))) for k in ('sourceManifestSha256','recipientSha256')):raise ValueError('Backup must be encrypted')
+            if not 256<=len(base64.b64decode(value.get('wrappedKey',''),validate=True))<=1024:raise ValueError('Invalid recipient key')
+            parts=value.get('parts')
+            if not isinstance(parts,list) or not 1<=len(parts)<=8192:raise ValueError('Invalid backup parts')
+            if any(not isinstance(p,dict) or not re.fullmatch('[a-f0-9]{64}',str(p.get('sha256',''))) or type(p.get('size')) is not int or not 28<p['size']<=64*1024**2 for p in parts):raise ValueError('Invalid backup part')
+            if len({p['sha256'] for p in parts})!=len(parts):raise ValueError('Duplicate backup parts')
+            return value
+        def save(path,value):
+            temporary=path.with_suffix('.tmp')
+            with open(temporary,'w',opener=lambda p,flags:os.open(p,flags,0o600)) as stream:
+                json.dump(value,stream);stream.flush();os.fsync(stream.fileno())
+            temporary.replace(path)
+        def good(path,part):
+            if not path.is_file() or path.stat().st_size!=part['size']:return False
+            with path.open('rb') as stream:return hashlib.file_digest(stream,'sha256').hexdigest()==part['sha256']
+        with self.lock:
+            if op=='backup.status':
+                copies=[]
+                for path in sorted(root.glob('*/manifest.json'),reverse=True)[:50]:
+                    value=json.loads(path.read_text());copies.append({'snapshot':value['snapshot'],'parts':len(value['parts']),'bytes':sum(p['size'] for p in value['parts']),'path':str(path.parent)})
+                return {'root':str(root),'freeBytes':shutil.disk_usage(root).free,'copies':copies}
+            if op=='backup.begin':
+                value=checked(args['manifest']);folder=root/value['snapshot'];folder.mkdir(exist_ok=True,mode=0o700)
+                for name in ('manifest.json','pending.json'):
+                    existing=folder/name
+                    if existing.exists() and json.loads(existing.read_text())!=value:raise ValueError('Backup generation is immutable')
+                missing=[p for p in value['parts'] if not good(folder/(p['sha256']+'.enc'),p)]
+                if shutil.disk_usage(root).free<sum(p['size'] for p in missing)+512*1024**2:raise RuntimeError('Insufficient backup disk space')
+                save(folder/'pending.json',value)
+                return {'missing':[p['sha256'] for p in missing],'path':str(folder),'freeBytes':shutil.disk_usage(root).free}
+            ident=args.get('snapshot','')
+            if not isinstance(ident,str) or not re.fullmatch(r'[0-9]{8}T[0-9]{6}Z',ident):raise ValueError('Invalid backup snapshot')
+            folder=root/ident
+            pending=folder/'pending.json';value=checked(json.loads((pending if pending.exists() else folder/'manifest.json').read_text()))
+            if op=='backup.put':
+                digest=args.get('sha256');part=next((p for p in value['parts'] if p['sha256']==digest),None)
+                if not part:raise ValueError('Part is not in this backup')
+                source=self.completed_upload(args['upload'])
+                if not good(source,part):raise ValueError('Backup upload checksum mismatch')
+                target=folder/(digest+'.enc')
+                if not good(target,part):
+                    temporary=folder/(digest+'.pending');shutil.copyfile(source,temporary);temporary.chmod(0o600)
+                    with temporary.open('rb') as stream:os.fsync(stream.fileno())
+                    temporary.replace(target)
+                self.release_upload(args['upload'])
+                return {'stored':True,'sha256':digest,'bytes':part['size']}
+            if op=='backup.commit':
+                if any(not good(folder/(p['sha256']+'.enc'),p) for p in value['parts']):raise RuntimeError('Backup is incomplete or corrupt')
+                save(folder/'manifest.json',value);pending.unlink(missing_ok=True)
+                descriptor=os.open(folder,os.O_RDONLY)
+                try:os.fsync(descriptor)
+                finally:os.close(descriptor)
+                return {'verified':True,'snapshot':ident,'parts':len(value['parts']),'bytes':sum(p['size'] for p in value['parts']),'path':str(folder)}
+            raise ValueError('Unsupported backup operation')
+
     def upload(self, op, args):
         with self.lock:
             # Expired partial transfers are reclaimed; enforce a bounded staging quota.
@@ -253,6 +315,7 @@ class Agent:
                 if shutil.disk_usage(self.root).free<size+256*1024**2:raise RuntimeError('Insufficient agent staging space')
                 token=secrets.token_hex(16);path=self.root/(token+'.upload');path.touch(mode=0o600)
                 self.uploads[token]={'path':path,'size':size,'sha256':digest,'offset':0,'updated':time.time(),'complete':False}
+                self.busy()
                 return {'upload':token}
             row=self.uploads[args['upload']]
             if op == 'upload.chunk':
@@ -273,6 +336,7 @@ class Agent:
         with self.lock:
             row=self.uploads.pop(token)
             row['path'].unlink(missing_ok=True)
+            self.busy()
 
     def completed_upload(self, token):
         with self.lock:

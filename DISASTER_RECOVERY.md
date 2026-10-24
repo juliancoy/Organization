@@ -259,3 +259,11 @@ blob still referenced by any retained manifest or an in-progress backup. Verifie
 erasure requests must cover the local test database, every archive generation and
 source/journal copies; backups must have deletions reapplied before any restoration
 serves traffic. If the deletion ledger is unavailable, keep a restored service isolated.
+
+## Copies on the distributed test devices
+
+The test master's authenticated `POST /api/v1/master/backups` replicates the latest
+complete DR generation to every enrolled device. See `lan-monitor/MASTER_API.md`
+for status, retries and restoration. These are encrypted recovery replicas, not
+working copies or test fixtures. Keep the recovery RSA private key independently
+protected offline; it is deliberately excluded from the remote copies.

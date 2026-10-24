@@ -195,3 +195,33 @@ Unchanged jobs can reuse verified results unless `force: true` is supplied.
 Focused requests do not trigger post-deployment or email verification. P2P and
 visual checks run only when explicitly selected (or visual via a whole-tree path).
 The bounded inbox accepts up to 100 unfinished requests and shows the latest 100.
+
+## Encrypted recovery copies on every enrolled device
+
+`POST /api/v1/master/backups` with `{}` starts replication of the latest complete,
+verified production DR generation. `GET /api/v1/master/backups` reports per-device
+bytes, status, failures and final verification receipts. Both require the master
+Bearer token. MCP exposes the same `create_backups` and `get_backups` operations.
+
+The master encrypts the full snapshot and every referenced object blob into
+AES-256-GCM parts, wraps its random data key with the recovery host's RSA public
+key, and verifies the archive by decrypting and hashing every member before sending.
+Agents authenticate through the existing enrolled test-server protocol and verify
+all encrypted part hashes again before committing an immutable generation. Copies
+live in each enrolled launcher's persistent config directory under `backups/`,
+separately from disposable test jobs. An interrupted copy resumes verified parts
+on the next request; failed/offline devices remain visible. This operation never
+copies the recovery private key, decrypts production data on test workers, deletes
+old backups, or starts production traffic. It waits for current jobs before agent
+updates. This is an explicit snapshot copy; repeat the request after later DR runs.
+
+To restore a downloaded generation into an empty private directory:
+
+```sh
+python3 scripts/fleet_backup.py /private/downloaded-generation --restore /private/restore --key /private/recovery-private.pem
+```
+
+Keep an independent protected offline copy of the recovery host's
+`~/.config/organization-recovery/private.pem`: it is required to decrypt these
+replicas after loss of the recovery machine. The REST status contains no plaintext
+application records or application secrets.

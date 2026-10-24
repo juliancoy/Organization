@@ -1,0 +1,29 @@
+import json
+from pathlib import Path
+import tempfile
+import threading
+import unittest
+from unittest.mock import Mock
+from master_api import APIError,MasterAPI,tool_definitions
+from fleet_backups import FleetBackups
+
+
+class FleetMasterTests(unittest.TestCase):
+    def test_authenticated_api_surface_uses_one_service_and_rejects_paths(self):
+        api=MasterAPI(Mock(lock=threading.RLock()));api._backups=Mock()
+        api._backups.start.return_value={'accepted':True,'status':'packing'}
+        api._backups.view.return_value={'status':'replicating'}
+        self.assertEqual(api.rest('POST','/api/v1/master/backups',{})[1]['status'],'packing')
+        self.assertEqual(api.rest('GET','/api/v1/master/backups')[1]['status'],'replicating')
+        with self.assertRaises(APIError):api.rest('POST','/api/v1/master/backups',{'path':'/etc'})
+        self.assertFalse(next(t for t in tool_definitions() if t['name']=='create_backups')['annotations']['readOnlyHint'])
+        self.assertIn('/api/v1/master/backups',api.openapi()['paths'])
+    def test_coordinator_restart_marks_unfinished_transfer_for_resume(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            folder=Path(temporary);(folder/'latest.json').write_text(json.dumps({'status':'replicating','devices':{'a.local':{'bytesStored':100}}}))
+            service=FleetBackups(Mock(),folder)
+            self.assertEqual(service.view()['status'],'interrupted')
+            self.assertEqual(service.view()['devices']['a.local']['bytesStored'],100)
+            copy=service.view();copy['devices'].clear();self.assertEqual(len(service.view()['devices']),1)
+
+if __name__=='__main__':unittest.main()
