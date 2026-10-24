@@ -109,7 +109,7 @@ export function networkView(data, requested, layer = 'links', allConnections = f
     for(const [identity,row]of pairs)uniqueFlows.set(identity,row);
   }
   const trafficSource=inventory.has(requested)?requested:data.viewer.id;
-  const recent = [...uniqueFlows.values()].filter(row=>!allConnections||(row.source_mac===trafficSource&&(!row.bidirectional||row.upload_bytes>0))); 
+  const recent = [...uniqueFlows.values()].filter(row=>!allConnections||(row.source_mac===trafficSource&&(!row.bidirectional||row.upload_bytes>0)));
   const totals = new Map();
   for (const row of recent) totals.set(row.destination, (totals.get(row.destination) || 0) + row.bytes);
   const priority = new Set(recent.filter(row => row.source_mac === requested).map(row => row.destination));
