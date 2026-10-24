@@ -21,6 +21,17 @@ import urllib.error
 
 VERSION = 'lifetech-agent.v1'
 LIMIT = 1024 * 1024
+
+
+def worker_environment(home):
+    # The Docker CLI must use the same local engine as this agent, including
+    # rootless sockets. Deployment and login credentials stay out of jobs.
+    env = {key: os.environ[key] for key in ('PATH', 'LANG', 'LC_ALL', 'DOCKER_HOST') if key in os.environ}
+    env.update(HOME=str(home), PYTHONDONTWRITEBYTECODE='1', PYTHONUNBUFFERED='1',
+               GIT_TERMINAL_PROMPT='0', GIT_CONFIG_NOSYSTEM='1')
+    return env
+
+
 METRIC_SAMPLE = "import json,time,os,socket,subprocess\nfrom pathlib import Path\ndef read():\n result={}\n for line in Path('/proc/stat').read_text().splitlines():\n  fields=line.split()\n  if fields and (fields[0]=='cpu' or fields[0].startswith('cpu') and fields[0][3:].isdigit()):\n   values=[int(v) for v in fields[1:9]]\n   result[fields[0]]=(sum(values),values[3]+values[4])\n return result\ndef io():\n result={}\n for device in Path('/sys/block').iterdir():\n  if device.resolve().as_posix().startswith('/sys/devices/virtual/'):continue\n  try:\n   v=(device/'stat').read_text().split();result[device.name]=(int(v[9]),int(v[2])+int(v[6]))\n  except (OSError,ValueError,IndexError):pass\n return result\ndef net():\n result=0\n for device in Path('/sys/class/net').iterdir():\n  if device.name=='lo' or '/virtual/' in str(device.resolve()):continue\n  try:result+=sum(int((device/'statistics'/field).read_text()) for field in ['rx_bytes','tx_bytes'])\n  except (OSError,ValueError):pass\n return result\na=read();ia=io();na=net();start=time.monotonic();time.sleep(1);b=read();ib=io();nb=net();elapsed=time.monotonic()-start\ndef utilization(key):\n if key not in a:return None\n total=b[key][0]-a[key][0];idle=b[key][1]-a[key][1]\n return round(max(0,min(100,100*(total-idle)/total)),1) if total>0 else None\ncores=[{'id':int(key[3:]),'percent':utilization(key)} for key in b if key!='cpu']\nmemory={}\nfor line in Path('/proc/meminfo').read_text().splitlines():\n k,v=line.split(':',1);memory[k]=int(v.split()[0])*1024\nram_total=memory.get('MemTotal',0);ram_used=max(0,ram_total-memory.get('MemAvailable',ram_total))\ndisks=[max(0,min(100,(ib[k][0]-ia[k][0])/elapsed/10)) for k in ib if k in ia]\ntry:ips=subprocess.check_output(['hostname','-I'],text=True,timeout=1).split()\nexcept (OSError,subprocess.SubprocessError):ips=[]\nprint(json.dumps({'percent':utilization('cpu'),'cpus':len(cores),'logical_cpus':cores,\n 'observed_hostname':socket.gethostname(),'addresses':ips,\n 'ram_percent':round(100*ram_used/ram_total,1) if ram_total else None,\n 'ram_used_bytes':ram_used,'ram_total_bytes':ram_total,\n 'disk_busy_percent':round(max(disks),1) if disks else None,\n 'disk_basis':'Busiest physical block device; Linux I/O busy time',\n 'network_mbps':round(max(0,nb-na)*8/elapsed/1000000,4)}))\n"
 
 
@@ -433,8 +444,7 @@ class Agent:
         folder=work.parent
         try:
             home=self.root/'home';home.mkdir(exist_ok=True,mode=0o700)
-            env={key:os.environ[key] for key in ('PATH','LANG','LC_ALL') if key in os.environ}
-            env.update(HOME=str(home),PYTHONDONTWRITEBYTECODE='1',PYTHONUNBUFFERED='1',GIT_TERMINAL_PROMPT='0',GIT_CONFIG_NOSYSTEM='1')
+            env=worker_environment(home)
             manifest=json.loads((folder/'manifest.json').read_text())
             self.checkout(work,manifest,env,job)
             if (folder/'STOP').exists():raise InterruptedError('Run stopped during GitHub synchronization')

@@ -104,6 +104,15 @@ def dependency_cache(work,suite_id,spec):
     return root
 
 
+def container_user():
+    options = json.loads(subprocess.check_output(
+        ['docker', 'info', '--format', '{{json .SecurityOptions}}'], text=True, timeout=25))
+    # Rootless container UID 0 maps to the host account that owns the checkout.
+    if any(option in ('rootless', 'name=rootless') for option in options):
+        return '0:0'
+    return str(os.getuid()) + ':' + str(os.getgid())
+
+
 def run(work, suite_id, phase, spec, run_id, env):
     if (work.parent / 'STOP').exists():
         return 130
@@ -115,7 +124,7 @@ def run(work, suite_id, phase, spec, run_id, env):
     native = spec.get('native')
     if not native:
         cache=dependency_cache(work,spec.get('base',suite_id),spec)
-        command = ['docker', 'run', '--pull=never', '--rm', '--name', name, '--user', str(os.getuid()) + ':' + str(os.getgid()), '-e', 'HOME=/tmp', '--cpus', str(spec.get('cpus',2)), '--memory', str(spec.get('memory_mb',3072))+'m',
+        command = ['docker', 'run', '--pull=never', '--rm', '--name', name, '--user', env.get('ORGANIZATION_CONTAINER_USER', str(os.getuid()) + ':' + str(os.getgid())), '-e', 'HOME=/tmp', '--cpus', str(spec.get('cpus',2)), '--memory', str(spec.get('memory_mb',3072))+'m',
                    '--pids-limit', '512', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
                    '--shm-size', '256m', '--network', 'host' if phase == 'prepare' else 'none',
                    '--mount', 'type=bind,src=' + str(work) + ',dst=/work',
@@ -191,7 +200,8 @@ def main():
         catalog(work, SUITES, manifest['repositories'],
                 bases={task.split('--',1)[0] for task in manifest.get('task_catalog',target['suites'])})
     # No inherited deployment, cloud, database, or SSH credentials enter a job.
-    env = {key: value for key, value in os.environ.items() if key in ('PATH', 'LANG', 'LC_ALL', 'HOME')}
+    env = {key: value for key, value in os.environ.items() if key in ('PATH', 'LANG', 'LC_ALL', 'HOME', 'DOCKER_HOST')}
+    env['ORGANIZATION_CONTAINER_USER'] = container_user()
     env.update(CI='true', PYTHONDONTWRITEBYTECODE='1',
                PIDP_BUILD_COMMIT=manifest['repositories']['PIdP']['commit'],
                ORGPORTAL_BUILD_COMMIT=manifest['repositories']['OrgPortal']['commit'])
@@ -208,7 +218,7 @@ def main():
     snapshot=work/'distributed-plan.json'
     expected=hashlib.sha256(snapshot.read_bytes()).hexdigest()
     probe=['docker','run','--pull=never','--rm','--network','none',
-           '--user',str(os.getuid())+':'+str(os.getgid()),'--cap-drop','ALL',
+           '--user',env['ORGANIZATION_CONTAINER_USER'],'--cap-drop','ALL',
            '--memory','128m','--pids-limit','32',
            '--mount','type=bind,src='+str(work)+',dst=/work,readonly',
            target['images'][PYTHON],'python3','-c',
