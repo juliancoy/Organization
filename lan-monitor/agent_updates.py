@@ -46,7 +46,7 @@ class LauncherUpdates:
             accounts=json.loads(inventory.read_text()).get('accounts',{}) if inventory.exists() else {}
             alias=host['host'] if host['host'].endswith('.local') else host['host']+'.local'
             command=['ssh','-o','BatchMode=yes','-o','StrictHostKeyChecking=yes','-o','ConnectTimeout=8',
-                     '-o','ForwardAgent=no','-o','HostName='+host['lan_address']]
+                     '-o','ForwardAgent=no','-o','HostName='+host['lan_address'],'-o','HostKeyAlias='+alias]
             key=Path.home()/'.ssh/orgportal_lan_ed25519'
             if key.exists():command+=['-i',str(key)]
             user=accounts.get(alias)

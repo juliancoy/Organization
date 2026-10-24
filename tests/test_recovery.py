@@ -1,6 +1,7 @@
 import importlib.util
 import datetime as dt
 import io
+import hashlib
 import json
 from pathlib import Path
 import sqlite3
@@ -34,7 +35,7 @@ class RecoveryTests(unittest.TestCase):
     def test_backup_publishes_only_after_drill_and_resumes_without_redownloading(self):
         with tempfile.TemporaryDirectory() as folder:
             store=Path(folder)/'archive';calls={'exports':0,'downloads':0,'drills':0}
-            inv={'databases':{'db':{'database_name':'org','database_id':'db','config':'OrgPortal/org-worker/wrangler.jsonc','environment':None}},'buckets':['unit-bucket'],'workers':{'unit-worker':{}},'otherBindings':[]}
+            inv={'databases':{'db':{'database_name':'org','database_id':'db','config':'OrgPortal/org-worker/wrangler.jsonc','environment':None}},'buckets':['unit-bucket'],'workers':{'unit-worker':{'config':'OrgPortal/org-worker/wrangler.jsonc'}},'otherBindings':[]}
             objects={'one':b'first body','two':b'second body'}
             items=[{'Key':key,'Size':len(body),'ETag':'"'+key+'"','LastModified':dt.datetime.now(dt.timezone.utc)} for key,body in objects.items()]
             class Pages:
@@ -56,7 +57,9 @@ class RecoveryTests(unittest.TestCase):
                 calls['drills']+=1
                 if calls['drills']==1:raise RuntimeError('Injected restore drill failure')
                 return real_verify(snapshot,root)
-            def cloud(account,path,raw=False):return b'export default {}' if raw else {'bindings':[]}
+            def cloud(account,path,raw=False):
+                if path.endswith('/deployments'):return {'deployments':[{'versions':[{'version_id':'synthetic','percentage':100}]}]}
+                return b'export default {}' if raw else {'bindings':[]}
             args=SimpleNamespace(store=store,resume=None,secrets_file=None)
             with patch.object(recovery,'inventory',return_value=inv),patch.object(recovery,'environment',return_value={'R2_ACCOUNT_ID':'test','R2_ACCESS_KEY_ID':'dummy','R2_SECRET_ACCESS_KEY':'dummy'}),patch.object(recovery,'capture_sources',side_effect=sources),patch.object(recovery,'capture_local',return_value={}),patch.object(recovery,'command',side_effect=execute),patch.object(recovery,'wrangler',return_value=['fake-wrangler']),patch.object(recovery,'cf_get',side_effect=cloud),patch('boto3.client',return_value=Storage()),patch.object(recovery,'verify_snapshot',side_effect=drill),patch('builtins.print'):
                 with self.assertRaisesRegex(RuntimeError,'Injected'):recovery.backup(args)
@@ -69,6 +72,40 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(latest['status'],'complete')
             snapshot=store/latest['snapshot']
             self.assertEqual(real_verify(snapshot,store)['databases']['db']['tables'],{'people':1})
+
+    def test_secret_proof_requires_every_current_value_and_exact_active_version(self):
+        required=['ENCRYPTION_KEY','SIGNING_KEY']
+        values={name:'synthetic-'+name for name in required}
+        proof={'sourceVersion':'active','fingerprints':{name:hashlib.sha256(value.encode()).hexdigest() for name,value in values.items()}}
+        self.assertTrue(recovery.verified_secret_escrow(required,values,proof,'active'))
+        self.assertFalse(recovery.verified_secret_escrow(required,values,proof,'new-version'))
+        self.assertFalse(recovery.verified_secret_escrow(required,{**values,'SIGNING_KEY':'changed'},proof,'active'))
+        self.assertFalse(recovery.verified_secret_escrow([*required,'MISSING'],values,proof,'active'))
+
+    def test_encrypted_recovery_interoperates_with_webcrypto_and_denies_missing_auth(self):
+        import base64
+        import recover_production_secrets as module
+        key=module.rsa.generate_private_key(public_exponent=65537,key_size=2048)
+        numbers=key.public_key().public_numbers()
+        encode=lambda value:base64.urlsafe_b64encode(value.to_bytes((value.bit_length()+7)//8,'big')).decode().rstrip('=')
+        public={'kty':'RSA','n':encode(numbers.n),'e':encode(numbers.e),'alg':'RSA-OAEP-256','ext':True}
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            (root/'original.mjs').write_text("export default {fetch(){return new Response('original')}}")
+            (root/'recovery.mjs').write_bytes(module.wrapper('original.mjs','fixture',['KEY'],public,list(hashlib.sha256(b'Bearer fixture').digest()),2000000000000,'challenge'))
+            (root/'check.mjs').write_text('''import worker from './recovery.mjs';
+const env={KEY:'synthetic-secret',ESCROW_VERSION_METADATA:{id:'fixture-version'}};
+const url='https://example.test/__operator_encrypted_escrow';
+const denied=await worker.fetch(new Request(url,{method:'POST'}),env,{});
+if(denied.status!==404)throw Error('Unauthenticated request accepted');
+const allowed=await worker.fetch(new Request(url,{method:'POST',headers:{Authorization:'Bearer fixture'}}),env,{});
+console.log(await allowed.text());''')
+            result=json.loads(subprocess.check_output(['node',str(root/'check.mjs')],text=True))
+            self.assertNotIn('synthetic-secret',json.dumps(result))
+            raw=key.decrypt(base64.b64decode(result['wrappedKey']),module.padding.OAEP(mgf=module.padding.MGF1(module.hashes.SHA256()),algorithm=module.hashes.SHA256(),label=None))
+            values=module.AESGCM(raw).decrypt(base64.b64decode(result['iv']),base64.b64decode(result['ciphertext']),json.dumps(result['identity'],separators=(',',':')).encode())
+            self.assertEqual(json.loads(values),{'KEY':'synthetic-secret'})
+            self.assertEqual(result['identity'],{'worker':'fixture','version':'fixture-version','nonce':'challenge'})
 
     def test_jsonc_preserves_urls_strings_and_comments(self):
         with tempfile.TemporaryDirectory() as folder:

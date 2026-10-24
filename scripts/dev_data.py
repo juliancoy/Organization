@@ -119,6 +119,8 @@ def purge(root):
     for kind in ('baselines', 'workspaces'):
         for folder in (root / kind).glob('*'):
             if folder.is_symlink() or not folder.is_dir(): continue
+            if folder.name.startswith('.pending-'):
+                shutil.rmtree(folder); removed += 1; continue
             path = folder / 'manifest.json'
             if not path.exists(): continue
             value = json.loads(path.read_text())
@@ -129,6 +131,7 @@ def purge(root):
     for index in (root / 'baselines').glob('*/buckets/*.json'):
         wanted.update(row['sha256'] for row in json.loads(index.read_text()))
     for blob in (root / 'objects').glob('*'):
+        if blob.name.startswith('.pending-'): blob.unlink(); continue
         if re.fullmatch(r'[a-f0-9]{64}', blob.name) and blob.name not in wanted: blob.unlink()
     print(json.dumps({'expiredCopiesRemoved': removed}))
 
@@ -146,7 +149,7 @@ def main():
         raise RuntimeError('Dev storage must be separate from DR storage')
     root.mkdir(parents=True, exist_ok=True, mode=0o700); root.chmod(0o700)
     with (root / '.lock').open('a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        if args.action != 'status': fcntl.flock(lock, fcntl.LOCK_EX)
         if args.action == 'refresh': print(json.dumps({'baseline': str(refresh(args.store, root))}))
         elif args.action == 'checkout': print(json.dumps({'workspace': str(checkout(root))}))
         elif args.action == 'purge': purge(root)

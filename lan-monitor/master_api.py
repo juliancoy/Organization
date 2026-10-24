@@ -128,6 +128,9 @@ class MasterAPI:
         def parameters(allowed):
             if set(query)-set(allowed) or any(len(values)!=1 for values in query.values()):raise APIError(400,'invalid_query','Invalid query parameters')
             return {key:values[0] for key,values in query.items()}
+        if path.startswith(API+'/codex/'):
+            import codex_context
+            return codex_context.rest(method,path,query,body)
         if method=='GET':
             if path==API+'/openapi.json':return 200,self.openapi()
             mapping={API:'get_status',API+'/status':'get_status',API+'/runs':'list_runs',API+'/machines':'list_machines',API+'/suites':'list_suites'}

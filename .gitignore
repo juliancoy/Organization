@@ -36,6 +36,7 @@
 !/scripts/testing_copy.py
 !/scripts/setup_recovery_timer.py
 !/scripts/dev_data.py
+!/scripts/recover_production_secrets.py
 !/dev-data
 !/scripts/peer_archive.py
 !/scripts/public_data.py

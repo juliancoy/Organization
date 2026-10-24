@@ -74,6 +74,32 @@ Do not replace a running PostgreSQL database with the D1 export.
 
 ## Recovery limits and secret escrow
 
+### Recovering and maintaining the active secret escrow
+
+`python3 scripts/recover_production_secrets.py --if-needed` maintains
+`~/.config/organization-recovery/production.json` and its version-linked
+`proof.json`, with owner-only permissions. It recovers the existing values; it
+does not rotate encryption or integration keys. The scheduled backup attempts
+this refresh before capture. If a deployed version changes and cannot be verified,
+the backup retains its data and reports a secret-recovery gap.
+
+For the organization and identity Workers, an authenticated, ten-minute recovery
+handler is uploaded as a zero-traffic version. It encrypts the values using
+AES-GCM and a host RSA-OAEP public key. Only the host private key can decrypt the
+response. Version and one-time challenge checks bind the response to the recovery
+request. Original source is restored as the latest uploaded version and the
+recovery version is deleted. Production traffic remains on its original version.
+The peer Worker has a Durable Object and cannot expose version URLs; its existing
+local signing-key candidates are instead verified using a read-only signed-ticket
+check, with an invalid-signature control. No registration or notification is sent.
+
+Encrypted envelopes and the private decryption key are also in that private host
+directory. Keep any independent copy of `private.pem` protected separately from
+the encrypted envelopes. The ordinary private DR archive includes the verified
+plaintext escrow for service restoration; dev copies never include that escrow,
+operator configuration, or the host recovery key. Routine backups compare secret
+fingerprints and active version IDs before marking production validation complete.
+
 Cloudflare does not return deployed secret values. A local `.env` with the same
 variable name is not proof that its value matches production. Secret names and
 missing/unverified local copies are reported as gaps; preserve known production
@@ -139,10 +165,15 @@ are recorded by name. Candidates are never marked production-validated merely
 because a local name matches. `.env.cloudflare` operator keys can export the
 databases and Worker settings, but cannot read deployed application-secret values.
 Email binding configuration is included in Worker settings; email provider state
-is external. In-flight queue payloads remain an explicit recovery gap. Push jobs
-are currently enqueued before their first durable delivery record is created;
-the queue is not a database backup. Closing that gap requires a durable outbox
-written before enqueue, acknowledged on delivery, with reviewed recovery replay.
+is external. New push jobs persist in the private `push_outbox` D1 table before
+enqueue, with stable recipient/event IDs, leased consumers and bounded cron retries.
+Delivery or suppression immediately clears private content; pending content expires
+after 23 hours and minimal deduplication hashes expire after seven days. The backup
+marks recoverable queued work only after confirming the deployed health capability,
+its exact Worker version and the captured outbox table. Raw transport queue contents
+are not exported, and historical transport-only jobs cannot be reconstructed.
+Restores must review expiry, deletions, consent and delivery receipts before replay;
+they remain network-isolated by default. See OrgPortal's `docs/privacy/PUSH_OUTBOX.md`.
 
 For missing keys, obtain the original values from the deployment operator or secret
 manager and supply the existing `--secrets-file` escrow option. Validate those
@@ -206,7 +237,8 @@ journalctl --user -u organization-dr.service
 
 The user timer runs at 03:15 America/New_York, with up to five minutes of jitter and
 missed-run catch-up. It runs the full backup and restore verification, then attempts
-expired testing-copy cleanup. It runs while the user service manager is active;
+expired testing-copy cleanup and refreshes the complete dev-data baseline. The
+installer enables user lingering so the schedule also runs after logout;
 offline containers or cleanup conflicts require operator attention. It does not
 extend authentication grants or silently open a browser when credentials expire.
 Check `latest.json`, manifest gaps, and service failures; a verified data copy with

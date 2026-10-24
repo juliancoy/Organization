@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Install a user-level, read-only daily DR backup and isolated restore drill."""
 from pathlib import Path
+import os
+import pwd
 import shutil
 import subprocess
 import sys
@@ -23,6 +25,7 @@ Description=Complete Organization local DR copy and isolated restore verificatio
 [Service]
 Type=oneshot
 WorkingDirectory={ROOT}
+ExecStartPre=-{quote(python)} {quote(ROOT/'scripts/recover_production_secrets.py')} --if-needed
 ExecStart={quote(python)} {quote(ROOT/'scripts/recovery.py')} backup
 ExecStartPost=-{quote(python)} {quote(ROOT/'scripts/testing_copy.py')} --purge-expired
 ExecStartPost={quote(python)} {quote(ROOT/'scripts/dev_data.py')} purge
@@ -48,6 +51,7 @@ WantedBy=timers.target
         p=units/name;p.write_text(content);p.chmod(0o600)
     subprocess.run(['systemctl','--user','daemon-reload'],check=True)
     subprocess.run(['systemctl','--user','enable','--now','organization-dr.timer'],check=True)
+    subprocess.run(['loginctl','enable-linger',pwd.getpwuid(os.getuid()).pw_name],check=True)
     print('Daily DR copy and restore verification enabled for 03:15 America/New_York.')
 
 

@@ -119,3 +119,44 @@ loader continues to load current coordinator code without restarting active runs
 Run results may include `status: reused`, `input_fingerprint`, and `reused_from` for unchanged suites. These are historical passing baselines, not fresh executions. History exposes separate `passed` and `reused` counts, and `get_run` retains that provenance.
 
 Independent reruns: MCP `rerun_suite` takes `run_id`, `host`, `suite`; `rerun_failed` takes `run_id`. REST equivalents are POST `/api/v1/master/rerun-suite` and `/api/v1/master/rerun-failed` with those JSON arguments. Each returns a new `run_id` and `parent_run_id`. Inspect it with `get_run`/`get_logs`, cancel with `stop_run`. Busy workers are reserved until their existing run completes; queued reruns do not alter the parent record. Current branches are committed/pushed as for a full run. Reruns force selected ordinary suites to execute and omit deployment/email checks. P2P requires a full run. Queue capacity is ten active reruns; queued work is in-process and does not automatically resume after service restart.
+
+## Local VS Code / Codex panel
+
+The test dashboard includes a private local Codex panel. Unlock it using the
+master bearer token above. The browser keeps the token only in memory; Lock or
+reload clears it. Remote browsers talk to the master, which reads **its own**
+Codex history and connects to **its own** VS Code session.
+
+- `GET /api/v1/master/codex/threads?offset=0`: 20 recent threads per page,
+  with `next_offset` for older history.
+- `GET /api/v1/master/codex/threads/{id}`: recent user/assistant messages,
+  workspace/model, last recorded activity, current owner availability and IDE
+  context when supplied by the owner.
+- `POST /api/v1/master/codex/commands`: `{ "thread_id": "...", "action":
+  "send", "text": "...", "request_id": "UUID" }`. Use `steer` for an active
+  turn. Requests go to the existing VS Code thread owner, retaining its
+  permissions; approvals remain in VS Code. The UUID prevents duplicate
+  dispatch during this master process's lifetime. An ambiguous timeout must be
+  checked in the conversation before another instruction is submitted.
+- The same POST with `action: "open"` and `thread_id` opens an older thread on
+  the **master's desktop** through the VS Code URL handler. Once its owner is
+  connected, messages can be submitted remotely. VS Code must be installed and
+  signed in under the same account as the master service. The user service must
+  inherit the graphical desktop environment for the Open action.
+
+No Codex process is spawned to resume an already-owned conversation. History is
+read-only, limited to the latest 2 MiB and 60 messages per thread. Recorded
+running status can be stale after a crash; owner availability is checked again
+before every send. The UI deliberately labels that distinction.
+
+The owner bridge uses the installed OpenAI VS Code extension's **internal**
+length-prefixed Unix-socket follower protocol (inspected in version 26.51007),
+not a public stable API. Protocol failures are surfaced, without falling back to
+another process or overriding permissions. The public
+[Codex app-server protocol](https://learn.chatgpt.com/docs/app-server) describes
+start/steer operations, but a separate app-server does not control an existing
+VS Code stdio session. Recheck the bridge after extension upgrades.
+
+These routes inherit master bearer, Host, Origin, JSON body-limit and no-store
+checks. They are REST dashboard routes, not MCP tools. No conversation content
+or access token is added to the public distributed-test status endpoint.

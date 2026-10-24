@@ -315,6 +315,7 @@ def capture_sources(target, repositories=None):
 
 def secret_candidates(config, required):
     """Recover local candidates, never infer that they match deployed values."""
+    if not required:return {},{},[]
     parent = (ROOT / config).parent
     found = {name: {} for name in required}
     paths = set()
@@ -338,6 +339,11 @@ def secret_candidates(config, required):
             value, origins = next(iter(candidates.items())); values[name] = value; sources[name] = origins
         elif candidates: conflicts.append(name)
     return values, sources, sorted(conflicts)
+
+
+def verified_secret_escrow(required,values,proof,active):
+    return bool(active and proof.get('sourceVersion')==active and set(proof.get('fingerprints',{}))==set(required)
+                and all(hashlib.sha256(values.get(name,'').encode()).hexdigest()==proof['fingerprints'][name] for name in required))
 
 
 def backup(args):
@@ -365,11 +371,16 @@ def backup(args):
             if 'local/peers/signing.key' in manifest['local'].get('peerSecrets',[]):saved_names.add('PEER_SIGNING_KEY')
             if 'local/peers/turn.json' in manifest['local'].get('peerSecrets',[]):saved_names.update(['TURN_KEY_ID','TURN_KEY_API_TOKEN'])
             escrow={}
+            proof={}
             if args.secrets_file:
                 escrow=json.loads(args.secrets_file.read_text())
                 if not isinstance(escrow,dict) or any(not isinstance(values,dict) or any(not isinstance(value,str) or not value for value in values.values()) for values in escrow.values()):
                     raise RuntimeError('Secret escrow must map Worker names to nonempty string-valued secret objects')
                 private_json(pending/'secrets/production.json',escrow)
+                proof_file=args.secrets_file.with_name('proof.json')
+                if proof_file.is_file():
+                    proof=json.loads(proof_file.read_text())
+                    private_json(pending/'secrets/production-proof.json',proof)
             for ident, entry in inv['databases'].items():
                 print('Exporting database:',entry['database_name'],flush=True)
                 folder = pending/'databases'/ident; folder.mkdir(parents=True, mode=0o700,exist_ok=True)
@@ -489,21 +500,39 @@ def backup(args):
                     local_candidates[worker] = candidates
                     private_json(pending/'secrets/local-candidates.json', local_candidates)
                     missing = sorted(set(secrets)-set(candidates)-set(escrow.get(worker,{})))
+                    deployments=cf_get(account,'/workers/scripts/'+worker+'/deployments')['deployments'][0]['versions']
+                    active=deployments[0]['version_id'] if len(deployments)==1 and deployments[0]['percentage']==100 else None
+                    record=proof.get(worker,{})
+                    validated=verified_secret_escrow(secrets,escrow.get(worker,{}),record,active)
                     manifest['workers'][worker] = {'secretNames':secrets,'secretsMissingFromLocalConfig':missing,
+                                                  'deployedVersionId':active,
                                                   'operatorEscrowNames':sorted(set(secrets)&set(escrow.get(worker,{}))),
                                                   'localCandidateNames':sorted(candidates),
                                                   'localCandidateSources':candidate_sources,
                                                   'conflictingLocalCandidateNames':conflicts,
                                                   'emailBindings':[b for b in settings.get('bindings',[]) if b.get('type')=='send_email'],
-                                                  'secretValuesValidatedAgainstProduction':False}
-                    if secrets: manifest['gaps'].append(worker+': deployed secret values cannot be read back; local copies require production validation'+(' (missing: '+', '.join(missing)+')' if missing else ''))
+                                                  'secretValuesValidatedAgainstProduction':validated}
+                    if secrets and not validated: manifest['gaps'].append(worker+': secret escrow lacks current production-version validation'+(' (missing: '+', '.join(missing)+')' if missing else ''))
                 except RuntimeError:
                     manifest['gaps'].append(worker+': deployed settings/source could not be read; repository source retained')
             # Sockets are transient; messages/membership are durable in the chat D1 export.
+            queue_recovery=False
             for binding in inv['otherBindings']:
                 if binding['kind']=='durable_objects' and binding['config'] in {'OrgPortal/chat-worker/wrangler.jsonc','peer-worker/wrangler.jsonc'}: continue
                 if binding['kind']=='queues':
-                    manifest['gaps'].append(binding['config']+': in-flight queues are not exported; reconcile durable outboxes before replay')
+                    covered=False
+                    if binding['config']=='OrgPortal/org-worker/wrangler.jsonc' and all(p.get('binding')=='PUSH_QUEUE' for p in binding['bindings'].get('producers',[])):
+                        try:
+                            req=urllib.request.Request('https://orgportal.cc/api/org/health',headers={'User-Agent':'OrgPortal-CLI/0.1','Cache-Control':'no-cache'})
+                            with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req,timeout=20) as response:health=json.load(response)
+                            schema=next(entry for entry in manifest['databases'].values() if entry['database_name']=='org')
+                            covered='push_outbox' in schema['tables'] and health.get('queueRecovery',{}).get('pushOutbox')==1 and health.get('workerVersionId')==manifest['workers']['org-codecollective']['deployedVersionId']
+                        except (OSError,ValueError,KeyError,StopIteration):pass
+                    if covered:
+                        queue_recovery=True
+                        manifest['queueRecovery']={'source':'push_outbox','payloadExpiryHours':23,'requiresReviewedReplay':True,
+                                                   'coverage':'Jobs persisted by the deployed outbox producer; historical transport-only jobs are not reconstructed'}
+                    else:manifest['gaps'].append(binding['config']+': in-flight queues have no verified deployed durable outbox')
                 else:
                     manifest['gaps'].append(binding['config']+': '+binding['kind']+' requires a dedicated exporter')
             # Include the finished recovery tooling even when it was edited while
@@ -518,6 +547,7 @@ def backup(args):
                                       'objectInventoryComplete':set(manifest['objects'])==set(inv['buckets']),
                                       'serviceRecoveryComplete':not bool(manifest['gaps']),
                                       'emailBindingConfigurationCaptured':True,
+                                      'queuedWorkRecoverableFromOutbox':queue_recovery,
                                       'inFlightQueuesCaptured':False})
             private_json(pending/'manifest.json',manifest)
             verify_snapshot(pending,store)
@@ -626,7 +656,8 @@ def main():
     parser.add_argument('--store',type=Path,default=Path(os.environ.get('ORGANIZATION_DR_DIR',DEFAULT_STORE)))
     sub=parser.add_subparsers(dest='action',required=True)
     sub.add_parser('inventory');sub.add_parser('status');b=sub.add_parser('backup');b.add_argument('--resume')
-    b.add_argument('--secrets-file',type=Path,default=Path(os.environ['ORGANIZATION_DR_SECRETS_FILE']) if os.environ.get('ORGANIZATION_DR_SECRETS_FILE') else None)
+    managed_escrow=Path.home()/'.config/organization-recovery/production.json'
+    b.add_argument('--secrets-file',type=Path,default=Path(os.environ['ORGANIZATION_DR_SECRETS_FILE']) if os.environ.get('ORGANIZATION_DR_SECRETS_FILE') else managed_escrow if managed_escrow.is_file() else None)
     v=sub.add_parser('verify');v.add_argument('--snapshot')
     r=sub.add_parser('restore');r.add_argument('--snapshot');r.add_argument('--target',type=Path,required=True)
     args=parser.parse_args()
