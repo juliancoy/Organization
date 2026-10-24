@@ -7,7 +7,7 @@ root.classList.add('codex-app');
 const heading = el('div', '', 'panel-heading');
 const title = el('div'); title.append(el('span', 'SWARM · REMOTE CONTROL', 'codex-eyebrow'), el('h1', secureRemote ? 'Swarm Control' : 'Codex workspace'), el('p', secureRemote ? 'Conversations and instructions on CompAI' : 'Conversations and instructions on this machine', 'muted'));
 const lock = el('button', 'Lock'); lock.hidden = true;
-const mapLink=el('a','Swarm status ↗','codex-map-link'); mapLink.href='http://map.local/'; mapLink.target='_blank'; mapLink.rel='noopener noreferrer'; mapLink.title='Open the local swarm map (requires the local network)';
+const mapLink=el('a','Swarm status ↗','codex-map-link'); mapLink.href='/swarm-status'; mapLink.target='_blank'; mapLink.rel='noopener noreferrer'; mapLink.title='Open remote swarm status';
 const headerActions=el('div','','codex-header-actions'); headerActions.append(mapLink,lock); heading.append(title,headerActions);
 const unlock = el('form', '', 'codex-unlock');
 const label = el('label', 'Codex owner token '), password = el('input'); password.type = 'password'; password.autocomplete = 'off'; password.required = true; password.placeholder = 'Enter your owner token'; label.append(password);

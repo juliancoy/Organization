@@ -17,6 +17,7 @@ from master_api import authorized
 VIEW=Path(__file__).with_name('view')
 ASSETS={'/':'codex.html','/codex.html':'codex.html','/codex.js':'codex.js','/codex.css':'codex.css','/style.css':'style.css','/test-deployment.js':'test-deployment.js',
         '/test-deployment.css':'test-deployment.css','/swarm-control':'swarm-control.html','/swarm-control.svg':'swarm-control.svg'}
+ASSETS.update({'/swarm-status':'swarm-status.html','/swarm-status.js':'swarm-status.js','/swarm-status.css':'swarm-status.css'})
 API='/api/v1/master/codex/'
 
 class Handler(BaseHTTPRequestHandler):
@@ -46,7 +47,7 @@ class Handler(BaseHTTPRequestHandler):
             name=ASSETS[path];return self.reply(200,(VIEW/name).read_bytes(),mimetypes.guess_type(name)[0] or 'application/octet-stream')
         pairing=self.command=='POST' and path in ('/pair','/session','/logout')
         deployment=path in ('/api/v1/test-app/status','/api/v1/test-app/offer','/api/v1/test-app/download')
-        valid_read=self.command=='GET' and (path==API+'threads' or path.startswith(API+'threads/') or path in ('/api/v1/test-app/status','/api/v1/test-app/download'))
+        valid_read=self.command=='GET' and (path=='/api/v1/swarm/status' or path==API+'threads' or path.startswith(API+'threads/') or path in ('/api/v1/test-app/status','/api/v1/test-app/download'))
         valid_write=self.command=='POST' and path in (API+'commands','/api/v1/test-app/offer')
         if not (valid_read or valid_write or pairing):return self.reply(404,{'error':{'message':'Not found'}})
         if path not in ('/pair','/logout') and not (authorized(self.headers,'codex') or codex_devices.valid(self.device())):return self.reply(401,{'error':{'message':'Codex owner token required'}})
@@ -69,6 +70,10 @@ class Handler(BaseHTTPRequestHandler):
                 if path=='/pair' and (not isinstance(body,dict) or set(body)!={'token'}):raise ValueError()
                 token=(codex_devices.session(body['token']) if path=='/pair' else codex_devices.owner_session())
                 return self.reply(200,{'ok':True},cookie='__Host-compai_device='+token+'; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age='+str(codex_devices.LIFETIME))
+            if path=='/api/v1/swarm/status':
+                from swarm_status import snapshot
+                try:return self.reply(200,snapshot())
+                except (OSError,ValueError):return self.reply(503,{'error':{'message':'Local swarm coordinator unavailable'}})
             if deployment:
                 from swarm_test_deployment import manager,artifact
                 if path.endswith('/download'):

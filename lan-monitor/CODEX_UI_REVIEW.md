@@ -39,3 +39,18 @@ Design basis: [IBM typography](https://www.ibm.com/design/language/typography/ty
 for restrained emphasis and alignment, and [GOV.UK action guidance](https://design-system.service.gov.uk/components/button/)
 for explicit labels and hierarchy. They inform the interaction design; the app
 retains its existing dark, teal-accented identity.
+
+## Remote LAN status
+
+The header's Swarm status link opens `/swarm-status` on the same remote origin.
+`/api/v1/swarm/status` accepts authenticated GETs using the existing owner or
+paired-browser session. It projects devices, observed ping responses, interface
+traffic/capacity and worker-test status from two fixed loopback coordinator GETs.
+No general LAN proxy, scan trigger, command endpoint or coordinator logs/session
+metadata are exposed. Unauthenticated reads are denied and POST is not accepted.
+The page clears observations when authentication expires and labels source times.
+
+This telemetry uses the existing authenticated HTTPS transport, not the APK's
+WebRTC data channel. The latter remains an APK-transfer protocol. A future P2P
+telemetry option would need an explicitly authorized, read-only protocol and
+failure/reconnection handling; no claim of WebRTC telemetry is made here.
