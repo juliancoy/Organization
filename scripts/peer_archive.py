@@ -69,6 +69,8 @@ def main():
     test=sub.add_parser('prepare-test');test.add_argument('--store',type=Path,default=DEFAULT_STORE)
     test.add_argument('--snapshot');test.add_argument('--org',required=True);test.add_argument('--include-private',action='store_true');test.add_argument('--output',type=Path,required=True)
     dr=sub.add_parser('prepare-encrypted');dr.add_argument('--file',type=Path,required=True);dr.add_argument('--output',type=Path,required=True)
+    public=sub.add_parser('prepare-public');public.add_argument('--source',default='https://orgportal.cc/api/org/api/network/replication/snapshot');public.add_argument('--output',type=Path,required=True)
+    lan=sub.add_parser('serve-public');lan.add_argument('--package',type=Path,required=True);lan.add_argument('--bind',default='127.0.0.1');lan.add_argument('--port',type=int,default=8792)
     invite=sub.add_parser('invite');invite.add_argument('--package',type=Path,required=True);invite.add_argument('--output',type=Path,required=True)
     invite.add_argument('--key-file',type=Path,default=DEFAULT_KEY);invite.add_argument('--url',default=DEFAULT_URL)
     invite.add_argument('--devices',type=int,default=1);invite.add_argument('--ttl',type=int,default=3600)
@@ -78,7 +80,13 @@ def main():
     launcher.add_argument('--fleet-file',type=Path,default=Path.home()/'.config/lifetech-launcher/fleet.json')
     revoke=sub.add_parser('launcher-revoke');revoke.add_argument('--peer',required=True);revoke.add_argument('--fleet-file',type=Path,default=Path.home()/'.config/lifetech-launcher/fleet.json');revoke.add_argument('--key-file',type=Path,default=DEFAULT_KEY);revoke.add_argument('--url',default=DEFAULT_URL)
     args=parser.parse_args()
-    if args.action=='prepare-test':
+    if args.action=='prepare-public':
+        from public_data import prepare
+        print(json.dumps(prepare(args.source,args.output)))
+    elif args.action=='serve-public':
+        from public_data import serve
+        serve(args.package,args.bind,args.port)
+    elif args.action=='prepare-test':
         import tempfile
         snapshot=resolve_snapshot(args.store,args.snapshot);manifest=json.loads((snapshot/'manifest.json').read_text())
         if not manifest.get('completedAt'):raise RuntimeError('Use a completed DR snapshot')

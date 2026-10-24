@@ -15,8 +15,9 @@ function safePath(path) {
   return typeof path==='string' && path.length<=1024 && !path.includes('\\') && path.split('/').every(p=>p && p!=='.' && p!=='..') && !path.includes('\0');
 }
 export function validateManifest(m) {
-  if (m.version!==1 || !['testing','encrypted-dr'].includes(m.kind) || !Array.isArray(m.files) || m.files.length>10000) throw Error('Invalid dataset manifest');
-  if (m.kind==='testing' && (!Number.isSafeInteger(m.expires) || m.expires*1000<=Date.now())) throw Error('Testing data expired');
+  if (m.version!==1 || !['testing','encrypted-dr','public'].includes(m.kind) || !Array.isArray(m.files) || m.files.length>10000) throw Error('Invalid dataset manifest');
+  if (['testing','public'].includes(m.kind) && (!Number.isSafeInteger(m.expires) || m.expires*1000<=Date.now())) throw Error('Dataset expired');
+  if (m.kind==='public' && (m.files.length!==1 || m.files[0].path!=='public-snapshot.json' || m.files[0].size>32*1024*1024)) throw Error('Invalid public snapshot package');
   const paths=new Set();let total=0;
   for (const file of m.files) {
     if (!safePath(file.path) || paths.has(file.path) || !Number.isSafeInteger(file.size) || file.size<0 || !Array.isArray(file.chunks)) throw Error('Invalid file');
@@ -41,7 +42,7 @@ class ChunkStore {
       try {
         const file=await (await entry.getFileHandle('manifest.json')).getFile();
         const m=JSON.parse(await file.text());
-        if (m.kind==='testing' && m.expires*1000<=Date.now()) await datasets.removeEntry(name,{recursive:true});
+        if (['testing','public'].includes(m.kind) && m.expires*1000<=Date.now()) await datasets.removeEntry(name,{recursive:true});
       } catch { /* Incomplete transfers can be resumed. */ }
     }
     return new ChunkStore(await datasets.getDirectoryHandle(room,{create:true}));
@@ -68,8 +69,8 @@ export class ArchivePeer extends EventTarget {
   emit(type,detail) {this.dispatchEvent(new CustomEvent(type,{detail}));}
   active() {
     if (Date.now()>=this.ticket.exp*1000) throw Error('Device invitation expired');
-    if (this.manifest?.kind==='testing' && Date.now()>=this.manifest.expires*1000) {
-      void this.forget().catch(()=>{});throw Error('Testing data expired');
+    if (['testing','public'].includes(this.manifest?.kind) && Date.now()>=this.manifest.expires*1000) {
+      void this.forget().catch(()=>{});throw Error('Dataset expired');
     }
   }
   async connect() {
@@ -215,7 +216,7 @@ export class ArchivePeer extends EventTarget {
     }
     await this.store.put('manifest.json',bytes);
     clearTimeout(this.datasetExpiryTimer);
-    if (manifest.kind==='testing') this.datasetExpiryTimer=setTimeout(()=>{void this.forget().then(()=>this.disconnect('Testing data expired')).catch(e=>this.emit('error',e.message));},Math.min(2147483647,Math.max(0,manifest.expires*1000-Date.now())));
+    if (['testing','public'].includes(manifest.kind)) this.datasetExpiryTimer=setTimeout(()=>{void this.forget().then(()=>this.disconnect('Dataset expired')).catch(e=>this.emit('error',e.message));},Math.min(2147483647,Math.max(0,manifest.expires*1000-Date.now())));
     this.emit('manifest',manifest);
   }
   async seed(files) {
