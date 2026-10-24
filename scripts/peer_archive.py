@@ -39,6 +39,7 @@ def package_file(source,output,kind,expires=None,source_manifest=None):
     if kind not in {'testing','encrypted-dr','public'}:raise RuntimeError('Unknown dataset kind')
     if kind=='public':
         from public_data import MAX_BYTES,validate_snapshot
+        if source_manifest is not None:raise RuntimeError('Public packages must not carry DR metadata')
         if source.stat().st_size>MAX_BYTES:raise RuntimeError('Public data exceeds the size limit')
         validate_snapshot(json.loads(source.read_bytes()))
     if kind=='encrypted-dr':

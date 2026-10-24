@@ -9,9 +9,36 @@ import unittest
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import peer_archive
+import public_data
 
 
 class PeerArchiveTests(unittest.TestCase):
+    def test_public_packages_reject_private_projections_and_extra_manifest_metadata(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);source=root/'public.json'
+            value={'version':3,**{name:[] for name in public_data.FIELDS}}
+            source.write_text(json.dumps({**value,'memberships':[{'email':'private@example.invalid'}]}))
+            with self.assertRaises(ValueError):peer_archive.package_file(source,root/'rejected','public')
+            self.assertFalse((root/'rejected').exists())
+            source.write_text(json.dumps(value));out=root/'package'
+            peer_archive.package_file(source,out,'public')
+            manifest,raw,snapshot,chunks=public_data.load_package(out)
+            self.assertEqual(json.loads(snapshot),value)
+            manifest['credentials']='must never be served'
+            (out/'manifest.json').write_text(json.dumps(manifest))
+            with self.assertRaises(ValueError):public_data.load_package(out)
+
+    def test_public_packages_reject_corrupt_or_symlinked_chunks(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);source=root/'public.json'
+            source.write_text(json.dumps({'version':3,**{name:[] for name in public_data.FIELDS}}))
+            out=root/'package';peer_archive.package_file(source,out,'public')
+            chunk=next((out/'chunks').iterdir());original=chunk.read_bytes()
+            chunk.write_bytes(b'x'*len(original))
+            with self.assertRaises(ValueError):public_data.load_package(out)
+            chunk.unlink();chunk.symlink_to(source)
+            with self.assertRaises(ValueError):public_data.load_package(out)
+
     def test_packages_preserve_all_bytes_and_deduplicate_repeated_chunks(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);source=root/'testing.json';source.write_bytes(b'x'*peer_archive.CHUNK_SIZE*2+b'end')

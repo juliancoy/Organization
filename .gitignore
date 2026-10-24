@@ -36,6 +36,10 @@
 !/scripts/testing_copy.py
 !/scripts/setup_recovery_timer.py
 !/scripts/peer_archive.py
+!/scripts/public_data.py
+!/scripts/check_peer_browser.py
+!/scripts/setup_working_copy_timer.py
+!/PUBLIC_DATA_SHARING.md
 !/peer-share
 !/peer-worker/
 /peer-worker/node_modules/

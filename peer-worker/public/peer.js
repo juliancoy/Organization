@@ -18,11 +18,14 @@ export function validateManifest(m) {
   if (m.version!==1 || !['testing','encrypted-dr','public'].includes(m.kind) || !Array.isArray(m.files) || m.files.length>10000) throw Error('Invalid dataset manifest');
   if (['testing','public'].includes(m.kind) && (!Number.isSafeInteger(m.expires) || m.expires*1000<=Date.now())) throw Error('Dataset expired');
   if (m.kind==='public' && (m.files.length!==1 || m.files[0].path!=='public-snapshot.json' || m.files[0].size>32*1024*1024)) throw Error('Invalid public snapshot package');
+  if (m.kind==='public' && Object.keys(m).some(key=>!['version','kind','files','expires'].includes(key))) throw Error('Unexpected public manifest metadata');
   const paths=new Set();let total=0;
   for (const file of m.files) {
+    if (m.kind==='public' && Object.keys(file).some(key=>!['path','size','chunks'].includes(key))) throw Error('Unexpected public file metadata');
     if (!safePath(file.path) || paths.has(file.path) || !Number.isSafeInteger(file.size) || file.size<0 || !Array.isArray(file.chunks)) throw Error('Invalid file');
     paths.add(file.path);let size=0;
     for (const part of file.chunks) {
+      if (m.kind==='public' && Object.keys(part).some(key=>!['hash','size'].includes(key))) throw Error('Unexpected public chunk metadata');
       if (!HASH.test(part.hash) || !Number.isSafeInteger(part.size) || part.size<1 || part.size>CHUNK_SIZE) throw Error('Invalid chunk');
       size+=part.size;
     }

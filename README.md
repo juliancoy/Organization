@@ -1,5 +1,25 @@
 # Organization
 
+## Workspace releases
+
+Run `./push-all.sh --dry-run --deploy-all` to inspect scope, then
+`./push-all.sh --deploy-all` after reviewing changes. The existing launcher uses
+`CodeCollective/scripts/push_all.py`: it includes the workspace root, keeps existing
+branches, validates, commits, pushes, calls the global distributed suite, and
+blocks deployment unless the tested revisions and suites pass. Follow progress
+at `http://map.local/tests.html`. Matching active runs are reused; unrelated runs
+finish before a new release run starts.
+
+OrgPortal uses its own pinned release container. Identity, chat, CodeCollective,
+MedTech/LifeTech, Deism production Pages and the peer Worker retain their owning
+release paths. Detached release checkouts isolate builds from local watchers.
+Pending migrations stop the pipeline unless each filename is explicitly supplied
+with `--reviewed-migration NAME.sql`. Logs, revisions, the global-suite receipt and
+live verification are saved under `.local-releases/`. `--skip-deploy` still runs
+validation and global tests and pushes commits. Repositories without a configured
+deployment are committed and pushed only. New source edits during checks stop the
+release for review. Credentials stay out of command arguments and reports.
+
 Give your AI agent this prompt:
 
 > Fork `JulianCoy/Organization` into my GitHub account before cloning it, then
