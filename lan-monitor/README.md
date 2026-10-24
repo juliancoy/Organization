@@ -415,12 +415,12 @@ the coordinator:
 ```sh
 ./onboard_node.sh julian@julian-inspiron-3793.local
 # If mDNS is IPv6-only, use the discovered scoped address for SSH:
-./onboard_node.sh julian@julian-inspiron-3793.local --address 'fe80::712c:6bf5:a23:a2fa%enp7s0'
+./onboard_node.sh julian@julian-inspiron-3793.local --address 'fe80::c23e:baff:fe12:47aa%enp7s0'
 ```
 
 The host must already trust the coordinator's SSH key and appear in its known
 hosts. Onboarding verifies the remote hostname, Docker, physical LAN address and
-authenticated agent machine identity. It retains the fleet key and existing
+authenticated agent machine identity, preferring a wired LAN address. It retains the fleet key and existing
 members, saves the SSH account, installs Python dependencies in a private venv,
 and enables the `organization-test-agent` user service and login lingering.
 The supervised agent uses the host's selected local Docker socket, including

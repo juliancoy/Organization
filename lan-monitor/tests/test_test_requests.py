@@ -45,6 +45,16 @@ class ScopeTests(unittest.TestCase):
         self.assertEqual(git.call_args.args[0][2],'/workspace')
         self.assertTrue(any(task.startswith('monitor--') for task in tasks))
 
+    def test_focused_result_depends_on_selected_jobs_not_unused_workers(self):
+        from distributed import outcome
+        run={'selection':normalize([],['monitor']),'granular':True,'pending_tasks':[]}
+        hosts=[{'status':'passed','jobs':{'test':{'status':'passed'}}},{'status':'unavailable','jobs':{}}]
+        self.assertEqual(outcome(run,hosts,{}),'passed')
+        run['pending_tasks']=['unexecuted']
+        self.assertEqual(outcome(run,hosts,{}),'failed')
+        run['pending_tasks']=[];hosts[0]['jobs']['test']['status']='unavailable'
+        self.assertEqual(outcome(run,hosts,{}),'failed')
+
     def test_p2p_selection_does_not_add_ordinary_tests(self):
         self.assertEqual(select(list(self.specs), self.specs, normalize([], ['p2p'])), [])
 

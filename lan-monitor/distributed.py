@@ -34,6 +34,16 @@ def targets():
     return [{'host':name,'local':name==config['name']} for name in sorted(peers)]
 
 
+def outcome(run, hosts, excluded):
+    if run.get('selection') and run.get('granular'):
+        jobs=[job for host in hosts for job in host.get('jobs',{}).values()]
+        # Idle workers that lose a race to another coordinator are not failed
+        # tests. Every selected task must still have a verified final result.
+        return 'passed' if jobs and not run.get('pending_tasks') and all(job['status'] in SUCCESS for job in jobs) else 'failed'
+    return ('failed' if any(host['status'] not in ('passed','partial') for host in hosts) else
+            'partial' if (excluded and run.get('targeted')) or any(host['status']=='partial' for host in hosts) else 'passed')
+
+
 def no_remote_shell(target):
     raise RuntimeError('SSH is not an execution transport; provision an authenticated launcher agent')
 
@@ -412,8 +422,7 @@ class DistributedTests:
                     self.save()
                 if any('p2p' in h['jobs'] for h in hosts):self.network(run,images)
             with self.lock:
-                run['status'] = ('failed' if any(host['status'] not in ('passed','partial') for host in hosts) else
-                                 'partial' if (excluded and run.get('targeted')) or any(host['status']=='partial' for host in hosts) else 'passed')
+                run['status'] = outcome(run, hosts, excluded)
         except Exception as exc:
             with self.lock:
                 self.run.update(status='failed', error=type(exc).__name__ + ': ' + str(exc)[:500])

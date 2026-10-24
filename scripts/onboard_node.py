@@ -62,7 +62,8 @@ print(json.dumps(dict(host=socket.gethostname().lower()+'.local',home=str(pathli
     rows = json.loads(subprocess.check_output(['ip', '-j', '-4', 'addr', 'show', 'dev', 'enp7s0'], text=True))
     networks = [ipaddress.ip_network(a['local'] + '/' + str(a['prefixlen']), strict=False)
                 for row in rows for a in row.get('addr_info', []) if a.get('scope') == 'global']
-    address = next((a['local'] for row in probe['interfaces'] if row['ifname'].startswith(('en', 'eth', 'wl'))
+    interfaces = sorted(probe['interfaces'], key=lambda row: row['ifname'].startswith('wl'))
+    address = next((a['local'] for row in interfaces if row['ifname'].startswith(('en', 'eth', 'wl'))
                     for a in row.get('addr_info', []) if a.get('scope') == 'global'
                     and any(ipaddress.ip_address(a['local']) in net for net in networks)), None)
     if not address:
