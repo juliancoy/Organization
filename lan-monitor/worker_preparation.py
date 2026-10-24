@@ -17,6 +17,7 @@ class Preparation:
     def __init__(self, work, manifest, target, dependencies, capacity):
         self.work,self.manifest,self.target,self.dependencies,self.capacity=work,manifest,target,dependencies,capacity
         self.ready=set();self.results={};self.running=True;self.lock=threading.Lock();self.stop=threading.Event()
+        self.dependencies.cancel=self.stop
         self.thread=threading.Thread(target=self.prepare,daemon=True)
 
     def p2p(self):

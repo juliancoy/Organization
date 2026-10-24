@@ -61,7 +61,7 @@ class Dependencies:
                     else:
                         setup['prepare'] = SUITES[package].get('prepare')
                     preparing=time.monotonic()
-                    try:self.results[package] = run(self.work, task, 'prepare', setup, self.manifest['id'], self.env)
+                    try:self.results[package] = run(self.work, task, 'prepare', setup, self.manifest['id'], self.env, cancel=getattr(self,'cancel',None))
                     finally:timings['prepare']=timings.get('prepare',0)+time.monotonic()-preparing
                 if self.results[package]:
                     return self.results[package]

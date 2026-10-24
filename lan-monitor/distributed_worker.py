@@ -113,8 +113,8 @@ def container_user():
     return str(os.getuid()) + ':' + str(os.getgid())
 
 
-def run(work, suite_id, phase, spec, run_id, env):
-    if (work.parent / 'STOP').exists():
+def run(work, suite_id, phase, spec, run_id, env, cancel=None):
+    if (work.parent / 'STOP').exists() or (cancel is not None and cancel.is_set()):
         return 130
     command = spec.get(phase)
     if not command:
@@ -135,7 +135,7 @@ def run(work, suite_id, phase, spec, run_id, env):
                    '-e', 'PIDP_BUILD_COMMIT=' + env['PIDP_BUILD_COMMIT'], '-e', 'PIDP_BUILD_DIRTY=false',
                    '-e', 'ORGPORTAL_BUILD_COMMIT=' + env['ORGPORTAL_BUILD_COMMIT'], '-e', 'ORGPORTAL_BUILD_DIRTY=false',
                    spec['image'], *command]
-    if (work.parent / 'STOP').exists():
+    if (work.parent / 'STOP').exists() or (cancel is not None and cancel.is_set()):
         return 130
     emit('phase', suite=suite_id, phase=phase)
     timeout = 900 if phase == 'prepare' else 1200
@@ -153,7 +153,7 @@ def run(work, suite_id, phase, spec, run_id, env):
                 os.killpg(process.pid, signal.SIGTERM)
         def watch_stop():
             while process.poll() is None:
-                if (work.parent / 'STOP').exists():
+                if (work.parent / 'STOP').exists() or (cancel is not None and cancel.is_set()):
                     os.killpg(process.pid, signal.SIGTERM)
                     return
                 time.sleep(0.25)
@@ -177,7 +177,7 @@ def run(work, suite_id, phase, spec, run_id, env):
             code = process.wait(timeout=10)
         finally:
             timer.cancel()
-        return 124 if expired.is_set() else code
+        return 130 if cancel is not None and cancel.is_set() else 124 if expired.is_set() else code
     except Exception as exc:
         emit('log', suite=suite_id, phase=phase, line=type(exc).__name__ + ': ' + clean(str(exc)))
         return 125

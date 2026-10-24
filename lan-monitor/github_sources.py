@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 
 REPOSITORIES=('.', 'OrgPortal', 'PIdP')
 
@@ -18,6 +19,47 @@ def github_url(value):
 def source_digest(repositories):
     refs={name:{key:repo[key] for key in ('url','commit')} for name,repo in repositories.items()}
     return hashlib.sha256(json.dumps(refs,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+
+
+# Scan Git blobs, not just working files: a safe edit can hide a staged secret.
+SECRET_CONTENT = re.compile(
+    rb"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----|"
+    rb"(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{60,}|AKIA[A-Z0-9]{16})|"
+    rb"(?i:(?:api[_-]?key|api[_-]?token|client[_-]?secret|access[_-]?token|"
+    rb"refresh[_-]?token|password|secret[_-]?key)\s*[=:]\s*[\"']"
+    rb"[A-Za-z0-9_+/=.-]{32,}[\"'])"
+)
+
+
+def check_index(path, candidate=False):
+    """Reject secrets without changing the real index or exposing their values."""
+    with tempfile.TemporaryDirectory(prefix='publication-index-') as folder:
+        env={**os.environ, 'GIT_TERMINAL_PROMPT':'0'}
+        if candidate:
+            original=subprocess.run(['git','-C',str(path),'rev-parse','--git-path','index'],
+                                    capture_output=True,text=True,check=True).stdout.strip()
+            original=Path(original)
+            if not original.is_absolute():original=Path(path)/original
+            temporary=Path(folder)/'index'
+            if original.exists():temporary.write_bytes(original.read_bytes())
+            env['GIT_INDEX_FILE']=str(temporary)
+        def run(*args):
+            result=subprocess.run(['git','-C',str(path),*args],env=env,capture_output=True,timeout=180)
+            if result.returncode:raise RuntimeError(path.name+': secret preflight could not inspect Git index')
+            return result.stdout
+        if candidate:run('add','-A','--','.')
+        names=run('diff','--cached','--name-only','--diff-filter=ACMRT','-z').split(b'\0')
+        for raw in filter(None,names):
+            filename=os.fsdecode(raw)
+            leaf=Path(filename).name.lower()
+            if (leaf.startswith(('.env','.dev.vars')) and not leaf.endswith(('.example','.sample','.template'))
+                    or leaf in {'private.pem','credentials.json','secrets.json','production.json','api-token','id_rsa','id_ed25519'}
+                    or Path(filename).suffix.lower() in {'.pem','.key','.p12','.pfx','.keystore'}):
+                raise RuntimeError(path.name+': publication blocked: sensitive file '+filename)
+            entry=run('ls-files','--stage','--',filename)
+            if entry.startswith(b'160000 '):continue
+            if SECRET_CONTENT.search(run('show',':'+filename)):
+                raise RuntimeError(path.name+': publication blocked: credential content in '+filename)
 
 
 def publish(root, ident, stopped, progress):
@@ -60,6 +102,8 @@ def publish(root, ident, stopped, progress):
                     or Path(filename).suffix.lower() in {'.pem','.key','.p12','.pfx','.sqlite','.sqlite3','.db','.har','.log','.keystore'}
                     or leaf in {'credentials.json','secrets.json','id_rsa','id_ed25519'}):
                 raise RuntimeError(name+': sensitive or runtime file requires exclusion before publication: '+filename)
+        check_index(path, candidate=True)
+        check_index(path)
         prepared.append((name,path,branch,url,files))
     for name,path,branch,url,files in prepared:
         record={'url':url,'branch':branch,'dirty':False,'stage':'committing'}
@@ -68,6 +112,7 @@ def publish(root, ident, stopped, progress):
             git(path,'add','-A','--','.')
             staged_now=set(git(path,'diff','--cached','--name-only','-z').split('\0'))-{''}
             if not staged_now.issubset(set(files)|{entry.split('\t',1)[1] for entry in git(path,'ls-files','--stage','-z').split('\0') if entry.startswith('160000 ')}):raise RuntimeError(name+': files changed while staging; inspect the index and start again')
+            check_index(path)
             if git(path,'diff','--cached','--name-only'):
                 git(path,'commit','-m','Synchronize distributed test run '+ident)
         record.update(commit=git(path,'rev-parse','HEAD'),stage='fetching')

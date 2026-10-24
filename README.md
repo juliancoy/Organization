@@ -75,7 +75,8 @@ The portal is `https://localhost:8443`; identity pages and provider callbacks us
 local development certificate. Accept that certificate for each origin. Identity
 cookies are host-only; the portal uses its own session via browser-bound SSO.
 Identity CORS does not allow portal JavaScript to read identity responses.
-Account data and Docker volumes are unchanged by this routing configuration.
+Shared identity is enabled locally: portal sign-in uses primary PIdP credentials.
+Membership IDs and organization permissions remain in the portal.
 
 ## Local access
 

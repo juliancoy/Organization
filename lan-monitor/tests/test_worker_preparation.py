@@ -34,3 +34,20 @@ class PreparationTests(TestCase):
             self.assertEqual(prep.ready,{'monitor','web'})
             self.assertFalse(prep.running)
             self.assertTrue(any(call.kwargs.get('status')=='failed' for call in emit.call_args_list))
+
+    def test_idle_worker_cancels_unneeded_installer_promptly(self):
+        import sys
+        import threading
+        import time
+        from distributed_worker import run
+        cancel=threading.Event()
+        timer=threading.Timer(.1,cancel.set)
+        with tempfile.TemporaryDirectory() as folder, patch('distributed_worker.emit'):
+            started=time.monotonic()
+            timer.start()
+            try:
+                code=run(Path(folder),'setup','prepare',{'native':True,'cwd':'.',
+                         'prepare':[sys.executable,'-c','import time; time.sleep(30)']},'test',{},cancel=cancel)
+            finally:timer.cancel()
+        self.assertEqual(code,130)
+        self.assertLess(time.monotonic()-started,3)
