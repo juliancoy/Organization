@@ -659,6 +659,9 @@ class Agent:
         if self.browsers:raise RuntimeError('An agent P2P browser is already active')
         self.extract(args['upload'],folder)
         if set(p.name for p in folder.iterdir())!={'remote.py','peer.js'}:raise ValueError('Unexpected P2P fixture files')
+        # A native agent may use umask 077; these public fixtures must be
+        # readable by Selenium's distinct container UID, including rootless UID maps.
+        folder.chmod(0o755)
         with self.client() as client:
             image=client.images.get(args['image'])
             if image.id!=args['image']:raise ValueError('P2P requires immutable image ID')

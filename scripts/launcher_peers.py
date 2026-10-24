@@ -246,6 +246,9 @@ class InternetMesh(Mesh):
         super().__init__({'name':peer,'peers':{peer:peer},'key':secrets.token_hex(32)},prefix)
         self.socket = None
         self.expires = 0
+        self.signaling_state = "connecting"
+        self.last_error = None
+        self.turn_available = None
 
     async def dial(self, peer, session=None):
         if peer in self.links:
@@ -338,6 +341,7 @@ class InternetMesh(Mesh):
                         if response.status in (401,403):
                             Path('/tmp/launcher-peers-internet.json').write_text(json.dumps({
                                 'name':self.name,'registration':'new-invitation-required','peers':{}}))
+                            self.signaling_state='invitation-required'
                             logging.error('Launcher registration was revoked or expired; enroll with a new invitation')
                             return
                         if response.status!=200:raise ValueError('Device session rejected')
@@ -347,9 +351,11 @@ class InternetMesh(Mesh):
                         if response.status!=200:raise ValueError('ICE configuration unavailable')
                         ice = await response.json()
                     self.rtc_config = RTCConfiguration(iceServers=[RTCIceServer(**server) for server in ice['iceServers']])
+                    self.turn_available=any(str(url).startswith(('turn:','turns:')) for server in ice['iceServers'] for url in (server['urls'] if isinstance(server['urls'],list) else [server['urls']]))
                     url = base.replace('https://','wss://',1)+'/signal'
                     async with session.ws_connect(url,protocols=['archive.v1','auth.'+token],heartbeat=20,max_msg_size=65536) as ws:
                         self.socket = ws
+                        self.signaling_state='connected';self.last_error=None
                         print('Launcher internet WebRTC signaling connected',flush=True)
                         ticker = asyncio.create_task(self.heartbeat(stopped))
                         def heartbeat_done(task):
@@ -363,8 +369,10 @@ class InternetMesh(Mesh):
                                 await self.signal(json.loads(message.data))
                             elif message.type in (WSMsgType.ERROR,WSMsgType.CLOSED):break
             except Exception as error:
+                self.last_error=type(error).__name__
                 logging.warning('Launcher internet session unavailable: %s',type(error).__name__)
             finally:
+                if self.signaling_state!='invitation-required':self.signaling_state='reconnecting'
                 if ticker:
                     ticker.cancel()
                     await asyncio.gather(ticker,return_exceptions=True)
@@ -389,18 +397,18 @@ def main():
 
 
 LAUNCHER_PAGE = '''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>LifeTech · Swarm</title>
-<style>body{font:16px system-ui;background:#eff5f3;color:#173833;margin:0}main{max-width:900px;margin:auto;padding:32px 20px}h1{font-size:36px;margin:10px 0}h2{font-size:20px}section{background:white;padding:24px;border:1px solid #c6d9d2;border-radius:16px;margin:18px 0}label{display:block;margin:14px 0}button,select,input{font:inherit;padding:12px;border:1px solid #a4bdb5;border-radius:8px;max-width:100%;box-sizing:border-box}button{background:#17665b;color:white;cursor:pointer;margin:4px 0}input{width:100%}.muted{color:#526c65}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}#message{min-height:24px}small{display:block;margin-top:8px}</style>
+<style>body{font:16px system-ui;background:#eff5f3;color:#173833;margin:0}main{max-width:900px;margin:auto;padding:32px 20px}h1{font-size:36px;margin:10px 0}h2{font-size:20px}section{background:white;padding:24px;border:1px solid #c6d9d2;border-radius:16px;margin:18px 0}label{display:block;margin:14px 0}button,select,input,textarea{font:inherit;padding:12px;border:1px solid #a4bdb5;border-radius:8px;max-width:100%;box-sizing:border-box}button{background:#17665b;color:white;cursor:pointer;margin:4px 0}input,textarea{width:100%}textarea{min-height:110px}#wan-service{overflow-wrap:anywhere}.connection-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.connection-grid div{background:#eff5f3;padding:14px;border-radius:10px}.connection-grid strong{display:block;margin-top:6px}.muted{color:#526c65}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}#message{min-height:24px}small{display:block;margin-top:8px}</style>
 <main><span class="muted">LIFETECH LAUNCHER</span><h1>Your place in the swarm</h1><p id="identity">Connecting to your launcher…</p>
-<section><h2>Connections</h2><p id="connections"></p><p id="interfaces" class="muted"></p><button id="check">Check master connection</button> <button id="remote">Test WebRTC path</button><p id="connection-result" role="status"></p></section>
+<section><h2>Connect from anywhere</h2><p class="muted">Connect this computer to Wi-Fi or Ethernet, then keep the launcher running. Your internet connection joins the swarm automatically.</p><div class="connection-grid"><div>Enrollment<strong id="enrollment">Checking…</strong></div><div>Internet signaling<strong id="signaling">Checking…</strong></div><div>Master WebRTC channel<strong id="master-channel">Checking…</strong></div></div><p id="connections"></p><p id="wan-service" class="muted"></p><p id="relay" class="muted"></p><details><summary>Network interfaces</summary><p id="interfaces" class="muted"></p></details><p><button id="remote">Test internet connection</button> <button id="reconnect">Reconnect internet</button> <button id="check">Check LAN or internet</button></p><p id="connection-result" role="status"></p><details id="enrollment-form"><summary>Join or renew with a device invitation</summary><p>Use the invitation issued for this device by your swarm administrator. Credentials stay on this computer.</p><form id="enroll"><label>Import invitation JSON<input id="invitation-file" type="file" accept="application/json,.json"></label><label>Or paste invitation JSON<textarea id="invitation" autocomplete="off" spellcheck="false" placeholder='{"url":"https://your-signaling-service","token":"…"}'></textarea></label><button>Save invitation &amp; connect</button></form><p id="enrollment-result" role="status"></p></details></section>
 <section><h2>Contribute computing power</h2><label>Worker mode <select id="mode"><option value="auto">Automatic · AC power only</option><option value="always">Always accept jobs</option><option value="paused">Submit only · save battery</option></select></label><p id="power"></p><small class="muted">Already accepted jobs finish. You can submit work in every mode.</small></section>
 <section><h2>Request tests</h2><form id="request"><label>Suite names, separated by commas<input id="suites" placeholder="monitor"></label><label>Or repository paths, separated by commas<input id="paths" placeholder="OrgPortal/web/src"></label><small class="muted">Requests publish the master's current code and run tests on available workers. They do not deploy.</small><p><button>Submit authenticated request</button></p></form><p id="message" role="status"></p><details><summary>Master results</summary><pre id="result"></pre></details></section></main>
-<script>const $=id=>document.getElementById(id);async function api(path,body){const r=await fetch('/launcher/'+path,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);return d}async function refresh(){try{const d=await api('status');$('identity').textContent=d.node+' · master '+d.master;$('mode').value=d.worker.mode;$('power').textContent=d.worker.reason+(d.worker.batteries?.length?' · '+d.worker.batteries.map(b=>b.percent+'%').join(', '):'');$('interfaces').textContent=(d.interfaces||[]).map(i=>i.name+' · '+i.state+' · '+i.addresses.join(', ')).join(' | ');const open=Object.values(d.webrtc_channels).filter(x=>x==='open').length;$('connections').textContent='LAN configured · '+(d.internet_enrolled?'Internet enrolled · '+open+' open WebRTC connection(s)':'Internet not enrolled');}catch(e){$('identity').textContent=e.message}}$('mode').onchange=async()=>{try{await api('policy',{mode:$('mode').value});await refresh()}catch(e){$('power').textContent=e.message}};async function check(transport){$('connection-result').textContent='Checking…';try{const d=await api('master',{transport});$('connection-result').textContent='Authenticated master responded via '+(transport==='webrtc'?'WebRTC':'LAN-first routing');$('result').textContent=JSON.stringify(d,null,2)}catch(e){$('connection-result').textContent=e.message}}$('check').onclick=()=>check('auto');$('remote').onclick=()=>check('webrtc');$('request').onsubmit=async e=>{e.preventDefault();const split=id=>$(id).value.split(',').map(s=>s.trim()).filter(Boolean);const body={suites:split('suites'),paths:split('paths')};if(!body.suites.length&&!body.paths.length){$('message').textContent='Choose suites or paths to test.';return}const button=e.target.querySelector('button');button.disabled=true;try{const d=await api('request',body);$('message').textContent='Request accepted: '+d.id;$('result').textContent=JSON.stringify(d,null,2)}catch(e){$('message').textContent=e.message}finally{button.disabled=false}};refresh();setInterval(refresh,10000);</script></html>'''
+<script>const $=id=>document.getElementById(id);async function api(path,body){const r=await fetch('/launcher/'+path,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);return d}async function refresh(){try{const d=await api('status');$('identity').textContent=d.node+' · master '+d.master;$('mode').value=d.worker.mode;$('power').textContent=d.worker.reason+(d.worker.batteries?.length?' · '+d.worker.batteries.map(b=>b.percent+'%').join(', '):'');$('interfaces').textContent=(d.interfaces||[]).map(i=>i.name+' · '+i.state+' · '+i.addresses.join(', ')).join(' | ');const w=d.wan||{};$('enrollment').textContent=w.enrollment||'Checking';$('signaling').textContent=w.signaling+(w.error?' · '+w.error:'');$('master-channel').textContent=w.master_channel||'disconnected';$('wan-service').textContent=w.service?'Signaling service: '+w.service:'Import your device invitation to connect over the internet.';$('relay').textContent=w.turn_available===false?'Direct WebRTC is available. This service has no TURN relay; restrictive networks may prevent a connection.':w.turn_available?'TURN relay available for networks that block direct connections.':'Relay availability will appear after signaling connects.';const open=Object.values(d.webrtc_channels).filter(x=>x==='open').length;$('connections').textContent='LAN configured · '+(d.internet_enrolled?'Internet enrolled · '+open+' open WebRTC connection(s)':'Internet not enrolled');}catch(e){$('identity').textContent=e.message}}$('mode').onchange=async()=>{try{await api('policy',{mode:$('mode').value});await refresh()}catch(e){$('power').textContent=e.message}};async function check(transport){$('connection-result').textContent='Checking…';try{const d=await api('master',{transport});$('connection-result').textContent='Authenticated master responded via '+(transport==='webrtc'?'WebRTC':'LAN-first routing');$('result').textContent=JSON.stringify(d,null,2)}catch(e){$('connection-result').textContent=e.message}}$('check').onclick=()=>check('auto');$('remote').onclick=()=>check('webrtc');$('reconnect').onclick=async()=>{try{const d=await api('reconnect',{});$('connection-result').textContent=d.status;await refresh()}catch(e){$('connection-result').textContent=e.message}};$('invitation-file').onchange=async e=>{const file=e.target.files[0];if(!file)return;if(file.size>16384){$('enrollment-result').textContent='Use an invitation under 16 KiB.';return}$('invitation').value=await file.text()};$('enroll').onsubmit=async e=>{e.preventDefault();const button=e.target.querySelector('button');button.disabled=true;try{const d=await api('enroll',JSON.parse($('invitation').value));$('invitation').value='';$('invitation-file').value='';$('enrollment-result').textContent=d.status;await refresh()}catch(e){$('enrollment-result').textContent=e.message}finally{button.disabled=false}};$('request').onsubmit=async e=>{e.preventDefault();const split=id=>$(id).value.split(',').map(s=>s.trim()).filter(Boolean);const body={suites:split('suites'),paths:split('paths')};if(!body.suites.length&&!body.paths.length){$('message').textContent='Choose suites or paths to test.';return}const button=e.target.querySelector('button');button.disabled=true;try{const d=await api('request',body);$('message').textContent='Request accepted: '+d.id;$('result').textContent=JSON.stringify(d,null,2)}catch(e){$('message').textContent=e.message}finally{button.disabled=false}};refresh();setInterval(refresh,10000);</script></html>'''
 
 
 class JobGateway:
     """Loopback gateway and bounded encrypted agent RPC over WebRTC data channels."""
     def __init__(self, agent):
-        self.agent=agent;self.mesh=None;self.pending={};self.parts={};self.inflight=set();self.runner=None
+        self.agent=agent;self.mesh=None;self.pending={};self.parts={};self.inflight=set();self.runner=None;self.reconnect_generation=0
 
     async def send(self, peer, ident, data, reply):
         import base64
@@ -515,10 +523,26 @@ class JobGateway:
                 interfaces=[{'name':r['ifname'],'state':r.get('operstate'),'addresses':[a['local'] for a in r.get('addr_info',[]) if a.get('scope')=='global']} for r in rows if r['ifname'].startswith(('en','eth','wl'))]
                 peers={}
                 if self.mesh:peers={p:c.readyState for p,c in self.mesh.channels.items()}
+                enrollment={}
+                try:enrollment=json.loads(Path('/tmp/launcher-enrollment.json').read_text())
+                except (OSError,ValueError):pass
+                remote=config.get('internet',{})
+                wan={'service':remote.get('url'),'enrollment':enrollment.get('status','not-enrolled'),
+                     'signaling':getattr(self.mesh,'signaling_state','not-connected'),
+                     'error':getattr(self.mesh,'last_error',None),'turn_available':getattr(self.mesh,'turn_available',None),
+                     'master_channel':peers.get(config.get('internet_nodes',{}).get(config.get('master','compai.local')),'disconnected')}
                 return web.json_response({'node':config['name'],'worker':worker_policy(self.agent.config),
                     'lan':config.get('peers',{}),'internet_enrolled':bool(config.get('internet')),'webrtc_channels':peers,
-                    'master':config.get('master','compai.local'),'interfaces':interfaces},headers={'Cache-Control':'no-store'})
+                    'master':config.get('master','compai.local'),'interfaces':interfaces,'wan':wan},headers={'Cache-Control':'no-store'})
             body=await request.json()
+            if request.path=='/launcher/enroll':
+                from launcher_registration import queue_invitation
+                queue_invitation(body,self.agent.config)
+                return web.json_response({'status':'Invitation saved; registration will retry automatically'})
+            if request.path=='/launcher/reconnect':
+                if body:raise ValueError('Reconnect takes no arguments')
+                self.reconnect_generation+=1
+                return web.json_response({'status':'Reconnecting internet signaling; LAN and running jobs remain active'})
             if request.path=='/launcher/policy':
                 if body.get('mode') not in ('auto','always','paused'):raise ValueError('Invalid worker mode')
                 path=self.agent.config.parent/'worker-policy.json';temp=path.with_suffix('.tmp')
@@ -537,7 +561,7 @@ class JobGateway:
         app.router.add_post('/agent/v1',self.request)
         app.router.add_get('/launcher',self.browser)
         app.router.add_get('/launcher/status',self.browser)
-        for route in ('policy','request','master'):app.router.add_post('/launcher/'+route,self.browser)
+        for route in ('policy','request','master','enroll','reconnect'):app.router.add_post('/launcher/'+route,self.browser)
         self.runner=web.AppRunner(app,access_log=None);await self.runner.setup()
         await web.TCPSite(self.runner,'127.0.0.1',8791).start()
 
@@ -646,7 +670,7 @@ async def supervise(path,prefix,stopped):
                 if all(key in config for key in ('name','peers','key')):
                     desired['lan'] = {key:config[key] for key in ('name','peers','key')}
                 if config.get('internet') and not config['internet'].get('pending'):
-                    desired['internet'] = {'internet':config['internet'],'internet_nodes':config.get('internet_nodes',{})}
+                    desired['internet'] = {'internet':config['internet'],'internet_nodes':config.get('internet_nodes',{}),'reconnect':gateway.reconnect_generation}
                 for name,(version,task) in list(tasks.items()):
                     changed = name not in desired or version!=json.dumps(desired[name],sort_keys=True)
                     if changed:
