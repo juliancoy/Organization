@@ -14,7 +14,7 @@ API='/api/v1/master'
 RUN_ID={'type':'string','pattern':r'^[0-9TZ-]+-[a-f0-9]{8}$','description':'Recorded run ID; omit to select the latest run.'}
 TOOLS=[
  ('get_runtime_stats','Test runtime statistics','Read persistent per-task and per-machine runtime samples, median and p95. Reused results are excluded from timing percentiles.',{'host':{'type':'string','minLength':1,'maxLength':253},'task':{'type':'string','minLength':1,'maxLength':100}},[]),
- ('create_backups','Back up enrolled devices','Replicate the latest complete DR snapshot as encrypted, verified persistent copies on every enrolled test device. Private decryption keys stay on the recovery host.',{},[]),
+ ('create_backups','Back up enrolled devices','Replicate current production data from the latest complete DR snapshot as encrypted, verified device copies. Historical public dataset versions and private decryption keys stay on the recovery host.',{},[]),
  ('get_backups','Backup status','Read persistent per-device backup progress, verification receipts and failures.',{},[]),
  ('request_tests','Request focused tests','Queue tests for repository-relative code paths or named suites. COMMITS AND PUSHES current sources before execution. Uses available workers; no deployment or email checks.',{'paths':{'type':'array','items':{'type':'string'},'maxItems':100},'suites':{'type':'array','items':{'type':'string'},'maxItems':100},'force':{'type':'boolean','default':False}},[]),
  ('list_test_requests','Test request inbox','List the latest 100 test requests and their run IDs.',{},[]),

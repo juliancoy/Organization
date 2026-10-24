@@ -7,6 +7,8 @@ import io
 import json
 import os
 from pathlib import Path
+import re
+import shutil
 import tarfile
 
 PART_SIZE = 32 * 1024 * 1024
@@ -37,6 +39,45 @@ def contents(snapshot,store):
     for records in manifest['objects'].values():
         for record in records:expected['objects/'+record['sha256']]=record['sha256']
     return expected
+
+
+def current_snapshot(snapshot,store,cache):
+    """Keep every private record; remove only superseded public dataset versions."""
+    contents(snapshot,store)
+    source_digest=sha(snapshot/'manifest.json')
+    destination=Path(cache)/'current-snapshots'/snapshot.name
+    if (destination/'manifest.json').exists():
+        saved=json.loads((destination/'manifest.json').read_text())
+        if saved['fleetPolicy']['sourceManifestSha256']!=source_digest:raise RuntimeError('Source recovery generation changed')
+        return destination
+    manifest=json.loads((snapshot/'manifest.json').read_text());excluded=[]
+    bucket='codecollective-usajobs';records=manifest['objects'].get(bucket,[]);versions={}
+    for name in ('jobs','vacants','vacants_parcels'):
+        pointer=next((r for r in records if r['key']==name+'/latest.json'),None)
+        if pointer:
+            value=json.loads((store/'objects'/pointer['sha256']).read_text())
+            version=value['version']
+            if not re.fullmatch(r'v\d{8}T\d{6}Z',version) or not any(r['key']==name+'/'+version+'/manifest.json' for r in records):raise RuntimeError('Current public dataset manifest missing')
+            versions[name]=version
+    if records:
+        retained=[]
+        for record in records:
+            path=record['key'].split('/')
+            historical=len(path)>1 and path[0] in versions and re.fullmatch(r'v\d{8}T\d{6}Z',path[1]) and path[1]!=versions[path[0]]
+            (excluded if historical else retained).append(record)
+        manifest['objects'][bucket]=retained
+    destination.mkdir(parents=True,exist_ok=True,mode=0o700)
+    for name in manifest['files']:
+        source=snapshot/name;target=destination/name;target.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+        if target.exists():continue
+        try:os.link(source,target)
+        except OSError:shutil.copyfile(source,target);target.chmod(0o600)
+    manifest['fleetPolicy']={'profile':'current-production-data','sourceSnapshot':snapshot.name,'sourceManifestSha256':source_digest,
+        'fullHistoryPath':str(snapshot),'currentPublicVersions':versions,'excludedHistoricalPublicObjects':len(excluded),'excludedHistoricalPublicBytes':sum(r['size'] for r in excluded)}
+    manifest['coverage']={**manifest.get('coverage',{}),'historicalPublicObjectsIncluded':False,'currentPublicDatasetVersionsCaptured':True}
+    manifest['consistency']=manifest.get('consistency','')+'; fleet replicas retain current public dataset versions; historical public versions remain on the recovery host'
+    write_json(destination/'manifest.json',manifest)
+    return destination
 
 
 class EncryptedWriter:
@@ -117,6 +158,8 @@ def verify(folder,private_key,expected=None,target=None):
 def package(snapshot,store,cache=DEFAULT_CACHE,key_file=KEY_FILE,part_size=PART_SIZE,progress=lambda message:None):
     from cryptography.hazmat.primitives import hashes,serialization
     from cryptography.hazmat.primitives.asymmetric import padding
+    snapshot=current_snapshot(snapshot,store,cache)
+    cache=Path(cache)/'current'
     expected=contents(snapshot,store)
     private_key=serialization.load_pem_private_key(Path(key_file).read_bytes(),password=None)
     folder=Path(cache)/snapshot.name;folder.mkdir(parents=True,exist_ok=True,mode=0o700)
@@ -138,7 +181,7 @@ def package(snapshot,store,cache=DEFAULT_CACHE,key_file=KEY_FILE,part_size=PART_
     public=private_key.public_key()
     wrapped=public.encrypt(key,padding.OAEP(mgf=padding.MGF1(hashes.SHA256()),algorithm=hashes.SHA256(),label=None))
     fingerprint=hashlib.sha256(public.public_bytes(serialization.Encoding.DER,serialization.PublicFormat.SubjectPublicKeyInfo)).hexdigest()
-    write_json(folder/'manifest.json',{'version':1,'snapshot':snapshot.name,'sourceManifestSha256':expected[snapshot.name+'/manifest.json'],'encryption':'AES-256-GCM/RSA-OAEP-SHA256','recipientSha256':fingerprint,'wrappedKey':base64.b64encode(wrapped).decode(),'parts':writer.parts})
+    write_json(folder/'manifest.json',{'version':1,'snapshot':snapshot.name,'profile':'current-production-data','sourceManifestSha256':expected[snapshot.name+'/manifest.json'],'encryption':'AES-256-GCM/RSA-OAEP-SHA256','recipientSha256':fingerprint,'wrappedKey':base64.b64encode(wrapped).decode(),'parts':writer.parts})
     progress('Verifying encrypted archive by decrypting and hashing every member')
     write_json(folder/'verified.json',verify(folder,private_key,expected))
     return folder

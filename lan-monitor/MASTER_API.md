@@ -199,11 +199,11 @@ The bounded inbox accepts up to 100 unfinished requests and shows the latest 100
 ## Encrypted recovery copies on every enrolled device
 
 `POST /api/v1/master/backups` with `{}` starts replication of the latest complete,
-verified production DR generation. `GET /api/v1/master/backups` reports per-device
+verified production DR generation, retaining current public dataset versions. Full historical public dataset versions remain on PILEDRIVE. `GET /api/v1/master/backups` reports per-device
 bytes, status, failures and final verification receipts. Both require the master
 Bearer token. MCP exposes the same `create_backups` and `get_backups` operations.
 
-The master encrypts the full snapshot and every referenced object blob into
+The master preserves all private records, databases, uploads, credentials and source code, plus the current USAJobs and vacant-property dataset versions. It encrypts this scoped snapshot and every referenced object blob into
 AES-256-GCM parts, wraps its random data key with the recovery host's RSA public
 key, and verifies the archive by decrypting and hashing every member before sending.
 Agents authenticate through the existing enrolled test-server protocol and verify

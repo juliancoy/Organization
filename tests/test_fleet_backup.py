@@ -34,6 +34,22 @@ class FleetBackupTests(unittest.TestCase):
             self.assertEqual(result['files'],3);self.assertEqual((output/snapshot.name/'secrets.json').read_bytes(),(snapshot/'secrets.json').read_bytes())
             part=next(folder.glob('*.enc'));part.write_bytes(part.read_bytes()[:-1]+b'x')
             with self.assertRaises(RuntimeError):fleet_backup.verify(folder,key,fleet_backup.contents(snapshot,store))
+    def test_current_data_policy_preserves_private_data_and_only_omits_old_public_versions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);store,snapshot,key,keyfile=self.fixture(root)
+            manifest=json.loads((snapshot/'manifest.json').read_text());records=[]
+            for name,value in [('jobs/latest.json',{'version':'v20261024T000000Z'}),('jobs/v20261024T000000Z/manifest.json',{'current':True}),('jobs/v20261024T000000Z/data.json.gz',{'job':'current'}),('jobs/v20261023T000000Z/data.json.gz',{'job':'history'}),('other/private.json',{'private':'preserve'})]:
+                data=json.dumps(value).encode();digest=hashlib.sha256(data).hexdigest();(store/'objects'/digest).write_bytes(data)
+                records.append({'key':name,'sha256':digest,'size':len(data)})
+            manifest['objects']['codecollective-usajobs']=records;(snapshot/'manifest.json').write_text(json.dumps(manifest));original=(snapshot/'manifest.json').read_bytes()
+            current=fleet_backup.current_snapshot(snapshot,store,root/'cache');derived=json.loads((current/'manifest.json').read_text())
+            self.assertEqual((snapshot/'manifest.json').read_bytes(),original)
+            self.assertEqual(derived['fleetPolicy']['excludedHistoricalPublicObjects'],1)
+            retained={r['key'] for r in derived['objects']['codecollective-usajobs']}
+            self.assertIn('other/private.json',retained);self.assertIn('jobs/v20261024T000000Z/data.json.gz',retained)
+            self.assertNotIn('jobs/v20261023T000000Z/data.json.gz',retained)
+            self.assertEqual((current/'secrets.json').read_bytes(),(snapshot/'secrets.json').read_bytes())
+
     def test_incomplete_snapshot_is_not_replicated(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary);store,snapshot,key,keyfile=self.fixture(root)
