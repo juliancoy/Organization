@@ -19,3 +19,8 @@ test('machine fills retain the existing distributed-test palette',()=>{
   const start=old.indexOf(selector+'{--status:');assert(start>=0);const color=old.slice(start).match(/--status:(#[a-f0-9]{6})/)[1];assert(current.includes(`[data-state=${state}]{--machine-color:${color}}`));
  }
 });
+
+test('unknown or unexecuted tasks are not reported as an entirely passed machine',()=>{
+ const data=fixture();data.run.status='passed';data.run.hosts[0].status='passed';data.run.hosts[0].jobs=[{name:'Done',status:'passed'},{name:'Waiting',status:'queued'}];assert.equal(machineCards(data)[0].state,'not_run');
+ assert.equal(taskState('new_unknown_status','running'),'unknown');
+});

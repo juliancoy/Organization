@@ -1,10 +1,10 @@
-export const stateLabels={running:'Running',failed:'Failed',queued:'Queued',stopped:'Stopped',passed:'Passed',unavailable:'Unavailable',not_run:'Not run',idle:'No tasks recorded'};
+export const stateLabels={running:'Running',failed:'Failed',queued:'Queued',stopped:'Stopped',passed:'Passed',unavailable:'Unavailable',not_run:'Not run',unknown:'Unknown',idle:'No tasks recorded'};
 const terminal=new Set(['passed','failed','stopped','cancelled','canceled','interrupted','timed_out']);
 export function taskState(value,runStatus){
- let state=({preparing:'running',transferring:'running',timed_out:'failed',cancelled:'stopped',canceled:'stopped',interrupted:'unavailable',reused:'passed',cached:'passed'})[value]||value;
+ let state=({preparing:'running',transferring:'running',timed_out:'failed',cancelled:'stopped',canceled:'stopped',interrupted:'unavailable',reused:'passed',cached:'passed',skipped:'not_run'})[value]||value;
  if(terminal.has(runStatus)&&state==='queued')state='not_run';
  if(terminal.has(runStatus)&&state==='running')state='stopped';
- return stateLabels[state]?state:'idle';
+ return stateLabels[state]?state:'unknown';
 }
 const key=value=>String(value||'').toLowerCase().replace(/\.$/,'').replace(/\.local$/,'');
 export function machineCards(data){
@@ -18,7 +18,7 @@ export function machineCards(data){
   const states=card.jobs.map(job=>job.state);
   // Empty ready workers are not evidence of passed tasks.
   if(host.status!=='passed')states.push(taskState(host.status,data.run.status));
-  card.state=['failed','running','queued','stopped','unavailable','passed','not_run'].find(state=>states.includes(state))||'idle';
+  card.state=['failed','running','queued','stopped','unavailable','not_run','unknown','passed'].find(state=>states.includes(state))||'idle';
  }
  for(const card of cards){card.counts={};for(const job of card.jobs)card.counts[job.state]=(card.counts[job.state]||0)+1}
  return cards;
