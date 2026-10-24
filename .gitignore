@@ -77,3 +77,5 @@
 !/scripts/launcher_update.py
 
 !/scripts/launcher_registry.py
+!/onboard_node.sh
+!/scripts/onboard_node.py

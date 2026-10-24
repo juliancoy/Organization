@@ -409,6 +409,26 @@ statuses use the run's saved end/update time for duration, not the current clock
 
 ### Authenticated launcher agents
 
+To add one Linux Docker host without starting the application stack, run from
+the coordinator:
+
+```sh
+./onboard_node.sh julian@julian-inspiron-3793.local
+# If mDNS is IPv6-only, use the discovered scoped address for SSH:
+./onboard_node.sh julian@julian-inspiron-3793.local --address 'fe80::712c:6bf5:a23:a2fa%enp7s0'
+```
+
+The host must already trust the coordinator's SSH key and appear in its known
+hosts. Onboarding verifies the remote hostname, Docker, physical LAN address and
+authenticated agent machine identity. It retains the fleet key and existing
+members, saves the SSH account, copies the local launcher image when absent,
+and installs `lifetech-launcher-session` with automatic restart and bounded logs.
+It uses `~/.local/share/organization-node` on the worker and never starts the
+application stack. Existing online peers receive the updated membership;
+offline peers stay enrolled and are reported for a later onboarding retry.
+Inspect worker runtime output with `docker logs lifetech-launcher-session`.
+The next distributed run includes the enrolled node automatically.
+
 Routine distributed runs use the existing launcher's encrypted `lifetech-agent.v1` API on TCP 8790, discovered through `_lifetech._tcp.local.` DNS-SD/mDNS (UDP 5353). Announcements contain only node/protocol metadata. They never enroll or authenticate a device. Missing multicast announcements can use an already-enrolled address, followed by the same authenticated readiness check. The coordinator requires its enrolled address on `enp7s0` and only schedules endpoints on that Ethernet subnet.
 
 The enrollment file supplies the fleet credential and enrolled addresses. This is fleet-level trust: possession of that credential grants agent execution control. Requests and responses use AES-GCM, protocol-specific authenticated data, request IDs, freshness limits and replay rejection. There is no shell-command endpoint or routine SSH fallback. SSH remains in the explicit enrollment/provisioning workflow and unrelated network monitoring collectors.
