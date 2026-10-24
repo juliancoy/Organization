@@ -31,7 +31,9 @@ export async function reviewCodexUi(output){
  try{for(const width of [390,1440]){
   const context=await browser.newContext({viewport:{width,height:1000},reducedMotion:'reduce'}),page=await context.newPage(),errors=[]
   page.on('pageerror',e=>errors.push(e.message))
-  await page.goto(base);await page.screenshot({path:join(output,`codex-locked-${width}.png`),fullPage:false})
+  await page.goto(base);
+  const mapLink=page.getByRole('link',{name:'Swarm status ↗',exact:true});assert.equal(await mapLink.getAttribute('href'),'http://map.local/');assert.equal(await mapLink.getAttribute('target'),'_blank');assert.equal(await mapLink.isVisible(),true)
+  await page.screenshot({path:join(output,`codex-locked-${width}.png`),fullPage:false})
   await page.locator('.codex-unlock input').fill('synthetic-only');await page.getByRole('button',{name:'Connect',exact:true}).click()
   await page.locator('.codex-thread').first().waitFor()
   assert(await page.locator('.codex-thread').evaluateAll(nodes=>nodes.every(node=>[...node.children].every(child=>child.getBoundingClientRect().bottom<=node.getBoundingClientRect().bottom))), 'Conversation rows must contain their text without overlap')
