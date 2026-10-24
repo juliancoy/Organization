@@ -225,3 +225,30 @@ Keep an independent protected offline copy of the recovery host's
 `~/.config/organization-recovery/private.pem`: it is required to decrypt these
 replicas after loss of the recovery machine. The REST status contains no plaintext
 application records or application secrets.
+
+## Runtime statistics
+
+`GET /api/v1/master/runtime-stats` and MCP `get_runtime_stats` expose persistent
+statistics, optionally filtered by `host` and `task`. Each test-file/build job
+records worker-measured monotonic durations for actual execution, dependency
+installation and waiting for another job's installer. Total job duration includes
+those phases and container overhead. Individual assertions within a test file
+are counted, but do not currently have separate duration samples.
+
+Fresh passing executions contribute to min/median/p95/max; failures and reused
+results are counted separately. Missing measurements remain missing rather than
+becoming zero-second tests. Groups include machine identity, so replacing a host
+with another machine does not combine their results. Each latest sample carries
+its run ID, source digest, input fingerprint and timing source. Comparisons span
+revisions and cache states; they are observations, not controlled benchmarks.
+
+SQLite samples survive run-log pruning and are retained for 180 days (pruned on
+recording). Reports use the latest 100 observations per task/machine, up to 200
+groups and 20,000 recent observations; `truncated` indicates the report limit.
+Repeated final saves update the same sample instead of counting it again. Existing
+run history can be imported with `runtime_stats.record`; older phase timings are
+explicitly marked `coordinator_estimate`.
+
+Request records also retain `queue_seconds`, `duration_seconds` (execution wall
+time including preparation), and `total_seconds` from submission to completion.
+Parallel job durations must not be summed and presented as elapsed run time.
