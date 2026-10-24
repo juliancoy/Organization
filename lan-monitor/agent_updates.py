@@ -13,8 +13,13 @@ payload=json.load(sys.stdin)
 if hashlib.sha256(pathlib.Path('/etc/machine-id').read_bytes()).hexdigest()!=payload['machine']:
  raise RuntimeError('SSH host differs from the authenticated agent machine')
 config=pathlib.Path(os.environ.get('LIFETECH_PEER_CONFIG',str(pathlib.Path.home()/'.config/lifetech-launcher/peers.json')))
-if json.loads(config.read_text())['name']!=payload['node']:
+settings=json.loads(config.read_text())
+if settings['name']!=payload['node']:
  raise RuntimeError('SSH account is not the enrolled launcher owner')
+public_key=payload['controller_public_key']
+if len(bytes.fromhex(public_key))!=32:raise RuntimeError('Invalid controller public key')
+settings['controller_public_key']=public_key
+pending=config.with_suffix('.controller.tmp');pending.write_text(json.dumps(settings,indent=2)+'\\n');pending.chmod(0o600);pending.replace(config)
 files=payload['files']
 expected=('launcher_peers.py','launcher_discovery.py','launcher_registration.py','launcher_agent.py','launcher_registry.py')
 if set(files)!=set(expected)|{'launcher_update.py'}:
@@ -38,7 +43,10 @@ class LauncherUpdates:
 
     def stage(self,host,status):
         if self.stopped():raise InterruptedError('Launcher update stopped')
-        payload={'machine':status['machine'],'node':status['node'],'revision':self.revision,'files':self.files}
+        from agent_client import CONFIG
+        public_key=json.loads(CONFIG.read_text())['controller_public_key']
+        if len(bytes.fromhex(public_key))!=32:raise ValueError('Invalid pinned controller key')
+        payload={'machine':status['machine'],'node':status['node'],'revision':self.revision,'files':self.files,'controller_public_key':public_key}
         if host.get('local'):
             command=[sys.executable,'-c',INSTALL]
         else:

@@ -607,7 +607,12 @@ telemetry. An unreadable policy declines new work. Submission stays available.
 The master accepts `tests.request` and `tests.status` through the existing
 AES-GCM agent protocol. Only its private launcher config enables `master_api`,
 and its REST credential stays in `master-api-token` beside that config, never on
-client laptops. This retains the existing fleet-level execution trust model.
+client laptops. This is a separate scoped launcher token: only status and test
+requests are permitted. It cannot control Codex or administer runs. Worker
+execution and file mutations additionally require an Ed25519 controller signature;
+the private key stays in `~/.config/map-master/controller-signing.key` on the
+controller. SSH-authenticated launcher updates pin only the public key. Unknown
+operations fail closed. Keep the private key out of launcher mounts and snapshots.
 
 Enrolled internet nodes map fleet names to registration peer IDs in
 `internet_nodes`. The loopback port 8791 gateway tries the enrolled LAN endpoint

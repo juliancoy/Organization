@@ -1,3 +1,4 @@
+import {authorizedAction} from './authorized-action.js';
 import {snapshotFetch} from './snapshot-fetch.js';
 import {pollVisible} from './visible-poll.js';
 const panel=document.getElementById('mobile-devices');
@@ -30,7 +31,7 @@ async function refresh(){
   button.type='button';button.disabled=!connected||running||requesting||queued;
   button.onclick=async()=>{
    requesting=true;button.disabled=true;
-   try{const res=await fetch('/api/mobile-tests/start',{method:'POST'});if(!res.ok)throw Error(await res.text());queued=true;await refresh();}
+   try{const res=await authorizedAction('/api/mobile-tests/start',{method:'POST'});if(!res.ok)throw Error(await res.text());queued=true;await refresh();}
    catch(error){result.textContent=error.message;}finally{requesting=false;}
   };
   const link=node('a','Results & screenshots');link.href='/tests.html'+(data.latest?.run_id?'?run='+encodeURIComponent(data.latest.run_id)+'&host='+encodeURIComponent(host.host)+'#details-title':'');link.className='mobile-results-link';

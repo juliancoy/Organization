@@ -1,3 +1,4 @@
+import {authorizedAction} from './authorized-action.js';
 import {snapshotFetch} from './snapshot-fetch.js';
 import {renderVisualArtifacts} from './visual-artifacts.js';
 import {renderActivity} from './run-activity.js';
@@ -160,20 +161,20 @@ async function refresh(){
  }catch(error){if(requested===chosen)$('error').textContent=error.message;}
  finally{polling=false;if(requested!==chosen)void refresh();}
 }
-$('run').onclick=async()=>{if(data?.running)return;$('run').disabled=true;try{const response=await fetch('/api/distributed-tests/start',{method:'POST'});if(!response.ok)throw Error(await response.text());chosen='';data=await response.json();render();}catch(error){$('error').textContent=error.message;$('run').disabled=false;}};
+$('run').onclick=async()=>{if(data?.running)return;$('run').disabled=true;try{const response=await authorizedAction('/api/distributed-tests/start',{method:'POST'});if(!response.ok)throw Error(await response.text());chosen='';data=await response.json();render();}catch(error){$('error').textContent=error.message;$('run').disabled=false;}};
 $('history').onchange=()=>chooseRun($('history').value);
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')void refresh();});
 setInterval(()=>{if(document.visibilityState==='visible')void refresh();},1000);
 void refresh();
 
-$('stop').onclick=async()=>{$('stop').disabled=true;try{const response=await fetch('/api/distributed-tests/stop',{method:'POST'});if(!response.ok)throw Error(await response.text());chosen='';data=await response.json();render();}catch(error){$('error').textContent=error.message;void refresh();}};
+$('stop').onclick=async()=>{$('stop').disabled=true;try{const response=await authorizedAction('/api/distributed-tests/stop',{method:'POST'});if(!response.ok)throw Error(await response.text());chosen='';data=await response.json();render();}catch(error){$('error').textContent=error.message;void refresh();}};
 
 $('test-commands').append($('run'),$('stop'));
 
 async function rerunSelected(host,suite){
  const args={run_id:data.run.id};if(suite)Object.assign(args,{host,suite});
  try{
-  const response=await fetch('/api/distributed-tests/rerun',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(args)});
+  const response=await authorizedAction('/api/distributed-tests/rerun',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(args)});
   if(!response.ok)throw Error('Could not queue rerun ('+response.status+')');
   const result=await response.json();chooseRun(result.run_id);
  }catch(error){$('error').textContent=error.message;}

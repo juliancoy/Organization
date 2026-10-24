@@ -32,18 +32,18 @@ the Streamable HTTP server:
 
 ```sh
 export MAP_MASTER_TOKEN="$(cat ~/.config/map-master/api-token)"
-codex mcp add map-master --url http://map.local/mcp --bearer-token-env-var MAP_MASTER_TOKEN
+codex mcp add map-master --url http://127.0.0.1:8089/mcp --bearer-token-env-var MAP_MASTER_TOKEN
 ```
 
 Equivalent Codex configuration:
 
 ```toml
 [mcp_servers.map-master]
-url = "http://map.local/mcp"
+url = "http://127.0.0.1:8089/mcp"
 bearer_token_env_var = "MAP_MASTER_TOKEN"
 ```
 
-For Codex on a different machine, provision the token privately there and set the
+For Codex on a different machine, first use `ssh -L 8089:127.0.0.1:8089 julian@compai.local`. Provision the token privately there and set the
 same environment variable. A desktop-launched Codex must receive that variable
 in its launch environment. See the [official Codex MCP documentation](https://developers.openai.com/codex/mcp).
 The server uses stateless MCP Streamable HTTP with JSON responses, tools and
@@ -130,7 +130,10 @@ Independent reruns: MCP `rerun_suite` takes `run_id`, `host`, `suite`; `rerun_fa
 ## Local VS Code / Codex panel
 
 The test dashboard includes a private local Codex panel. Unlock it using the
-master bearer token above. The browser keeps the token only in memory; Lock or
+separate owner token at `~/.config/map-master/codex-token`. Create it with
+`python3 lan-monitor/master_api.py create-token --scope codex`. Use the direct
+localhost endpoint on port 8089 or an authenticated SSH tunnel; the LAN proxy
+blocks Codex routes. The master and launcher tokens cannot control AI threads. The browser keeps the token only in memory; Lock or
 reload clears it. Remote browsers talk to the master, which reads **its own**
 Codex history and connects to **its own** VS Code session.
 

@@ -22,6 +22,21 @@ def send(handler,status,value=None,headers=None):
     except (BrokenPipeError,ConnectionResetError):pass
 
 
+def authorize_dashboard(handler):
+    """Dashboard writes require owner authority, not a forgeable Origin."""
+    host=handler.headers.get('Host','')
+    hosts={v.strip() for v in os.getenv('MAP_MASTER_ALLOWED_HOSTS','map.local,localhost,127.0.0.1,::1,10.42.0.1').split(',')}
+    try:
+        valid=len(handler.headers.get_all('Host',[]))==1 and urlsplit('http://'+host).hostname in hosts
+    except ValueError:valid=False
+    origin=handler.headers.get('Origin')
+    if not valid or (origin and origin not in ('http://'+host,'https://'+host)):
+        send(handler,403,{'error':'Host or Origin denied'});return False
+    if not authorized(handler.headers):
+        send(handler,401,{'error':'Use an authenticated launcher, REST/MCP client, or the localhost dashboard with a master token'});return False
+    return True
+
+
 def handle(handler,api):
     path=urlsplit(handler.path).path.rstrip('/')
     mcp=path=='/mcp'
@@ -33,7 +48,17 @@ def handle(handler,api):
             raise APIError(403,'host_denied','Host denied')
         origin=handler.headers.get('Origin')
         if origin and origin not in ('http://'+host,'https://'+host):raise APIError(403,'origin_denied','Origin denied')
-        if not authorized(handler.headers):raise APIError(401,'unauthorized','A configured master bearer token is required')
+        codex=path.startswith(API+'/codex/')
+        if codex:
+            # The LAN reverse proxy sets these headers. Codex control stays on
+            # the direct loopback endpoint, including authenticated SSH tunnels.
+            if handler.headers.get('X-Real-IP') or handler.headers.get('X-Forwarded-For'):
+                raise APIError(403,'codex_local_only','Codex control requires a direct localhost connection or SSH tunnel')
+            if not authorized(handler.headers,'codex'):raise APIError(401,'unauthorized','A separate Codex owner token is required')
+        elif not authorized(handler.headers):
+            launcher_route=(handler.command=='GET' and path==API+'/status') or (handler.command=='POST' and path==API+'/test-requests')
+            if not launcher_route or not authorized(handler.headers,'launcher'):
+                raise APIError(401,'unauthorized','A configured master bearer token is required')
         if mcp and handler.command!='POST':
             send(handler,405,{'error':{'code':'method_not_allowed','message':'This stateless MCP endpoint accepts POST; no SSE session is opened'}},{'Allow':'POST'});return True
         if handler.command not in ('GET','POST'):

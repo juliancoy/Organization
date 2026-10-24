@@ -216,8 +216,10 @@ class MasterAPI:
                 'security':[{'bearerAuth':[]}],'components':{'securitySchemes':{'bearerAuth':{'type':'http','scheme':'bearer'}}},'paths':paths}
 
 
-def authorized(headers):
-    path=Path(os.getenv('MAP_MASTER_TOKEN_FILE',str(TOKEN_FILE)))
+def authorized(headers,scope='master'):
+    defaults={'master':TOKEN_FILE,'codex':TOKEN_FILE.with_name('codex-token'),'launcher':TOKEN_FILE.with_name('launcher-token')}
+    envs={'master':'MAP_MASTER_TOKEN_FILE','codex':'MAP_CODEX_TOKEN_FILE','launcher':'MAP_LAUNCHER_TOKEN_FILE'}
+    path=Path(os.getenv(envs[scope],str(defaults[scope])))
     try:expected=path.read_text().strip()
     except OSError:return False
     provided=headers.get('Authorization','')
@@ -225,8 +227,9 @@ def authorized(headers):
 
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('action',choices=['create-token']);args=parser.parse_args()
-    path=Path(os.getenv('MAP_MASTER_TOKEN_FILE',str(TOKEN_FILE)))
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('action',choices=['create-token']);parser.add_argument('--scope',choices=['master','codex','launcher'],default='master');args=parser.parse_args()
+    scope=args.scope
+    path=Path(os.getenv({'master':'MAP_MASTER_TOKEN_FILE','codex':'MAP_CODEX_TOKEN_FILE','launcher':'MAP_LAUNCHER_TOKEN_FILE'}[scope],str(TOKEN_FILE if scope=='master' else TOKEN_FILE.with_name(scope+'-token'))))
     path.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
     descriptor=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
     with os.fdopen(descriptor,'w') as stream:stream.write(secrets.token_urlsafe(48)+'\n')

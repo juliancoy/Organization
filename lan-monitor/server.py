@@ -17,7 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit, parse_qs
 from live_distributed import LiveDistributedTests
 from master_api import MasterAPI
-from master_http import handle as handle_master
+from master_http import handle as handle_master, authorize_dashboard
 from benchmark import Benchmark, SIZE, PAYLOAD as BENCHMARK_PAYLOAD
 from web_checks import WebChecks
 from remote_map import collect
@@ -361,6 +361,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if handle_master(self,master_api):return
         path = urlsplit(self.path).path
+        if path in ('/api/mobile-tests/start','/api/distributed-tests/start','/api/distributed-tests/stop','/api/distributed-tests/rerun') and not authorize_dashboard(self):return
         if path=='/api/mobile-tests/start':
             if self.headers.get('Origin')!='http://'+self.headers.get('Host',''):
                 self.send_error(403);return

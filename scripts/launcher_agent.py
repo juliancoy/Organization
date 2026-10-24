@@ -21,6 +21,18 @@ import urllib.error
 
 VERSION = 'lifetech-agent.v1'
 LIMIT = 1024 * 1024
+UNPRIVILEGED_OPS={'status','metrics','worker.policy','image.inspect','registry.read','tests.request','tests.status'}
+
+def verify_controller(value, config):
+    if value.get('op') in UNPRIVILEGED_OPS:return
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    if value.get('from')!=config.get('master','compai.local'):raise ValueError('Execution requires the enrolled controller')
+    signed={k:v for k,v in value.items() if k!='controller_signature'}
+    try:
+        key=Ed25519PublicKey.from_public_bytes(bytes.fromhex(config['controller_public_key']))
+        key.verify(base64.b64decode(value['controller_signature'],validate=True),json.dumps(signed,sort_keys=True,separators=(',',':')).encode())
+    except Exception:raise ValueError('Controller signature rejected') from None
+
 
 
 def worker_policy(config, power_root=Path('/sys/class/power_supply')):
@@ -136,6 +148,7 @@ class Agent:
             if (value.get('to') != config['name'] or value.get('from') not in config['peers'] or
                     abs(time.time()-value['time']) > 60 or not re.fullmatch('[a-f0-9]{32}',value['nonce'])):
                 raise ValueError('Invalid request identity or freshness')
+            verify_controller(value,config)
             with self.lock:
                 self.nonces = {n:t for n,t in self.nonces.items() if t > time.time()}
                 if value['nonce'] in self.nonces or len(self.nonces)>4096:
@@ -202,7 +215,7 @@ class Agent:
             return {'protocol':VERSION,'source_revision':self.source_revision,'node':config['name'],'ready':bool(shutil.which('docker')) and not Path('/tmp/launcher-agent-draining').exists(),'time':time.time(),
                     'machine':hashlib.sha256(machine.read_bytes()).hexdigest(),'hostname':socket.gethostname(),
                     'addresses':addresses,'platform':info['OSType']+'/'+info['Architecture'],
-                    'worker_policy':policy,'capabilities':['github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','file-queue','snapshot-stage','event-wait','encrypted-backup'],
+                    'worker_policy':policy,'capabilities':['controller-signature','github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','file-queue','snapshot-stage','event-wait','encrypted-backup'],
                     'preparations':[key for key,j in self.jobs.items() if j['status']=='running' and j.get('prepare_only')],
                     'active_jobs':[key for key,j in self.jobs.items() if j['status']=='running' and not j.get('prepare_only')],'active_image_transfers':self.registry_transfers,'active_uploads':len(self.uploads)}
         if op.startswith('backup.'):

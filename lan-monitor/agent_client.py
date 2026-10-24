@@ -11,6 +11,8 @@ import secrets
 import time
 
 PROTOCOL='lifetech-agent.v1'
+UNPRIVILEGED_OPS={'status','metrics','worker.policy','image.inspect','registry.read','tests.request','tests.status'}
+SIGNING_KEY=Path.home()/'.config/map-master/controller-signing.key'
 CONFIG=Path(os.getenv('LIFETECH_PEER_CONFIG',str(Path.home()/'.config/lifetech-launcher/peers.json')))
 
 
@@ -32,6 +34,10 @@ class AgentClient:
     def call(self, op, args=None, timeout=30):
         request_id=secrets.token_hex(16)
         value={'from':self.sender,'to':self.node,'time':time.time(),'nonce':request_id,'op':op,'args':args or {}}
+        if op not in UNPRIVILEGED_OPS:
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+            key=Ed25519PrivateKey.from_private_bytes(SIGNING_KEY.read_bytes())
+            value['controller_signature']=base64.b64encode(key.sign(json.dumps(value,sort_keys=True,separators=(',',':')).encode())).decode()
         nonce=secrets.token_bytes(12)
         data=nonce+self.cipher.encrypt(nonce,json.dumps(value).encode(),PROTOCOL.encode())
         with self.connection_lock:
@@ -162,7 +168,7 @@ class AgentSessions:
                     raise RuntimeError(value['worker_policy']['reason'])
                 if value.get('active_jobs'):raise RuntimeError('Agent is busy with an existing job')
                 value=self.updater.ensure(host,client,value)
-                required={'github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','file-queue','snapshot-stage','event-wait'}
+                required={'controller-signature','github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','file-queue','snapshot-stage','event-wait'}
                 if value.get('protocol')!=PROTOCOL:raise RuntimeError('Agent protocol mismatch after launcher update')
                 if not value.get('ready'):raise RuntimeError('Agent is not ready or is draining for an update')
                 missing=required-set(value.get('capabilities',[]))
