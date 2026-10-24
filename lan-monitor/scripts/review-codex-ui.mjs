@@ -11,6 +11,7 @@ export async function reviewCodexUi(output){
  await mkdir(output,{recursive:true})
  const commands=[],results=[];let ownerConnected=true
  const threads=[{id:'design',name:'Improve the remote control workspace',cwd:'/workspace/Organization',updated_at:1792880000,activity:'running'},{id:'release',name:'Review the release checks',cwd:'/workspace/OrgPortal',updated_at:1792876000,activity:'idle'}]
+ threads.push(...Array.from({length:18},(_,index)=>({id:'history-'+index,name:'Earlier workspace task '+(index+1),cwd:'/workspace/Organization',updated_at:1792800000-index*300,activity:'idle'})))
  const server=createServer(async(req,res)=>{
   try{
    const url=new URL(req.url,'http://localhost')
@@ -33,6 +34,7 @@ export async function reviewCodexUi(output){
   await page.goto(base);await page.screenshot({path:join(output,`codex-locked-${width}.png`),fullPage:false})
   await page.locator('.codex-unlock input').fill('synthetic-only');await page.getByRole('button',{name:'Connect',exact:true}).click()
   await page.locator('.codex-thread').first().waitFor()
+  const workspace=await page.locator('.codex-workspace').boundingBox(),pagination=await page.locator('.codex-pagination').boundingBox();assert(pagination.y+pagination.height<=workspace.y+workspace.height+1,'Pagination must remain inside the workspace with twenty threads')
   await page.screenshot({path:join(output,`codex-list-${width}.png`),fullPage:false})
   await page.getByRole('searchbox').fill('missing thread');assert.equal(await page.locator('.codex-no-results').isVisible(),true)
   await page.getByRole('searchbox').fill('release');assert.equal(await page.locator('.codex-thread:visible').count(),1)
@@ -58,7 +60,7 @@ export async function reviewCodexUi(output){
   await page.getByRole('button',{name:'Lock',exact:true}).click();assert.equal(await page.locator('.codex-workspace').isVisible(),false)
   assert.equal(await page.locator('textarea').inputValue(),'')
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false)
-  assert.deepEqual(errors,[]);results.push({width,status:'passed',checks:['connect','empty-state','search','select-thread','stable-refresh','draft-retained','delivery-retained','send-once','lock','no-overflow','no-script-errors','empty-search','disconnected-thread']});await context.close()
+  assert.deepEqual(errors,[]);results.push({width,status:'passed',checks:['connect','empty-state','search','select-thread','stable-refresh','draft-retained','delivery-retained','send-once','lock','no-overflow','no-script-errors','empty-search','disconnected-thread','long-list-pagination']});await context.close()
  }}finally{await browser.close();server.closeAllConnections();await new Promise(r=>server.close(r));await writeFile(join(output,'codex-review.json'),JSON.stringify({mode:'synthetic-local-only',results},null,2)+'\n')}
  return results
 }

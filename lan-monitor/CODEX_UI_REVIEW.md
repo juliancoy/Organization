@@ -25,7 +25,8 @@ loopback. Its command endpoint is a local in-memory stub: no real instruction,
 owner token, private conversation or production mutation is used. It checks
 connection, search and empty search, thread selection, draft/delivery retention,
 unchanged message DOM, single-send behavior, disconnected owner state, lock,
-horizontal overflow and script errors at 390 and 1440 pixels. PNGs cover locked,
+horizontal overflow and script errors at 390 and 1440 pixels. A twenty-thread
+fixture also checks that pagination stays inside the workspace. PNGs cover locked,
 list and conversation states. The fixture isolates the Codex panel and does not
 claim to review the separate LifeTech deployment panel or real paired-device flow.
 
