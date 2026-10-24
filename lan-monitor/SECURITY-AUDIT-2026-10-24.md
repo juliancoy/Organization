@@ -35,7 +35,9 @@ Local monitor and workspace security tests cover token scope separation, forward
 
 Live HTTP checks: launcher status 200; launcher run administration 401; master token on Codex 401; separate owner token on direct-loopback Codex reads 200; LAN Codex route 403; unauthenticated test start 401. Localhost dashboard serves successfully.
 
-Distributed verification request: `d6183839-f61e-4d91-84b8-000ab02d38ac`, suites monitor/workspace/map, forced execution. Final results are recorded below after completion.
+Distributed verification request: `d6183839-f61e-4d91-84b8-000ab02d38ac`, suites monitor/workspace/map, forced execution. Run `20261024T215802Z-c038966f` **passed: 47/47 selected tasks** on the available workers, pinned to root commit `27fc356`. Latitude was unreachable; Wolf did not finish its launcher update and was excluded. This is not full-fleet verification.
+
+Local checks: **131 monitor tests and 9 swarm/security tests passed**. Browser verification rendered hostile transcript HTML as literal text, submitted no AI commands, and confirmed the LAN Codex credential input was disabled. A live, correctly AES-encrypted but unsigned worker execution request received **403**. Four available workers advertised the controller-signature capability. The monitor tests emitted a pre-existing runtime-statistics fixture error (`KeyError: host`) without test failures.
 
 ## Operating the controls
 
