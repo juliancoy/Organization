@@ -26,12 +26,26 @@ SECRET_CONTENT = re.compile(
     rb"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----|"
     rb"(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{60,}|AKIA[A-Z0-9]{16})|"
     rb"(?i:(?:api[_-]?key|api[_-]?token|client[_-]?secret|access[_-]?token|"
-    rb"refresh[_-]?token|password|secret[_-]?key)\s*[=:]\s*[\"']"
+    rb"refresh[_-]?token|password|secret[_-]?key)[\"']?\s*[=:]\s*[\"']"
     rb"[A-Za-z0-9_+/=.-]{32,}[\"'])"
 )
 
 
-def check_index(path, candidate=False):
+def local_credentials(paths):
+    values=set()
+    for path in paths:
+        for leaf in ('.env', '.env.cloudflare', '.env.pidp', '.dev.vars'):
+            source=Path(path)/leaf
+            if not source.is_file():continue
+            for line in source.read_text().splitlines():
+                key,separator,value=line.strip().removeprefix('export ').partition('=')
+                if separator and re.search(r'(?i)(secret|token|password|(?:^|_)key$)',key):
+                    value=value.strip().strip('"\'')
+                    if len(value)>=16:values.add(value.encode())
+    return values
+
+
+def check_index(path, candidate=False, credentials=()):
     """Reject secrets without changing the real index or exposing their values."""
     with tempfile.TemporaryDirectory(prefix='publication-index-') as folder:
         env={**os.environ, 'GIT_TERMINAL_PROMPT':'0'}
@@ -58,7 +72,8 @@ def check_index(path, candidate=False):
                 raise RuntimeError(path.name+': publication blocked: sensitive file '+filename)
             entry=run('ls-files','--stage','--',filename)
             if entry.startswith(b'160000 '):continue
-            if SECRET_CONTENT.search(run('show',':'+filename)):
+            content=run('show',':'+filename)
+            if SECRET_CONTENT.search(content) or any(value in content for value in credentials):
                 raise RuntimeError(path.name+': publication blocked: credential content in '+filename)
 
 
@@ -85,6 +100,7 @@ def publish(root, ident, stopped, progress):
                 if (Path(root)/nested/'.git').exists():include(nested)
         ordered.append(name)
     for name in REPOSITORIES:include(name)
+    credentials=local_credentials([Path(root)/name for name in ordered])
     for name in ordered:
         path=Path(root)/name
         branch=git(path,'symbolic-ref','--quiet','--short','HEAD')
@@ -102,8 +118,8 @@ def publish(root, ident, stopped, progress):
                     or Path(filename).suffix.lower() in {'.pem','.key','.p12','.pfx','.sqlite','.sqlite3','.db','.har','.log','.keystore'}
                     or leaf in {'credentials.json','secrets.json','id_rsa','id_ed25519'}):
                 raise RuntimeError(name+': sensitive or runtime file requires exclusion before publication: '+filename)
-        check_index(path, candidate=True)
-        check_index(path)
+        check_index(path, candidate=True, credentials=credentials)
+        check_index(path, credentials=credentials)
         prepared.append((name,path,branch,url,files))
     for name,path,branch,url,files in prepared:
         record={'url':url,'branch':branch,'dirty':False,'stage':'committing'}
@@ -112,7 +128,7 @@ def publish(root, ident, stopped, progress):
             git(path,'add','-A','--','.')
             staged_now=set(git(path,'diff','--cached','--name-only','-z').split('\0'))-{''}
             if not staged_now.issubset(set(files)|{entry.split('\t',1)[1] for entry in git(path,'ls-files','--stage','-z').split('\0') if entry.startswith('160000 ')}):raise RuntimeError(name+': files changed while staging; inspect the index and start again')
-            check_index(path)
+            check_index(path, credentials=credentials)
             if git(path,'diff','--cached','--name-only'):
                 git(path,'commit','-m','Synchronize distributed test run '+ident)
         record.update(commit=git(path,'rev-parse','HEAD'),stage='fetching')

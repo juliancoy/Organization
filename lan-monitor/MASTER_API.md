@@ -63,6 +63,13 @@ read-only resources. It supports protocol versions 2025-11-25, 2025-06-18 and
 | `start_run` | Start the configured coordinator workflow |
 | `stop_run` | Stop only the specified currently active run |
 
+Before publication, all selected repositories undergo secret checks using a temporary
+Git index. Sensitive credential filenames, private keys, recognizable credential
+literals, and known credential values from local environment files block the run.
+The existing index is checked too, and staged blobs are checked again immediately
+before committing. Errors identify the file without printing secret values.
+This is a commit-time guard, not an audit of existing Git history.
+
 **Start is a write operation:** the current coordinator commits and pushes
 Organization, OrgPortal and PIdP on their current branches, then prepares agents,
 images and application tests. Its MCP metadata explicitly marks the operation as

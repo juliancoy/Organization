@@ -184,6 +184,7 @@ def run(work, suite_id, phase, spec, run_id, env, cancel=None):
     finally:
         if process and process.poll() is None:
             os.killpg(process.pid, signal.SIGKILL)
+        if process and process.stdout:process.stdout.close()
         if not native:
             subprocess.run(['docker', 'rm', '-f', name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
 
