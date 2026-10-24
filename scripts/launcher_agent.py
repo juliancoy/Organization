@@ -160,7 +160,7 @@ class Agent:
     def dispatch(self, op, args):
         policy=worker_policy(self.config)
         if op=='worker.policy':return policy
-        if op in ('job.start','source.stage','browser.start','image.pull') or (op=='job.feed' and args.get('tasks')):
+        if op in ('job.start','source.stage','p2p.start','image.pull') or (op=='job.feed' and args.get('tasks')):
             if not policy['accepting_jobs']:raise RuntimeError(policy['reason'])
         if op in ('tests.request','tests.status'):
             config=json.loads(self.config.read_text())
