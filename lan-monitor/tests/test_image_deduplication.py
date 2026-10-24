@@ -30,7 +30,9 @@ class ImageDeduplicationTests(unittest.TestCase):
         module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
         response=Mock(status=200,headers={'Content-Length':'123','Content-Type':'application/octet-stream'})
         with patch.object(module.urllib.request,'build_opener') as factory:
-            factory.return_value.open.return_value.__enter__.return_value=response
+            factory.return_value.open.return_value=response
+            response.__enter__=Mock(return_value=response)
+            response.__exit__=Mock(return_value=False)
             result=module.read({'path':'/v2/tests/'+('a'*24)+'/blobs/sha256:'+('b'*64),'head':True})
             request=factory.return_value.open.call_args.args[0]
         self.assertEqual(request.get_method(),'HEAD')

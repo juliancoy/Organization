@@ -19,7 +19,8 @@ def snapshot(run):
     for name, repo in run.get('repositories', {}).items():
         add('repo:' + name, repo.get('stage'), name + ' · ' + str(repo.get('stage')))
     for host in run.get('hosts', []):
-        name = host['host']
+        name = host.get('host')
+        if not name:continue
         session = host.get('session') or {}
         add('session:' + name, session.get('status'), 'Launcher ' + str(session.get('status')), host=name)
         if host.get('error'):

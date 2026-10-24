@@ -35,7 +35,7 @@ def direct_evidence(links,participants,local_host):
     """A socket opening or a same-machine browser pair is insufficient evidence."""
     if len({p['machine'] for p in participants})!=len(participants) or len(participants)<2:
         raise RuntimeError('At least two distinct agent machine identities are required')
-    peers={p['peer']:p for p in participants if p.get('peer')};found=[]
+    peers={p['peer']:p for p in participants if p.get('peer')};found=[];reasons=[]
     for link in links:
         remote=peers.get(link['peer'])
         if not remote or remote['host']==local_host or link.get('state')!='connected':continue
@@ -53,10 +53,11 @@ def direct_evidence(links,participants,local_host):
                 if candidate.get('candidateType')=='host' and str(address) not in host['addresses']:
                     raise RuntimeError('Selected host candidate is not on the attested machine physical interfaces')
             if pair.get('bytesReceived',0)<=0 and pair.get('bytesSent',0)<=0:raise RuntimeError('No bytes observed on selected ICE path')
-        except RuntimeError:
+        except RuntimeError as error:
+            reasons.append(str(error))
             continue  # Only attested routes contribute to transfer evidence.
         found.append(link)
-    if not found:raise RuntimeError('No connected cross-machine data channel')
+    if not found:raise RuntimeError('No verified cross-machine data channel: '+('; '.join(reasons) or json.dumps(links)[:800]))
     return found
 
 
@@ -175,7 +176,16 @@ class NetworkP2P:
         value=resource['browser'].js('''const {sha256}=await import('/peer.js');
          const file=await peer.file('testing-copy.json');return {size:file.size,sha256:await sha256(await file.arrayBuffer())};''')
         if value!=expected:raise RuntimeError('Received fixture bytes differ from the source')
-        links=direct_evidence(resource['browser'].js(STATS),self.report['participants'],resource['host']['host'])
+        for attempt in range(10):
+            observed=resource['browser'].js(STATS)
+            try:
+                links=direct_evidence(observed,self.report['participants'],resource['host']['host'])
+                break
+            except RuntimeError:
+                if attempt==9:
+                    self.report['unverified_routes']=observed
+                    raise
+                time.sleep(1)
         if sum(c.get('bytesReceived',0) for link in links for c in link['channels'])<(expected['size'] if full_transfer else 1):
             raise RuntimeError('Data channel counters do not account for received fixture bytes')
         return links

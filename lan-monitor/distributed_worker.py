@@ -32,13 +32,13 @@ SUITES = {
              'prepare': ['npm', 'ci', '--no-audit', '--no-fund'],
              'test': ['sh', '-c', 'npm test && npm run typecheck']},
     'web': {'name': 'Portal frontend', 'cwd': 'OrgPortal/web', 'image': NODE,
-            'prepare': ['npm', 'ci', '--no-audit', '--no-fund'],
+            'prepare': ['sh', '-c', 'npm ci --prefix ../org-worker --omit=dev --no-audit --no-fund && npm ci --no-audit --no-fund'],
             'test': ['sh', '-c', 'npm test -- --maxWorkers=2 && npm run build']},
     'identity': {'name': 'Identity API and browser regression', 'cwd': 'PIdP/serverless', 'image': BROWSER,
                  'prepare': ['npm', 'ci', '--no-audit', '--no-fund'],
                  'test': ['sh', '-c', 'npm run typecheck && node --import tsx --test test/*.test.mjs test/*.test.ts']},
     'identity-python': {'name': 'Identity Python', 'cwd': 'PIdP', 'image': PYTHON,
-                        'prepare': ['python', '-m', 'pip', 'install', '--target', '/work/.test-deps/identity-python', '-r', 'requirements.txt', 'pytest'],
+                        'prepare': ['python', '-m', 'pip', 'install', '--target', '/work/.test-deps/identity-python', '-r', 'requirements-test.txt', 'pytest'],
                         'test': ['python', '-m', 'pytest', 'tests', '-q', '--tb=short']},
 }
 
