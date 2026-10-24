@@ -42,6 +42,22 @@ class RemoteBoundaryTests(unittest.TestCase):
             rest.assert_not_called()
             self.assertEqual(self.request(path,'POST','owner'*16,'https://compai.example',body={'text':'x'}),202)
             rest.assert_called_once()
+    def test_deployment_requires_owner_and_same_origin_offer(self):
+        from unittest.mock import Mock
+        endpoint='/api/v1/test-app/'
+        for name,method in [('status','GET'),('download','GET'),('offer','POST')]:
+            self.assertEqual(self.request(endpoint+name,method,body={} if method=='POST' else None),401)
+        broker=Mock();broker.status.return_value={'app':None,'peers':[]}
+        broker.offer.return_value={'type':'answer','sdp':'fixture'}
+        with patch('lifetech_test_deployment.manager',return_value=broker):
+            self.assertEqual(self.request(endpoint+'status',token='owner'*16),200)
+            self.assertEqual(self.request(endpoint+'offer','POST','owner'*16,body={}),403)
+            self.assertEqual(self.request(endpoint+'offer','POST','owner'*16,'https://evil.example',body={}),403)
+            broker.offer.assert_not_called()
+            self.assertEqual(self.request(endpoint+'offer','POST','owner'*16,'https://compai.example',body={'type':'offer','sdp':'fixture'}),200)
+            broker.offer.assert_called_once()
+        self.assertEqual(self.request(endpoint+'../download',token='owner'*16),404)
+
     def test_rebinding_host_is_denied_and_public_page_has_no_credentials(self):
         self.assertEqual(self.request('/',host='evil.example'),403)
         self.assertEqual(self.request('/'),200)
@@ -103,3 +119,32 @@ class LocalIssuerTests(unittest.TestCase):
         with patch('codex_remote.pairing_payload',return_value={'url':'https://compai.example/#pair=synthetic'}) as issue:
             self.assertEqual(self.request('issuer'*16),200)
             issue.assert_called_once_with('https://compai.example')
+
+class NewConversationTests(unittest.TestCase):
+    def test_creation_is_idempotent_and_does_not_need_an_existing_thread(self):
+        body={'action':'new','request_id':'33333333-3333-3333-3333-333333333333'}
+        result={'accepted':True,'thread_id':'44444444-4444-4444-4444-444444444444'}
+        with patch('codex_context.new_thread',return_value=result) as create, patch.dict(codex_context.RECEIPTS,{},clear=True):
+            self.assertEqual(codex_context.mutate(body),result)
+            self.assertEqual(codex_context.mutate(body),result)
+            create.assert_called_once_with()
+
+    def test_unknown_creation_is_never_automatically_repeated(self):
+        body={'action':'new','request_id':'33333333-3333-3333-3333-333333333333'}
+        with patch('codex_context.new_thread',side_effect=OSError('disconnected')) as create, patch.dict(codex_context.RECEIPTS,{},clear=True):
+            with self.assertRaises(OSError):codex_context.mutate(body)
+            self.assertTrue(codex_context.mutate(body)['uncertain'])
+            create.assert_called_once_with()
+
+    def test_new_chat_rejects_remote_process_settings(self):
+        for body in [{'action':'new'},{'action':'new','request_id':'bad'},
+                     {'action':'new','request_id':'33333333-3333-3333-3333-333333333333','text':'override'}]:
+            with self.assertRaises(codex_context.ContextError):codex_context.mutate(body)
+
+    def test_empty_durable_chat_is_idle_but_truncated_history_is_not_assumed_idle(self):
+        with tempfile.TemporaryDirectory() as temp,patch.object(codex_context,'HOME',Path(temp)):
+            path=Path(temp)/'chat.jsonl'
+            path.write_text(json.dumps({'type':'session_meta','payload':{}})+'\n')
+            self.assertEqual(codex_context.history({'rollout_path':str(path)})['activity'],'idle')
+            path.write_text(json.dumps({'type':'event_msg','payload':{'type':'task_started'}})+'\n')
+            self.assertEqual(codex_context.history({'rollout_path':str(path)})['activity'],'running')

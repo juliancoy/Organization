@@ -1,7 +1,7 @@
 """Narrow owner-authenticated Codex web service for an HTTPS tunnel.
 
 Bind only to loopback. The tunnel publishes this service, never the test master.
-No test, shell, proxy, or arbitrary-file endpoints are exposed.
+A fixed test APK can be delivered; no shell, proxy, or arbitrary-file endpoints are exposed.
 """
 import json
 from http.cookies import SimpleCookie
@@ -15,7 +15,8 @@ import codex_context
 from master_api import authorized
 
 VIEW=Path(__file__).with_name('view')
-ASSETS={'/':'codex.html','/codex.html':'codex.html','/codex.js':'codex.js','/codex.css':'codex.css','/style.css':'style.css'}
+ASSETS={'/':'codex.html','/codex.html':'codex.html','/codex.js':'codex.js','/codex.css':'codex.css','/style.css':'style.css','/test-deployment.js':'test-deployment.js',
+        '/test-deployment.css':'test-deployment.css','/lifetech-test':'lifetech-test.html'}
 API='/api/v1/master/codex/'
 
 class Handler(BaseHTTPRequestHandler):
@@ -30,6 +31,7 @@ class Handler(BaseHTTPRequestHandler):
         for k,v in {'Content-Type':kind,'Content-Length':str(len(raw)),'Cache-Control':'no-store',
                     'X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','X-Frame-Options':'DENY',
                     'Content-Security-Policy':"default-src 'self'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'",'Strict-Transport-Security':'max-age=31536000'}.items():self.send_header(k,v)
+        if kind=='application/vnd.android.package-archive':self.send_header('Content-Disposition','attachment; filename="lifetech-test.apk"')
         if cookie is not None:self.send_header("Set-Cookie",cookie)
         self.end_headers()
         try:self.wfile.write(raw)
@@ -43,8 +45,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.command=='GET' and path in ASSETS:
             name=ASSETS[path];return self.reply(200,(VIEW/name).read_bytes(),mimetypes.guess_type(name)[0] or 'application/octet-stream')
         pairing=self.command=='POST' and path in ('/pair','/session','/logout')
-        valid_read=self.command=='GET' and (path==API+'threads' or path.startswith(API+'threads/'))
-        valid_write=self.command=='POST' and path==API+'commands'
+        deployment=path in ('/api/v1/test-app/status','/api/v1/test-app/offer','/api/v1/test-app/download')
+        valid_read=self.command=='GET' and (path==API+'threads' or path.startswith(API+'threads/') or path in ('/api/v1/test-app/status','/api/v1/test-app/download'))
+        valid_write=self.command=='POST' and path in (API+'commands','/api/v1/test-app/offer')
         if not (valid_read or valid_write or pairing):return self.reply(404,{'error':{'message':'Not found'}})
         if path not in ('/pair','/logout') and not (authorized(self.headers,'codex') or codex_devices.valid(self.device())):return self.reply(401,{'error':{'message':'Codex owner token required'}})
         body=None
@@ -66,8 +69,19 @@ class Handler(BaseHTTPRequestHandler):
                 if path=='/pair' and (not isinstance(body,dict) or set(body)!={'token'}):raise ValueError()
                 token=(codex_devices.session(body['token']) if path=='/pair' else codex_devices.owner_session())
                 return self.reply(200,{'ok':True},cookie='__Host-compai_device='+token+'; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age='+str(codex_devices.LIFETIME))
+            if deployment:
+                from lifetech_test_deployment import manager,artifact
+                if path.endswith('/download'):
+                    data,_=artifact()
+                    return self.reply(200,data,'application/vnd.android.package-archive')
+                if path.endswith('/status'):return self.reply(200,manager().status())
+                device=self.device();credentials=dict(self.headers)
+                valid=lambda: codex_devices.valid(device) or authorized(credentials,'codex')
+                return self.reply(200,manager().offer(body,valid))
             code,value=codex_context.rest(self.command,path,parse_qs(urlsplit(self.path).query),body)
             self.reply(code,value)
+        except ImportError:return self.reply(503,{'error':{'message':'P2P deployment dependencies are not installed on CompAI'}})
+        except PermissionError:return self.reply(401,{'error':{'message':'Device session expired'}})
         except (ValueError,UnicodeDecodeError,TimeoutError):self.reply(400,{'error':{'message':'Invalid request body'}})
     do_GET=handle_request
     do_POST=handle_request

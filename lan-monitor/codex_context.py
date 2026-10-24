@@ -7,6 +7,8 @@ import json
 import os
 from pathlib import Path
 import re
+import select
+import shutil
 import socket
 import sqlite3
 import stat
@@ -21,6 +23,55 @@ from contextlib import closing
 HOME = Path.home() / '.codex'
 SEND_LOCK = threading.Lock()
 RECEIPTS = {}
+
+
+def new_thread():
+    """Create an empty, durable chat; VS Code owns all subsequent turns."""
+    binaries = sorted(Path.home().glob('.vscode/extensions/openai.chatgpt-*/bin/linux-*/codex'))
+    binary = str(binaries[-1]) if binaries else shutil.which('codex')
+    if not binary:
+        raise ContextError('Install Codex on this machine before creating a chat.')
+    cwd = str(Path(os.getenv('MAP_CODEX_WORKSPACE', str(Path(__file__).resolve().parent.parent))).resolve())
+    process = subprocess.Popen([binary, 'app-server'], stdin=subprocess.PIPE,
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
+    def request(ident, method, params):
+        process.stdin.write((json.dumps({'id': ident, 'method': method, 'params': params}) + '\n').encode())
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            if not select.select([process.stdout], [], [], max(0, deadline - time.monotonic()))[0]:
+                break
+            raw = process.stdout.readline(1024 * 1024)
+            if not raw or not raw.endswith(b'\n'):
+                break
+            reply = json.loads(raw)
+            if reply.get('id') == ident:
+                if 'error' in reply:
+                    raise ContextError('Codex could not create the conversation.')
+                return reply['result']
+        raise ContextError('Creating the conversation timed out. Refresh before trying again.')
+    try:
+        request(1, 'initialize', {'clientInfo': {'name': 'compai_remote', 'version': '1.0'}})
+        result = request(2, 'thread/start', {'cwd': cwd, 'ephemeral': False, 'threadSource': 'vscode'})
+        ident = result['thread']['id']
+        # Naming persists an otherwise empty thread, without starting a model turn.
+        request(3, 'thread/name/set', {'threadId': ident, 'name': 'New conversation'})
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=2)
+        process.stdin.close()
+        process.stdout.close()
+    thread(ident)  # Require durable history before reporting success.
+    message = 'Conversation created. Connecting to local VS Code…'
+    try:
+        subprocess.run(['code', '--open-url', f'vscode://openai.chatgpt/c/{ident}'],
+                       check=True, timeout=10, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        message = 'Conversation created. Use Open in local VS Code to connect it.'
+    return {'accepted': True, 'thread_id': ident, 'message': message}
 
 
 class ContextError(Exception):
@@ -111,6 +162,7 @@ def history(row):
     messages = deque(maxlen=60)
     activity = 'unknown'
     turn_id = None
+    session_meta = False
     with path.open('rb') as stream:
         stream.seek(0, 2)
         size = stream.tell()
@@ -130,6 +182,8 @@ def history(row):
             except (ValueError, UnicodeDecodeError):
                 continue
             payload = item.get('payload', {})
+            if item.get('type') == 'session_meta':
+                session_meta = True
             kind = payload.get('type')
             if item.get('type') == 'event_msg':
                 if kind == 'task_started':
@@ -140,6 +194,8 @@ def history(row):
                 text = '\n'.join(part.get('text', '') for part in payload.get('content', []) if part.get('type') in ('input_text', 'output_text'))
                 if text:
                     messages.append({'role': payload['role'], 'text': text[:12000], 'at': item.get('timestamp')})
+    if activity == 'unknown' and session_meta and not messages and size <= 2 * 1024 * 1024:
+        activity = 'idle'
     return {'messages': list(messages), 'activity': activity, 'turn_id': turn_id,
             'history_limited': size > 2 * 1024 * 1024}
 
@@ -181,8 +237,20 @@ def detail(ident):
 def mutate(body):
     if not isinstance(body, dict) or set(body) - {'thread_id', 'action', 'text', 'request_id'}:
         raise ContextError('Invalid command.')
-    row = thread(body.get('thread_id'))
     action = body.get('action')
+    if action == 'new':
+        request_id = body.get('request_id')
+        if set(body) != {'action', 'request_id'} or not isinstance(request_id, str) or not re.fullmatch(r'[a-f0-9-]{36}', request_id):
+            raise ContextError('A new conversation requires a request ID.')
+        key = ('new', request_id)
+        with SEND_LOCK:
+            if key not in RECEIPTS:
+                if len(RECEIPTS) >= 1000:
+                    RECEIPTS.pop(next(iter(RECEIPTS)))
+                RECEIPTS[key] = {'accepted': False, 'uncertain': True, 'message': 'Creation outcome unknown. Refresh before trying again.'}
+                RECEIPTS[key] = new_thread()
+            return RECEIPTS[key]
+    row = thread(body.get('thread_id'))
     if action == 'open':
         subprocess.run(['code', '--open-url', f'vscode://openai.chatgpt/c/{row["id"]}'],
                        check=True, timeout=10, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

@@ -8,7 +8,7 @@ export function renderOverallProgress(run){
  const p=summarizeProgress(run),now=Date.now();
  const jobs=(run.hosts||[]).flatMap(h=>Object.entries(h.jobs||{}).map(([id,j])=>[h.host,id,j.status,j.phase,j.logs?.at(-1)]));
  const signature=JSON.stringify([run.status,run.preparation,p,run.image_progress?.bytes_completed,run.activity?.at(-1),jobs]);
- if(observation?.id!==run.id)observation={id:run.id,signature,changed:Date.parse(run.activity?.at(-1)?.time||run.started)||now};
+ if(observation?.id!==run.id)observation={id:run.id,signature,changed:Date.parse(run.activity?.at(-1)?.time)||now};
  else if(signature!==observation.signature)observation={...observation,signature,changed:now};
  const heading=make('div','','panel-heading');
  const title=make('div');title.append(make('div',p.terminal?'RECORDED RUN':'LIVE · ALL MACHINES','eyebrow'),make('h2','Overall test progress'));
