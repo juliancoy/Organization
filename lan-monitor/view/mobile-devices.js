@@ -8,7 +8,7 @@ async function refresh(){
   if(!response.ok)throw Error('Mobile worker discovery unavailable');
   const data=await response.json(),device=data.devices?.[0],host=data.latest?.host,job=host?.jobs?.mobile;
   const running=job?.status==='running',connected=device?.connected;
-  queued=Boolean(data.requests?.some(r=>r.status==='queued'));
+  queued=Boolean(data.requests?.length);
   if(running)queued=false;
   const card=node('div','','mobile-card');card.dataset.state=running?'running':connected?'ready':'offline';
   const phone=node('div','','mobile-phone');phone.setAttribute('aria-hidden','true');phone.append(node('span',running?'▶':job?.status==='passed'?'✓':'●'));

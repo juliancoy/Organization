@@ -105,7 +105,8 @@ function render(){
  $('error').textContent=run.error||'';
  if(data.running&&run.preparation)$('status').append(' · '+run.preparation);
  const hosts=run.hosts||[];
- $('command-scope').textContent='Shared file queue · '+hosts.length+' worker machines · coordinator participates';
+ const mobiles=hosts.filter(host=>host.kind==='android').length;
+ $('command-scope').textContent=mobiles===hosts.length?'Physical Android browser · USB via compai · one test at a time':'Shared file queue · '+(hosts.length-mobiles)+' computer workers'+(mobiles?' · '+mobiles+' physical mobile device':'')+' · coordinator participates';
  const jobs=hosts.flatMap(host=>Object.values(host.jobs||{}));
  $('summary').replaceChildren();
  for(const [name,value]of [['Worker machines',hosts.length],['Fresh passes / reused',jobs.filter(j=>j.status==='passed').length+' / '+jobs.filter(j=>j.status==='reused').length],['Unsuccessful jobs',jobs.filter(j=>['failed','unavailable','timed_out','interrupted'].includes(j.status)).length],['Completed',jobs.filter(j=>terminal.has(j.status)).length+' / '+(jobs.length+(run.pending_tasks?.length||0))],['Waiting for capacity',run.pending_tasks?.length||0],['Running jobs',hosts.reduce((n,h)=>n+(h.active_tasks?.length||0),0)],['Repositories pushed',Object.values(run.repositories||{}).filter(repo=>repo.stage==='pushed').length+' / '+Math.max(3,Object.keys(run.repositories||{}).length)]]){const card=el('div','','metric');card.append(el('span',name),el('strong',String(value)));$('summary').append(card);}
