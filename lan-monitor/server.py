@@ -8,6 +8,7 @@ import concurrent.futures
 import datetime
 import ipaddress
 import json
+import mimetypes
 from pathlib import Path
 import socket
 import subprocess
@@ -254,7 +255,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if handle_master(self,master_api):return
         path = urlsplit(self.path).path
-        if path in ('/api/benchmark/ping', '/api/benchmark/download'):
+        if path.count('/')==1 and Path(path).suffix in ('.html','.js','.css','.svg','.png','.geojson') and (Path(__file__).with_name('view')/path[1:]).is_file():
+            asset=Path(__file__).with_name('view')/path[1:]
+            if asset.is_symlink():self.send_error(404);return
+            body=asset.read_bytes();content_type=mimetypes.guess_type(asset.name)[0] or 'application/octet-stream'
+        elif path in ('/api/benchmark/ping', '/api/benchmark/download'):
             kind = path.rsplit('/', 1)[1]
             token = parse_qs(urlsplit(self.path).query).get('token', [''])[0]
             if not benchmark.claim(token, kind):

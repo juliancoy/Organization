@@ -1,16 +1,12 @@
 """Adversarial checks for the launcher, HTTP, and AI tool authority boundaries."""
-import base64
 from email.message import Message
 import io
-import json
 import os
 from pathlib import Path
-import sys
 import tempfile
 import unittest
 from unittest.mock import Mock,patch
 from master_http import handle,authorize_dashboard
-from master_api import MasterAPI
 from master_mcp import dispatch
 class HTTPBoundaryTests(unittest.TestCase):
     def setUp(self):

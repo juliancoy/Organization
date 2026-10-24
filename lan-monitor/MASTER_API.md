@@ -17,11 +17,12 @@ The file is `~/.config/map-master/api-token`. Set `MAP_MASTER_TOKEN_FILE` in the
 collector environment to use another private file. The server reads it on each
 request, so replacing the file rotates the token without a restart. No token is
 embedded in source or the dashboard. All new REST/MCP routes require it, including
-read operations. Existing dashboard endpoints continue using their current rules.
+read operations. Dashboard test mutations also require the master token. The browser only accepts it
+on localhost or HTTPS; use the local launcher for encrypted remote job submission.
 
 The collector stays loopback-bound behind the existing LAN-only nginx proxy.
-`map.local` uses HTTP on the trusted LAN; use an authenticated TLS proxy before
-accessing it across an untrusted network. Host and Origin checks apply to both
+`map.local` uses HTTP. Send bearer credentials through localhost/SSH or an
+authenticated TLS proxy; a LAN connection does not provide confidentiality. Host and Origin checks apply to both
 interfaces. Additional trusted hostnames can be supplied in
 `MAP_MASTER_ALLOWED_HOSTS` (comma-separated). This API does not open a WAN listener.
 
