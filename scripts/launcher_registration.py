@@ -85,4 +85,4 @@ def queue_invitation(value, config_path):
     config=json.loads(Path(config_path).read_text())
     if not all(config.get(k) for k in ('name','key','peers','internet_nodes')):
         raise ValueError('This device needs trusted swarm provisioning before internet enrollment')
-    save({'url':base,'token':value['token']},Path(config_path).parent/'invitation.json')
+    save({'url':base,'token':value['token'],'renew':True},Path(config_path).parent/'invitation.json')
