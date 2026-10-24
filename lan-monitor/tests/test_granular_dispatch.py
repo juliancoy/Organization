@@ -35,6 +35,7 @@ class DispatchLifecycleTests(unittest.TestCase):
             raise AssertionError(operation)
         with tempfile.TemporaryDirectory() as folder:
             run={'id':'20261024T000000Z-1234abcd','hosts':[host],'images':{},'source_sha256':'digest','force':True,
+                 'selection':{'paths':[],'suites':['monitor']},
                  'repositories':{name:{'url':'url','commit':'commit'} for name in ('.','OrgPortal','PIdP')}}
             service=SimpleNamespace(run=run,root=folder,folder=folder,lock=threading.RLock(),save=Mock())
             def update(worker,event):
@@ -46,7 +47,10 @@ class DispatchLifecycleTests(unittest.TestCase):
                  patch('granular_dispatch.pending',return_value=[task]), patch('granular_dispatch.SuiteCache'), \
                  patch('granular_dispatch.AgentClient') as client, patch('granular_dispatch.time.sleep'):
                 client.return_value.call.side_effect=call
-                execute(service,[host],images)
+                unused={'host':'unused-worker'}
+                execute(service,[host,unused],images)
+                self.assertTrue(unused['not_executed'])
+                self.assertEqual(client.call_count,1)
             self.assertEqual(host['status'],'passed')
             self.assertEqual(host['jobs'][task]['status'],'passed')
             self.assertEqual(state['closes'],1)

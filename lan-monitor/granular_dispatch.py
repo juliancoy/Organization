@@ -32,6 +32,11 @@ def execute(service, hosts, images):
             service.save()
         return
 
+    if run.get('selection') and not include_p2p and len(hosts) > len(tasks):
+        for host in hosts[len(tasks):]:
+            host.update(status='passed',not_executed=True,preparation='No additional worker needed for this focused request')
+        hosts=hosts[:len(tasks)]
+
     def worker(index, host):
         client = AgentClient(host)
         ident = run['id'].split('-')[0] + '-' + uuid.uuid4().hex[:8]
