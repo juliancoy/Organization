@@ -10,7 +10,7 @@ runtime=Path.home()/'.local/share/lifetech-p2p-venv'
 if not (runtime/'bin/python').exists():venv.EnvBuilder(with_pip=True).create(runtime)
 python=runtime/'bin/python'
 subprocess.run([str(python),'-m','pip','install','-r',str(folder/'requirements-p2p.txt')],check=True)
-subprocess.run(['python3',str(folder.parent/'BmoreMedTech/mobile/build-test.py')],check=True)
+subprocess.run(['python3',str(folder.parent/'swarm-control/build-test.py')],check=True)
 # Keep the existing owner-console environment, pairing state, and tunnel intact.
 subprocess.run([str(python),'-c','import aiortc, qrcode'],env={**os.environ,'PYTHONPATH':str(Path.home()/'.local/share/compai-codex/python')},check=True)
 dropin=Path.home()/'.config/systemd/user/compai-codex.service.d/lifetech-p2p.conf'

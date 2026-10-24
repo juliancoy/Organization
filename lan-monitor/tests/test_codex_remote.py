@@ -78,6 +78,12 @@ class RemoteBoundaryTests(unittest.TestCase):
         self.assertTrue(codex_devices.valid(cookie.split('=',1)[1]))
         with patch('codex_remote.codex_context.rest',return_value=(200,{'threads':[]})):
             self.assertEqual(self.request('/api/v1/master/codex/threads',cookie=cookie),200)
+        broker=Mock();broker.status.return_value={'app':None,'peers':[]}
+        broker.offer.return_value={'type':'answer','sdp':'fixture'}
+        with patch('swarm_test_deployment.manager',return_value=broker):
+            self.assertEqual(self.request('/api/v1/test-app/status',cookie=cookie),200)
+            self.assertEqual(self.request('/api/v1/test-app/offer','POST',origin='https://compai.example',body={'type':'offer','sdp':'fixture'},cookie=cookie),200)
+            self.assertTrue(broker.offer.call_args.args[1]())
         self.assertEqual(self.request('/logout','POST',origin='https://compai.example',body={},cookie=cookie),200)
         self.assertEqual(self.request('/api/v1/master/codex/threads',cookie=cookie),401)
 

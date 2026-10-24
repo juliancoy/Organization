@@ -8,7 +8,7 @@ const connect=el('button','Connect P2P'),download=el('button','Receive test APK'
 download.disabled=true;disconnect.disabled=true;
 const actions=el('div');actions.className='test-deployment-actions';actions.append(connect,download,disconnect);
 const fallback=el('a','Download test APK over HTTPS');fallback.href='/api/v1/test-app/download';fallback.download='swarm-control-test.apk';
-const life=el('a','Open LifeTech');life.href='https://lifetech.fyi/';life.target='_blank';life.rel='noopener';
+const life=el('a','Open Swarm Control');life.href='/';life.target='_blank';life.rel='noopener';
 const links=el('p');links.append(fallback,document.createTextNode(' · '),life);
 const progress=el('progress');progress.hidden=true;progress.max=1;
 const note=el('small','The APK is a separate Swarm Control launcher using your normal browser session. Android asks you to approve installation. P2P uses direct WebRTC; HTTPS is an explicitly separate fallback.');

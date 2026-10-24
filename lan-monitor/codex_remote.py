@@ -16,7 +16,7 @@ from master_api import authorized
 
 VIEW=Path(__file__).with_name('view')
 ASSETS={'/':'codex.html','/codex.html':'codex.html','/codex.js':'codex.js','/codex.css':'codex.css','/style.css':'style.css','/test-deployment.js':'test-deployment.js',
-        '/test-deployment.css':'test-deployment.css','/swarm-control':'swarm-control.html'}
+        '/test-deployment.css':'test-deployment.css','/swarm-control':'swarm-control.html','/swarm-control.svg':'swarm-control.svg'}
 API='/api/v1/master/codex/'
 
 class Handler(BaseHTTPRequestHandler):

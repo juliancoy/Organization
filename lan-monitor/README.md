@@ -650,13 +650,13 @@ Execution reuse remains based on verified passing results with matching relevant
 source, dependencies, image contents and machine identity. A forced run bypasses
 reuse and is labeled as such in the aggregate.
 
-### LifeTech test deployment through the paired console
+### Swarm Control test deployment through the paired console
 
-`https://compai.lifetech.fyi/lifetech-test` provides a paired-owner-authorized
-WebRTC connection to receive the fixed LifeTech Test APK, verify SHA-256, and
+`https://compai.lifetech.fyi/swarm-control` provides a paired-owner-authorized
+WebRTC connection to receive the fixed Swarm Control APK, verify SHA-256, and
 hand it to Android's normal installer. The console home links the same controls.
 An explicit HTTPS download remains available when a direct channel cannot form;
 there is no TURN relay configured. Pairing alone is neither WebRTC connectivity
 nor installation proof. No remote shell, arbitrary-file, or handset-control API
-is exposed. See [the build, installation, transport tests and retention details](../BmoreMedTech/mobile/README.md).
+is exposed. See [the build, installation, transport tests and retention details](../swarm-control/README.md).
 Initial owner-server setup: `python3 lan-monitor/setup-test-deployment.py`.

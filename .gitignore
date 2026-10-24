@@ -83,3 +83,7 @@
 !/scripts/onboard_node.py
 
 !/tests/test_browser_transport.py
+
+!/swarm-control/
+/swarm-control/node_modules
+/swarm-control/dist/

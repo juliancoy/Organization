@@ -1,0 +1,14 @@
+{
+  "name": "swarm-control",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "python3 build-test.py",
+    "test:transport": "node test-console.mjs",
+    "test:transport:live": "SWARM_LIVE_CONSOLE_TEST=1 node test-console.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
+  }
+}

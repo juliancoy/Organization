@@ -5,7 +5,7 @@ const el = (tag, text, cls) => { const node = document.createElement(tag); if (t
 let token = '', selected = null, offset = 0, next = null, busy = false, generation = 0, renderedThread = '', renderedMessages = '', observedActivity = '';
 root.classList.add('codex-app');
 const heading = el('div', '', 'panel-heading');
-const title = el('div'); title.append(el('span', 'SWARM · REMOTE CONTROL', 'codex-eyebrow'), el('h1', 'Codex workspace'), el('p', secureRemote ? 'Conversations and instructions on CompAI' : 'Conversations and instructions on this machine', 'muted'));
+const title = el('div'); title.append(el('span', 'SWARM · REMOTE CONTROL', 'codex-eyebrow'), el('h1', secureRemote ? 'Swarm Control' : 'Codex workspace'), el('p', secureRemote ? 'Conversations and instructions on CompAI' : 'Conversations and instructions on this machine', 'muted'));
 const lock = el('button', 'Lock'); lock.hidden = true; heading.append(title, lock);
 const unlock = el('form', '', 'codex-unlock');
 const label = el('label', 'Codex owner token '), password = el('input'); password.type = 'password'; password.autocomplete = 'off'; password.required = true; password.placeholder = 'Enter your owner token'; label.append(password);

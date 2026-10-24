@@ -67,7 +67,7 @@ def new_thread():
     thread(ident)  # Require durable history before reporting success.
     message = 'Conversation created. Connecting to local VS Code…'
     try:
-        subprocess.run(['code', '--open-url', f'vscode://openai.chatgpt/c/{ident}'],
+        subprocess.run(['code', '--open-url', f'vscode://openai.chatgpt/local/{ident}'],
                        check=True, timeout=10, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
         message = 'Conversation created. Use Open in local VS Code to connect it.'
@@ -252,7 +252,7 @@ def mutate(body):
             return RECEIPTS[key]
     row = thread(body.get('thread_id'))
     if action == 'open':
-        subprocess.run(['code', '--open-url', f'vscode://openai.chatgpt/c/{row["id"]}'],
+        subprocess.run(['code', '--open-url', f'vscode://openai.chatgpt/local/{row["id"]}'],
                        check=True, timeout=10, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return {'accepted': True, 'message': 'Open requested on the local VS Code desktop. Wait for the thread to connect.'}
     text = body.get('text')
