@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Run a fixed source-snapshot test shard in disposable Docker containers."""
+"""Run a fixed GitHub commit test shard in disposable Docker containers."""
 import argparse
 import datetime
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -77,6 +78,24 @@ def parse_counts(line, counts):
     return counts
 
 
+def dependency_cache(work,suite_id,spec):
+    """Keep package downloads, never installed dependencies, on the worker host."""
+    digest=hashlib.sha256((suite_id+'\0'+spec['image']+'\0'+os.uname().machine).encode())
+    ignored={'node_modules','.git','.venv','venv','dist','build','.test-deps','__pycache__'}
+    locks={'package-lock.json','npm-shrinkwrap.json','yarn.lock','pnpm-lock.yaml',
+           'pyproject.toml','poetry.lock','uv.lock','Pipfile.lock'}
+    for directory,folders,files in os.walk(work):
+        folders[:]=sorted(name for name in folders if name not in ignored)
+        for name in sorted(files):
+            if name not in locks and not (name.startswith('requirements') and name.endswith('.txt')):continue
+            path=Path(directory)/name
+            digest.update(str(path.relative_to(work)).encode()+b'\0'+path.read_bytes())
+    root=Path.home()/'.cache/organization-tests/packages'/digest.hexdigest()
+    root.mkdir(parents=True,exist_ok=True,mode=0o700)
+    for name in ('npm','pip'):(root/name).mkdir(exist_ok=True,mode=0o700)
+    return root
+
+
 def run(work, suite_id, phase, spec, run_id, env):
     if (work.parent / 'STOP').exists():
         return 130
@@ -87,13 +106,17 @@ def run(work, suite_id, phase, spec, run_id, env):
     cwd = work / spec['cwd']
     native = spec.get('native')
     if not native:
+        cache=dependency_cache(work,suite_id,spec)
         command = ['docker', 'run', '--pull=never', '--rm', '--name', name, '--user', str(os.getuid()) + ':' + str(os.getgid()), '-e', 'HOME=/tmp', '--cpus', '2', '--memory', '3g',
                    '--pids-limit', '512', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
                    '--shm-size', '256m', '--network', 'host' if phase == 'prepare' else 'none',
-                   '--mount', 'type=bind,src=' + str(work) + ',dst=/work', '-w', '/work/' + spec['cwd'],
+                   '--mount', 'type=bind,src=' + str(work) + ',dst=/work',
+                   '--mount', 'type=bind,src=' + str(cache) + ',dst=/cache',
+                   '-e','npm_config_cache=/cache/npm','-e','PIP_CACHE_DIR=/cache/pip',
+                   '-e','PIP_DISABLE_PIP_VERSION_CHECK=1', '-w', '/work/' + spec['cwd'],
                    '-e', 'CI=true', '-e', 'PYTHONPATH=/work/.test-deps/' + suite_id + ':/work', '-e', 'SECRET_KEY=distributed-tests-only', '-e', 'DATABASE_URL=postgresql+asyncpg://test:test@127.0.0.1/test',
-                   '-e', 'PIDP_BUILD_COMMIT=' + env['PIDP_BUILD_COMMIT'], '-e', 'PIDP_BUILD_DIRTY=true',
-                   '-e', 'ORGPORTAL_BUILD_COMMIT=' + env['ORGPORTAL_BUILD_COMMIT'], '-e', 'ORGPORTAL_BUILD_DIRTY=true',
+                   '-e', 'PIDP_BUILD_COMMIT=' + env['PIDP_BUILD_COMMIT'], '-e', 'PIDP_BUILD_DIRTY=false',
+                   '-e', 'ORGPORTAL_BUILD_COMMIT=' + env['ORGPORTAL_BUILD_COMMIT'], '-e', 'ORGPORTAL_BUILD_DIRTY=false',
                    spec['image'], *command]
     if (work.parent / 'STOP').exists():
         return 130
@@ -168,6 +191,21 @@ def main():
         if result.returncode or json.loads(result.stdout) != target['images'].get(image):
             emit('log', phase='images', line='Required image was not distributed or its ID differs: ' + image)
             raise SystemExit(125)
+    # Bind sources belong to this Docker daemon's host, not the coordinator.
+    # Probe the exact GitHub checkout manifest before allowing any suite to execute.
+    snapshot=work/'distributed-plan.json'
+    expected=hashlib.sha256(snapshot.read_bytes()).hexdigest()
+    probe=['docker','run','--pull=never','--rm','--network','none',
+           '--user',str(os.getuid())+':'+str(os.getgid()),'--cap-drop','ALL',
+           '--memory','128m','--pids-limit','32',
+           '--mount','type=bind,src='+str(work)+',dst=/work,readonly',
+           target['images'][PYTHON],'python3','-c',
+           "import hashlib,pathlib;print(hashlib.sha256(pathlib.Path('/work/distributed-plan.json').read_bytes()).hexdigest())"]
+    result=subprocess.run(probe,capture_output=True,text=True,timeout=45,env=env)
+    if result.returncode or result.stdout.strip()!=expected:
+        emit('log',phase='mount',line='Docker cannot read this host snapshot. Bind mounts must reference files on the daemon host; use a local Docker context on each agent worker.')
+        raise SystemExit(125)
+    emit('log',phase='mount',line='Verified host-local source bind mount against the snapshot SHA-256')
     for suite_id in target['suites']:
         if (work.parent / 'STOP').exists():
             break

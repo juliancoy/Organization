@@ -29,16 +29,22 @@ export function nodeVisual(node, observation) {
     if (node.test.status === 'failed') { health = 'failed'; reason = 'Web test failed; this does not establish that the device is offline'; }
   }
   ring = {healthy:'#73d5a0',degraded:'#f0be70',failed:'#f57e70',unknown:'#71818d'}[health];
-  return {radius, health, reason, ring, size_basis:'Retained outbound IP bytes observed at the gateway; logarithmic scale'};
+  return {radius, health, reason, ring, size_basis:node.traffic_summary?.basis||'Retained outbound IP bytes observed at the gateway; logarithmic scale'};
 }
 
 export function trafficParticles(edge) {
-  return [edge, ...(edge.relationships || [])].filter(flow =>
-    flow.kind === 'outbound' && flow.actual_mbps > 0 && fresh(flow));
+  return [edge, ...(edge.relationships || [])].flatMap(flow=>{
+    if(!fresh(flow))return [];
+    if(flow.kind==='observed-connection')return [
+      {a:flow.a,b:flow.b,actual_mbps:flow.upload_mbps},
+      {a:flow.b,b:flow.a,actual_mbps:flow.download_mbps}
+    ].filter(f=>f.actual_mbps>0);
+    return flow.kind==='outbound'&&flow.actual_mbps>0?[flow]:[];
+  });
 }
 
 // Association tables describe L2 attachment; TTL probes describe IP routing hops.
-export function networkView(data, requested, layer = 'links') {
+export function networkView(data, requested, layer = 'links', allConnections = false) {
   const inventory = new Map();
   function add(device) {
     if (device.mac) device = {...device, mac:device.mac.toLowerCase()};
@@ -84,12 +90,29 @@ export function networkView(data, requested, layer = 'links') {
     const previous = uniqueFlows.get(identity);
     if (!previous || Date.parse(row.last_seen) >= Date.parse(previous.last_seen)) uniqueFlows.set(identity, normalized);
   }
+  if(allConnections&&captured?.flows){
+    const pairs=new Map();
+    for(const flow of captured.flows.records||[]){
+      if(!flow.device_mac||!flow.remote_ip||Date.now()-Date.parse(flow.last_seen)>=300000)continue;
+      const source=flow.device_mac.toLowerCase(),identity=source+'|'+flow.remote_ip;
+      const row=pairs.get(identity)||{source_mac:source,source_ip:flow.local_ip,destination:flow.remote_ip,bytes:0,mbps:0,
+        upload_mbps:0,download_mbps:0,first_seen:flow.first_seen,last_seen:flow.last_seen,interface:flow.interface,
+        basis:'Bidirectional client-side IP flow accounting',bidirectional:true};
+      row.bytes+=(flow.upload_bytes||0)+(flow.download_bytes||0);
+      row.upload_mbps+=flow.upload_mbps||0;row.download_mbps+=flow.download_mbps||0;
+      row.mbps=row.upload_mbps+row.download_mbps;
+      if(flow.first_seen<row.first_seen)row.first_seen=flow.first_seen;
+      if(flow.last_seen>row.last_seen)row.last_seen=flow.last_seen;
+      pairs.set(identity,row);
+    }
+    for(const [identity,row]of pairs)uniqueFlows.set(identity,row);
+  }
   const recent = [...uniqueFlows.values()];
   const totals = new Map();
   for (const row of recent) totals.set(row.destination, (totals.get(row.destination) || 0) + row.bytes);
   const priority = new Set(recent.filter(row => row.source_mac === requested).map(row => row.destination));
   const destinations = [...totals.keys()].sort((a,b) =>
-    Number(priority.has(b))-Number(priority.has(a)) || totals.get(b)-totals.get(a) || a.localeCompare(b)).slice(0,75);
+    Number(priority.has(b))-Number(priority.has(a)) || totals.get(b)-totals.get(a) || a.localeCompare(b)).slice(0,allConnections?totals.size:75);
   // Keep a selected retained destination selectable even below the top-volume cutoff.
   const selectedDestination = requested?.startsWith('external:') ? requested.slice(9) : null;
   if (selectedDestination && totals.has(selectedDestination) && !destinations.includes(selectedDestination)) {
@@ -97,7 +120,7 @@ export function networkView(data, requested, layer = 'links') {
   }
   const shown = new Set(destinations);
   const relationships = recent.filter(row => shown.has(row.destination))
-    .sort((a,b) => Number(b.source_mac === requested || b.destination === selectedDestination)-Number(a.source_mac === requested || a.destination === selectedDestination) || b.bytes-a.bytes).slice(0,200);
+    .sort((a,b) => Number(b.source_mac === requested || b.destination === selectedDestination)-Number(a.source_mac === requested || a.destination === selectedDestination) || b.bytes-a.bytes).slice(0,allConnections?recent.length:200);
   for (const row of relationships) {
     if (!inventory.has(row.source_mac)) add({id:row.source_mac, mac:row.source_mac, ip:row.source_ip,
       title:'Observed LAN source', passive:true, ports:[]});
@@ -148,9 +171,9 @@ export function networkView(data, requested, layer = 'links') {
     }
     if (!record?.route?.hops?.length && record?.gateway) connect(source, address(record.gateway, 'Upstream gateway'), {kind:'route', evidence:'Configured default gateway; TTL trace not yet available'});
   }
-  if (layer === 'ip') {
+  if (!allConnections && layer === 'ip') {
     if (measured) trace(id, observation, true);
-  } else {
+  } else if (!allConnections) {
     if (ap) {
       for (const client of router.clients || []) {
         if (!inventory.has(client.mac) || client.mac === ap) continue;
@@ -179,11 +202,12 @@ export function networkView(data, requested, layer = 'links') {
     if (!ap && measured && !graph.size) trace(id, observation, false);
   }
   for (const row of relationships) {
-    connect(row.source_mac, byIP(row.destination).id, {kind:'outbound',
-      evidence:'Observed outbound IP traffic relationship; routed path, not a direct physical link',
+    connect(row.source_mac, byIP(row.destination).id, {kind:row.bidirectional?'observed-connection':'outbound',
+      upload_mbps:row.upload_mbps,download_mbps:row.download_mbps,
+      evidence:row.bidirectional?'Observed bidirectional endpoint relationship; not a physical link':'Observed outbound IP traffic relationship; routed path, not a direct physical link',
       capacity_basis:'Not measured; a traffic relationship has no physical link capacity',
       actual_mbps:Number.isFinite(row.mbps) ? row.mbps : null,
-      traffic_basis:outbound.scope, observed:captured.updated, first_seen:row.first_seen,
+      traffic_basis:row.bidirectional?captured.flows.scope:outbound.scope, observed:captured.updated, first_seen:row.first_seen,
       last_seen:row.last_seen, bytes:row.bytes, source_ip:row.source_ip,
       capture_interface:row.interface, attribution:row.basis});
   }
@@ -196,22 +220,24 @@ export function networkView(data, requested, layer = 'links') {
       if (other && !distances.has(other)) { distances.set(other, distances.get(current)+1); queue.push(other); }
     }
   }
-  const edges = allEdges.filter(edge => distances.has(edge.a) && distances.has(edge.b));
+  const edges = allConnections?allEdges:allEdges.filter(edge => distances.has(edge.a) && distances.has(edge.b));
+  const connected=new Set(edges.flatMap(edge=>[edge.a,edge.b]));
   const ipHops = new Map((observation?.route?.hops || []).filter(hop=>hop.ip).map(hop=>[hop.ip,hop.ttl]));
   if (observation?.gateway && !ipHops.has(observation.gateway)) ipHops.set(observation.gateway, 1);
-  const nodes = [...inventory.values()].filter(device => !device.context || distances.has(device.id) || device.id === id).map(device => ({...device,
+  const nodes = [...inventory.values()].filter(device => !device.context || distances.has(device.id) || device.id === id || allConnections&&connected.has(device.id)).map(device => ({...device,
     title: device.mac === '7c:10:c9:b3:c2:38' ? 'ASUS access point' : device.title,
     perspective: device.id === id, you: device.id === data.viewer.id,
-    visibility: device.id === id ? 'source' : distances.has(device.id) ? 'observed' : 'inventory',
-    distance: distances.get(device.id), ip_hop: ipHops.get(device.ip),
+    visibility: device.id === id ? 'source' : distances.has(device.id)||allConnections&&connected.has(device.id) ? 'observed' : 'inventory',
+    distance: distances.get(device.id)??(allConnections&&connected.has(device.id)?2:undefined), ip_hop: ipHops.get(device.ip),
     evidence: evidence.get(device.id), test:data.checks?.results?.[device.id], remote_info:data.remote_ips?.[device.ip],
     traffic_summary: (() => {
       const flows = recent.filter(row => row.source_mac === device.id || row.destination === device.ip);
       return {pairs:flows.length, destinations:new Set(flows.filter(row=>row.source_mac===device.id).map(row=>row.destination)).size,
         sources:new Set(flows.map(row=>row.source_mac)).size, bytes:flows.reduce((sum,row)=>sum+(row.bytes||0),0),
-        mbps:outbound?.available ? flows.reduce((sum,row)=>sum+(row.mbps||0),0) : null,
+        basis:allConnections?'Retained observed endpoint IP bytes; logarithmic scale':undefined,
+        mbps:outbound?.available||allConnections&&captured?.flows ? flows.reduce((sum,row)=>sum+(row.mbps||0),0) : null,
         first_seen:flows.map(row=>row.first_seen).filter(Boolean).sort()[0],
         last_seen:flows.map(row=>row.last_seen).filter(Boolean).sort().at(-1)};
     })()}));
-  return {id, nodes, edges, observation, measured, layer, outbound, source:nodes.find(node=>node.id===id)};
+  return {id, nodes, edges, observation, measured, layer, allConnections, outbound:allConnections&&captured?.flows?{...outbound,scope:captured.flows.scope}:outbound, source:nodes.find(node=>node.id===id)};
 }

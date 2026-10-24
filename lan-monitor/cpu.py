@@ -6,7 +6,8 @@ import os
 import subprocess
 import threading
 import time
-from distributed import targets, ssh
+from distributed import targets
+from agent_client import AgentClient, CONFIG
 
 SAMPLE = '''import json,time,os,socket,subprocess
 from pathlib import Path
@@ -71,11 +72,15 @@ class CpuMonitor:
     def sample(self, target):
         local=target.get('local',False)
         try:
-            result=subprocess.run(['python3','-c',SAMPLE] if local else ssh(target)+['python3 -'],
-                                  input=None if local else SAMPLE,capture_output=True,text=True,timeout=8,check=True)
-            values=json.loads(result.stdout)
+            if local:
+                result=subprocess.run(['python3','-c',SAMPLE],capture_output=True,text=True,timeout=8,check=True)
+                values=json.loads(result.stdout)
+            else:
+                config=json.loads(CONFIG.read_text())
+                address=config['peers'][target['host']]
+                values=AgentClient({**target,'agent_endpoint':'http://'+address+':8790'}).call('metrics',timeout=8)
             return {'host':target['host'],**values,'status':'live','sampled_at':time.time()}
-        except (OSError,ValueError,subprocess.SubprocessError):
+        except (OSError,ValueError,RuntimeError,KeyError,subprocess.SubprocessError):
             return {'host':target['host'],'percent':None,'cpus':None,'status':'unavailable','sampled_at':time.time()}
 
     def view(self):

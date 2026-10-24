@@ -50,3 +50,15 @@ header{height:auto;min-height:86px;flex-wrap:wrap;padding-top:14px;padding-botto
 .container-website-tools select{max-width:240px}.container-website-tools a{color:#b7e4cf;font-size:12px}
 .container-website>p{font-size:12px;line-height:1.5}.container-website iframe{width:100%;height:60vh;min-height:280px;border:1px solid #374650;border-radius:8px;background:white}
 @media(max-width:600px){#container-hover[data-view="website"]{left:12px;right:12px;bottom:12px;width:auto}.container-website-tools input{width:100%;flex-basis:100%}.container-website iframe{height:50vh}}
+
+/* Embedded LAN map shares discovery and particle controls with the full map. */
+.embedded-lan body>header,.embedded-lan #cpu-readout,.embedded-lan .settings-panel{display:none}
+.embedded-lan .layout{display:grid;grid-template-columns:minmax(0,1fr) 280px;height:100dvh;min-height:0}
+.embedded-lan .scene{height:100%;min-height:0}
+.embedded-lan .inspector-panel{padding:14px;min-height:0}
+.embedded-map-controls{position:absolute;left:12px;right:12px;bottom:12px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;z-index:2}
+.embedded-map-controls span{padding:8px;background:#0b1116df;border-radius:8px;font-size:12px}
+.embedded-map-controls button{font-size:11px;padding:7px 9px}
+@media(max-width:760px){.embedded-lan .layout{grid-template-columns:1fr;grid-template-rows:440px minmax(0,1fr)}.embedded-lan .inspector-panel{grid-row:2;overflow-y:auto}}
+
+.edge-hover{position:absolute;z-index:20;width:340px;max-width:calc(100% - 16px);padding:16px 18px;border:1px solid #628f8e;border-radius:10px;background:#0c171ff5;box-shadow:0 12px 40px #0008;pointer-events:none;overflow:hidden;color:#dbe7ef;font-size:12px;line-height:1.55;backdrop-filter:blur(12px)}.edge-hover[hidden]{display:none}.edge-hover-title{font-size:13px;font-weight:500;display:block;overflow-wrap:anywhere}.edge-hover-numbers{display:flex;justify-content:space-between;gap:10px;margin:10px 0;color:#83dfd1;font-size:12px;font-variant-numeric:tabular-nums}.edge-hover-scope{color:#91a4b2;font-size:10px;line-height:1.6;margin:8px 0 0}.edge-hover h4{font-size:11px;font-weight:500;margin:12px 0 6px;color:#a9c9d4}.edge-hover-artefact{border-top:1px solid #ffffff12;padding:8px 0 5px;overflow-wrap:anywhere}.edge-hover-artefact strong{display:block;font-size:11px;font-weight:500;color:#b7e4cf}.edge-hover-artefact small,.edge-hover-artefact>span{display:block;font-size:10px;margin-top:4px;color:#acbfca}#graph:focus-visible{outline:2px solid #83dfd1;outline-offset:-3px}

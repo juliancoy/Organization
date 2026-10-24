@@ -33,8 +33,10 @@ export function groupNetwork(view) {
   if(!aggregate){graph.set(pair,edge);continue;}
   const item=graph.get(pair)||{a,b,kind:'provider-relationship',capacity_mbps:null,actual_mbps:null,bytes:0,members:[],relationships:[],evidence_sources:[],capacity_basis:'Provider aggregate; no single physical-link capacity',traffic_basis:'Sum of distinct observed outbound endpoint relationships at this gateway'};
   item.members.push(edge);
-  for(const flow of [edge,...edge.relationships||[]])if(flow.kind==='outbound'){
+  for(const flow of [edge,...edge.relationships||[]])if(['outbound','observed-connection'].includes(flow.kind)){
    item.relationships.push({...flow,a:ids.get(flow.a),b:ids.get(flow.b)});
+   if(flow.kind==='observed-connection')item.traffic_basis='Sum of observed bidirectional endpoint IP throughput; not a physical link';
+   if(!item.observed||Date.parse(flow.observed)>Date.parse(item.observed))item.observed=flow.observed;
    if(Number.isFinite(flow.actual_mbps))item.actual_mbps=(item.actual_mbps||0)+flow.actual_mbps;
    item.bytes+=flow.bytes||0;
   }

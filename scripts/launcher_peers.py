@@ -14,9 +14,14 @@ PROTOCOL = 'lifetech-launcher.v1'
 
 
 class Mesh:
-    def __init__(self, config, prefix):
+    def __init__(self, config, prefix, agent=None):
+        self.agent = agent
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         self.name, self.peers = config['name'], config['peers']
+        import hashlib
+        folder = Path(__file__).resolve().parent
+        self.config_revision = hashlib.sha256(json.dumps(self.peers,sort_keys=True).encode()).hexdigest()
+        self.source_revision = hashlib.sha256(b''.join((folder/name).read_bytes() for name in ('launcher_peers.py','launcher_discovery.py','launcher_registration.py','launcher_agent.py'))).hexdigest()
         if self.name not in self.peers or len(self.peers) > 24:
             raise ValueError('Mesh requires 1–24 enrolled launchers including this machine')
         self.cipher = AESGCM(bytes.fromhex(config['key']))
@@ -129,8 +134,11 @@ class Mesh:
         try:
             async with asyncio.timeout(20):
                 await pc.setLocalDescription(await pc.createOffer())
-                host = self.peers[peer]
-                url = f'http://{host}:{PORT}/offer'
+                endpoint = self.discovery.endpoint(peer)
+                if endpoint is None:
+                    raise ValueError('No current DNS-SD service announcement')
+                host, port = endpoint
+                url = f'http://{host}:{port}/offer'
                 async with session.post(url, data=self.seal(self.envelope(peer, pc.localDescription, nonce)),
                                         allow_redirects=False) as response:
                     if response.status != 200:
@@ -160,16 +168,26 @@ class Mesh:
 
     async def run(self, stopped):
         from aiohttp import web, ClientSession, ClientTimeout
-        app = web.Application(client_max_size=65536)
+        app = web.Application(client_max_size=2*1024**2)
         app.router.add_post('/offer', self.offer)
+        if self.agent:app.router.add_post('/agent/v1',self.agent.handle)
         self.runner = web.AppRunner(app, access_log=None)
         await self.runner.setup()
-        await web.TCPSite(self.runner, '0.0.0.0', PORT).start()
+        from launcher_discovery import Discovery
+        self.discovery = Discovery(self.name, self.peers, PORT)
+        await web.TCPSite(self.runner, self.peers[self.name], PORT).start()
         print(f'Launcher WebRTC listening on LAN port {PORT}; {len(self.peers)-1} enrolled peers', flush=True)
-        initial = {'name':self.name,'peers':{peer:{'connection':'disconnected'} for peer in self.peers if peer!=self.name}}
+        initial = {'name':self.name,'source_revision':self.source_revision,'config_revision':self.config_revision,'peers':{peer:{'connection':'disconnected'} for peer in self.peers if peer!=self.name}}
         path = Path('/tmp/launcher-peers.json')
         temporary = path.with_suffix('.tmp');temporary.write_text(json.dumps(initial));temporary.replace(path)
         try:
+            await asyncio.to_thread(self.discovery.start)
+            if self.agent:
+                readiness=await asyncio.to_thread(self.agent.dispatch,'status',{})
+                if not readiness['ready']:raise RuntimeError('Agent execution capabilities are unavailable')
+                marker=Path('/tmp/launcher-agent-ready.json')
+                temporary=marker.with_suffix('.tmp')
+                temporary.write_text(json.dumps({'folder':str(Path(__file__).resolve().parent),'time':time.time()}));temporary.replace(marker)
             async with ClientSession(timeout=ClientTimeout(total=20), trust_env=False) as session:
                 while not stopped.is_set():
                     for peer, pc in list(self.links.items()):
@@ -191,29 +209,31 @@ class Mesh:
                                        **self.observations.get(peer, {})} for peer in self.peers if peer != self.name}
                     path = Path('/tmp/launcher-peers.json')
                     temporary = path.with_suffix('.tmp')
-                    temporary.write_text(json.dumps({'name': self.name, 'peers': snapshot}))
+                    temporary.write_text(json.dumps({'name': self.name, 'source_revision':self.source_revision,'config_revision':self.config_revision, 'peers': snapshot}))
                     temporary.replace(path)
                     for _ in range(10):
                         if stopped.is_set():
                             break
                         await asyncio.sleep(1)
         finally:
+            await asyncio.to_thread(self.discovery.close)
             await self.runner.cleanup()
             await asyncio.gather(*(self.drop(peer) for peer in list(self.links)))
 
 
 def start(prefix):
-    path = Path(os.getenv('LIFETECH_PEER_CONFIG', str(CONFIG)))
-    stopped = threading.Event()
+    import subprocess
+    import sys
+    supervisor = Path(__file__).with_name('launcher_peer_supervisor.py')
+    process = subprocess.Popen([sys.executable,'-B',str(supervisor),'--prefix',prefix])
 
-    def serve():
-        try:
-            asyncio.run(supervise(path,prefix,stopped))
-        except Exception:
-            logging.exception('Launcher WebRTC stopped')
-    thread = threading.Thread(target=serve, name='launcher-webrtc', daemon=True)
-    thread.start()
-    return stopped.set
+    def stop():
+        if process.poll() is None:
+            process.terminate()
+            try:process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill();process.wait()
+    return stop
 
 
 class InternetMesh(Mesh):
@@ -392,8 +412,14 @@ class EnrollmentPoller:
         import urllib.error
         from launcher_registration import register
         internet = config.get('internet',{})
+        registration_state = 'registered'
+        try:
+            observed = json.loads(Path('/tmp/launcher-peers-internet.json').read_text())
+            if observed.get('name')==internet.get('peer') and observed.get('registration')=='new-invitation-required':
+                registration_state = 'new-invitation-required'
+        except (OSError,ValueError):pass
         if not self.invitation.is_file():
-            self.state('registered' if internet and not internet.get('pending') else 'waiting-for-invitation')
+            self.state(registration_state if internet and not internet.get('pending') else 'waiting-for-invitation')
             return config
         try:
             raw = self.invitation.read_bytes()
@@ -412,7 +438,7 @@ class EnrollmentPoller:
             if (internet.get('peer')==claims['peer'] and internet.get('room')==claims['room']
                     and not internet.get('pending')):
                 # A revoked credential requires a different invitation, not repeated enrollment.
-                self.state('registered')
+                self.state(registration_state)
                 return config
             if claims.get('aud')!='launcher-enroll-v1' or claims['exp']<=time.time():
                 self.blocked = True
@@ -449,6 +475,8 @@ async def supervise(path,prefix,stopped):
     """Watch enrollment and run LAN/internet sessions independently without restart."""
     path = Path(path)
     poller = EnrollmentPoller(path)
+    from launcher_agent import Agent
+    agent=Agent(path,os.environ.get('LIFETECH_JOB_ROOT',str(path.parent/'jobs')))
     tasks = {}
     try:
         while not stopped.is_set():
@@ -470,7 +498,7 @@ async def supervise(path,prefix,stopped):
                 for name,value in desired.items():
                     if name in tasks:
                         continue
-                    mesh = Mesh(value,prefix) if name=='lan' else InternetMesh(value,prefix)
+                    mesh = Mesh(value,prefix,agent) if name=='lan' else InternetMesh(value,prefix)
                     task = asyncio.create_task(mesh.run(stopped),name='launcher-'+name)
                     tasks[name] = (json.dumps(value,sort_keys=True),task)
                     def completed(done):
@@ -487,6 +515,7 @@ async def supervise(path,prefix,stopped):
                 if stopped.is_set():break
                 await asyncio.sleep(1)
     finally:
+        await asyncio.to_thread(agent.close)
         for _,task in tasks.values():task.cancel()
         await asyncio.gather(*(task for _,task in tasks.values()),return_exceptions=True)
 

@@ -1,4 +1,5 @@
 import time
+from datetime import datetime,timezone
 import unittest
 from socket_owners import parse_owners, SocketOwners
 
@@ -12,11 +13,11 @@ class SocketOwnerTests(unittest.TestCase):
 
     def test_only_fresh_exact_host_socket_gets_owner(self):
         monitor=SocketOwners();monitor.sampled_at=time.time()
-        monitor.rows={(6,'10.0.0.1',123,'1.1.1.1',443):[{'name':'chrome','pid':42}]}
-        flow={'device_mac':'host','protocol':6,'local_ip':'10.0.0.1','local_port':123,'remote_ip':'1.1.1.1','remote_port':443}
+        monitor.remember({(6,'10.0.0.1',123,'1.1.1.1',443):[{'name':'chrome','pid':42}]},time.time())
+        flow={'device_mac':'host','protocol':6,'local_ip':'10.0.0.1','local_port':123,'remote_ip':'1.1.1.1','remote_port':443,'last_seen':datetime.now(timezone.utc).isoformat()}
         other={**flow,'device_mac':'other'}
         monitor.annotate([flow,other],'host')
         self.assertEqual(flow['recent_processes'][0]['pid'],42)
         self.assertNotIn('recent_processes',other)
-        monitor.sampled_at=1;fresh={k:v for k,v in flow.items() if k not in ('recent_processes','process_sampled_at')}
+        monitor.history={};monitor.sampled_at=1;fresh={k:v for k,v in flow.items() if k not in ('recent_processes','process_sampled_at')}
         monitor.annotate([fresh],'host');self.assertNotIn('recent_processes',fresh)

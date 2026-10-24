@@ -6,15 +6,35 @@ import shlex
 import subprocess
 import sys
 import socket
+import re
+import getpass
+import ipaddress
 
 
 def enroll(root):
     sys.path.insert(0, str(root / 'lan-monitor'))
-    from distributed import targets, ssh
     sys.path.insert(0, str(root / 'scripts'))
     from launcher_peers import CONFIG
-    hosts = targets()
-    peers = {host['host']: socket.gethostbyname(host['host']) for host in hosts}
+    inventory=Path.home()/'.local/state/orgportal/lan-ssh-devices.json'
+    accounts=json.loads(inventory.read_text())['accounts']
+    hosts=[]
+    local=socket.gethostname().split('.')[0]+'.local'
+    for name,user in accounts.items():
+        if not re.fullmatch(r'[a-z0-9][a-z0-9-]*\.local',name) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.-]*',user):raise ValueError('Invalid saved provisioning account')
+        if name!=local:hosts.append({'host':name,'user':user})
+    hosts.append({'host':local,'user':getpass.getuser(),'local':True})
+    def ssh(host):
+        if host.get('local'):return ['bash','-c']
+        return ['ssh','-i',str(Path.home()/'.ssh/orgportal_lan_ed25519'),'-o','BatchMode=yes','-o','IdentitiesOnly=yes','-o','StrictHostKeyChecking=yes','-o','ConnectTimeout=8',host['user']+'@'+host['host']]
+    rows=json.loads(subprocess.check_output(['ip','-j','-4','addr','show','dev','enp7s0'],text=True))
+    networks=[ipaddress.ip_network(a['local']+'/'+str(a['prefixlen']),strict=False) for row in rows for a in row.get('addr_info',[]) if a.get('scope')=='global']
+    code="import json,subprocess; rows=json.loads(subprocess.check_output(['ip','-j','-4','addr'],text=True)); print(json.dumps([a['local'] for r in rows if r['ifname'].startswith(('en','eth','wl')) for a in r.get('addr_info',[]) if a.get('scope')=='global']))"
+    peers={}
+    for host in hosts:
+        values=json.loads(subprocess.check_output(ssh(host)+['python3 -c '+shlex.quote(code)],text=True,timeout=20))
+        address=next((value for value in values if any(ipaddress.ip_address(value) in network for network in networks)),None)
+        if not address:raise RuntimeError('No authenticated Ethernet-LAN address for '+host['host'])
+        peers[host['host']]=address
     local_host=next((host for host in hosts if host.get('local')),None)
     remote=next((host for host in hosts if not host.get('local')),None)
     if local_host and remote:

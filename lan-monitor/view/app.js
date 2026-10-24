@@ -3,15 +3,30 @@ import {networkView, label, edgeStyle, nodeVisual, trafficParticles} from './mod
 import {loadSettings,saveSettings} from './settings.js';
 import {groupNetwork} from './providers.js';
 import {geographicNodes, geographicEdge, separateGeographicNodes, project} from './geography.js';
+import {EdgeHistory,edgeID,edgeChart,hitEdge} from './edge-throughput.js';
+import {createEdgeHover} from './edge-hover.js';
 
 const $ = id => document.getElementById(id);
 const canvas = $('graph'), ctx = canvas.getContext('2d');
+const edgeHistory=new EdgeHistory(),edgeHover=createEdgeHover(document.querySelector('.scene'));
+let edgeCharts=[],hoverPoint=null,hoveredEdge=null,lastEdgeHover=0,coordinatorContext=null;
+function clearEdgeHover(){hoverPoint=null;hoveredEdge=null;edgeHover.hide();canvas.removeAttribute('aria-describedby');canvas.style.cursor='grab';}
 let data, view, nodes = [], edges = [];
 let perspective = new URLSearchParams(location.search).get('device');
 let selectedId = perspective;
+const embeddedLAN = new URLSearchParams(location.search).get('embed') === 'lan';
+if (embeddedLAN) {
+  document.documentElement.classList.add('embedded-lan');
+  const controls=document.createElement('div');controls.className='embedded-map-controls';
+  const count=document.createElement('span');count.id='lan-node-count';count.setAttribute('role','status');controls.append(count);
+  for(const id of ['mine','pause','fit','zoom-in','zoom-out'])controls.append($(id));
+  document.querySelector('.scene').append(controls);
+}
 const settings=loadSettings();
+if(embeddedLAN)Object.assign(settings,{layer:'links',allConnections:false,geographic:false,groupProviders:false,labels:true});
 let layer = settings.layer;
-let geographic = settings.geographic, land, geoRequested=false;
+let allConnections=settings.allConnections;
+let geographic = settings.geographic&&!allConnections, land, geoRequested=false;
 let groupProviders = settings.groupProviders;
 let resolveNames=settings.resolveNames;
 fetch('/land.geojson').then(response=>response.json()).then(value=>{land=value;}).catch(()=>{});
@@ -25,6 +40,9 @@ let particleTime = 0;
 let geographicPositions=new Map(),geographicSignature='';
 const positionCache = new Map();
 const resolvingIPs = new Set();
+$('all-connections').checked=allConnections;
+$('layer').disabled=allConnections;
+$('geographic').disabled=allConnections;
 $('geographic').checked=geographic;
 $('group-providers').checked=groupProviders;
 $('labels').checked=labels;
@@ -33,7 +51,7 @@ $('layer').value=layer;
 $('repulsion').value=settings.repulsion;
 $('force-value').value=settings.repulsion;
 function persistSettings(){
-  const saved=saveSettings({layer,geographic,groupProviders,labels,paused:settings.paused,resolveNames,repulsion:Number($('repulsion').value)});
+  const saved=saveSettings({layer,allConnections,geographic,groupProviders,labels,paused:settings.paused,resolveNames,repulsion:Number($('repulsion').value)});
   $('settings-status').textContent=saved?'Settings saved in this browser.':'Browser storage is unavailable; settings last for this session.';
 }
 function requestGeography(){
@@ -70,11 +88,14 @@ function choose(id) {
   const node=nodes.find(node=>node.id===id);
   perspective = node?.provider_group ? node.members[0].id : id;
   selectedId = id;
-  history.replaceState(null, '', id === data.viewer.id ? location.pathname : '?device=' + encodeURIComponent(perspective));
+  const query=new URLSearchParams();
+  if(embeddedLAN)query.set('embed','lan');
+  if(id!==data.viewer.id)query.set('device',perspective);
+  history.replaceState(null,'',location.pathname+(query.size?'?'+query:''));
   sync();
 }
 function sync() {
-  const rawView = networkView(data, perspective, layer);
+  const rawView = networkView(data, perspective, layer, allConnections);
   perspective = rawView.id;
   const remote=rawView.nodes.filter(node=>!node.mac&&node.ip);
   const ipv6=remote.filter(node=>node.ip.includes(':'));
@@ -85,6 +106,12 @@ function sync() {
   requestGeography();
 
   view = groupProviders ? groupNetwork(rawView) : rawView;
+  if(embeddedLAN){
+    view={...view,nodes:view.nodes.filter(node=>!node.external)};
+    const ids=new Set(view.nodes.map(node=>node.id));
+    view.edges=view.edges.filter(edge=>ids.has(edge.a)&&ids.has(edge.b));
+    $('lan-node-count').textContent=view.nodes.length+' LAN nodes';
+  }
   if (!view.nodes.some(node => node.id === selectedId)) selectedId = view.id;
 
   const old = new Map(nodes.map(node => [node.id, node]));
@@ -99,8 +126,8 @@ function sync() {
     const prior = old.get(node.id) || positionCache.get(node.id);
     const radius = node.visibility === 'inventory' ? 540 : Math.min(4, node.distance || 1) * 190;
     const angle = i * 2.4;
-    const targetX=layer==='ip' ? node.visibility==='inventory' ? (i%6)*145 : (node.distance||0)*145 : Math.cos(angle)*radius;
-    const targetY=layer==='ip' ? node.visibility==='inventory' ? 250+Math.floor(i/6)*90 : 0 : Math.sin(angle)*radius;
+    const targetX=(layer==='ip'&&!allConnections) ? node.visibility==='inventory' ? (i%6)*145 : (node.distance||0)*145 : Math.cos(angle)*radius;
+    const targetY=(layer==='ip'&&!allConnections) ? node.visibility==='inventory' ? 250+Math.floor(i/6)*90 : 0 : Math.sin(angle)*radius;
     return {...node, targetX,targetY, x: prior ? prior.x : node.perspective ? 0 : targetX,
       y: prior ? prior.y : node.perspective ? 0 : targetY,
       vx: prior?.vx || 0, vy: prior?.vy || 0,
@@ -115,6 +142,7 @@ function sync() {
     $('geo-caption').textContent = `${located}/${nodes.length} located · IP estimates, not GPS · LAN shares estimated gateway site · collision spacing separates devices; tethers mark locations · ${data.geography?.running ? 'Looking up locations… · ' : ''}${nodes.length-located} unlocated: available in the device list · Land: Natural Earth (public domain)`;
   }
   edges = view.edges;
+  edgeHistory.update(edges,nodes,data);
   if (gesture?.node) gesture.node = nodes.find(node => node.id === gesture.node.id);
   document.body.dataset.ready = 'true';
   document.body.dataset.viewer = data.viewer.id;
@@ -126,8 +154,8 @@ function sync() {
   $('perspective-caption').textContent = view.id === data.viewer.id ? 'Your perspective' : 'Viewing from another device';
   $('perspective-title').textContent = label(view.source) + (view.id === data.viewer.id ? ' · You' : '');
   const observation = view.observation;
-  $('perspective-status').textContent = view.source.external ? 'Passive destination perspective · dotted edges are observed routed traffic, not physical links.' : view.measured
-    ? `${observation.interface} · ${observation.subnet} · ${edges.length} ${layer === 'ip' ? 'route segments' : 'mapped links'}`
+  $('perspective-status').textContent = allConnections ? `${edges.length} observed endpoint relationships · topology-independent · capture coverage is partial` : view.source.external ? 'Passive destination perspective · dotted edges are observed routed traffic, not physical links.' : view.measured
+    ? `${observation.interface} · ${observation.subnet} · ${edges.length} ${(layer === 'ip'&&!allConnections) ? 'route segments' : 'mapped links'}`
     : edges.length ? 'Infrastructure associations show this device’s attachment; no device login is available.' : 'No observations from this device. Dim particles are shared inventory.';
   $('updated').textContent = data.scanning || data.mapping ? 'Refreshing observations…' : 'Updated ' + new Date(data.updated || Date.now()).toLocaleTimeString();
   $('refresh').disabled = !!(data.scanning || data.mapping);
@@ -325,7 +353,7 @@ function renderDetails() {
   for (const edge of incident) {
     const other = nodes.find(n => n.id === (edge.a === node.id ? edge.b : edge.a));
     const section = element('div', '', 'edge-detail');
-    const heading = element('button', (edge.kind === 'outbound' ? 'Observed traffic with ' : 'Link to ')+label(other), 'connection-title');
+    const heading = element('button', (['outbound','observed-connection','provider-relationship'].includes(edge.kind) ? 'Observed traffic with ' : 'Link to ')+label(other), 'connection-title');
     heading.onclick = () => choose(other.id);
     section.append(heading);
     const style = edgeStyle(edge), swatch = element('div', '', 'connection-meter');
@@ -340,6 +368,11 @@ function renderDetails() {
     field(section, 'Connection type', edge.kind);
     for (const relationship of edge.relationships || []) {
       field(section, 'Additional observed relationship', relationship.kind+' · '+rate(relationship.actual_mbps)+' · '+formatBytes(relationship.bytes || 0));
+    }
+    if (edge.kind === 'observed-connection') {
+      field(section,'Upload / download',rate(edge.upload_mbps)+' / '+rate(edge.download_mbps));
+      field(section,'Retained bidirectional IP bytes',formatBytes(edge.bytes));
+      field(section,'Capture interface / attribution',edge.capture_interface+' · '+edge.attribution);
     }
     if (edge.kind === 'outbound') {
       field(section, 'Direction', edge.source_ip+' → '+nodes.find(n => n.id === edge.b)?.ip+' (outbound only)');
@@ -406,12 +439,18 @@ function hit(point) {
 }
 canvas.onpointerdown = event => {
   const point = position(event);
-  gesture = {point, start: point, node: hit(point), moved: false};
+  const edge=hitEdge(point,edgeCharts);clearEdgeHover();
+  gesture = {point, start: point, node: hit(point), edge, moved: false};
   canvas.setPointerCapture(event.pointerId);
 };
 canvas.onpointermove = event => {
-  if (!gesture) {const node=hit(position(event));if(node?.hostname)showHostTerminal(node.hostname);else hideHostTerminal();return;}
-  hideHostTerminal();
+  if (!gesture) {
+    const point=position(event),node=hit(point);
+    if(node){clearEdgeHover();if(node.hostname)showHostTerminal(node.hostname);else hideHostTerminal();}
+    else{hideHostTerminal();hoverPoint=point;hoveredEdge=hitEdge(point,edgeCharts);if(!hoveredEdge)edgeHover.hide();canvas.style.cursor=hoveredEdge?'help':'grab';}
+    return;
+  }
+  clearEdgeHover();hideHostTerminal();
   const point = position(event);
   gesture.moved ||= Math.hypot(point.x - gesture.start.x, point.y - gesture.start.y) > 6;
   if (gesture.moved) {
@@ -423,16 +462,18 @@ canvas.onpointermove = event => {
   }
   gesture.point = point;
 };
-canvas.onpointerup = () => { const selected = gesture?.node, moved = gesture?.moved; gesture = null; if (selected && !moved) {choose(selected.id);if(selected.hostname)pinHostTerminal(selected.hostname);} };
-canvas.addEventListener('pointerleave',hideHostTerminal);
-canvas.onpointercancel = () => { gesture = null; };
+canvas.onpointerup = () => { const selected = gesture?.node, moved = gesture?.moved,edge=gesture?.edge,point=gesture?.point; gesture = null; if (selected && !moved) {choose(selected.id);if(selected.hostname)pinHostTerminal(selected.hostname);}else if(edge&&!moved){hoverPoint=point;hoveredEdge=edge;edgeHover.show(edge,point,nodes,data,coordinatorContext);canvas.setAttribute('aria-describedby','edge-hover');} };
+canvas.addEventListener('pointerleave',()=>{hideHostTerminal();clearEdgeHover();canvas.style.cursor='grab';});
+canvas.tabIndex=0;canvas.addEventListener('keydown',event=>{if(event.key==='Escape')clearEdgeHover();});
+canvas.onpointercancel = () => { gesture = null;clearEdgeHover(); };
 canvas.addEventListener('wheel', event => {
-  event.preventDefault();
+  event.preventDefault();clearEdgeHover();
   const p = position(event), before = world(p);
   zoom = Math.max(geographic?.08:.25, Math.min(64, zoom * Math.exp(-event.deltaY * .001)));
   pan.x = p.x - width / 2 - before.x * zoom; pan.y = p.y - height / 2 - before.y * zoom;
 }, {passive: false});
 function fit() {
+  clearEdgeHover();
   if (!nodes.length || width < 2) return;
   if(geographic){
     zoom=Math.max(.08,Math.min(1.3,(width-100)/1440,(height-160)/720));
@@ -468,7 +509,7 @@ function physics(dt) {
     }
     if (gesture?.node === node) continue;
     const distance = Math.max(1, Math.hypot(node.x, node.y));
-    if(layer==='ip'){node.vx=(node.vx+(node.targetX-node.x)*.02*dt)*.9;node.vy=(node.vy+(node.targetY-node.y)*.02*dt)*.9;node.x+=Math.max(-3,Math.min(3,node.vx))*dt;node.y+=Math.max(-3,Math.min(3,node.vy))*dt;continue;}
+    if((layer==='ip'&&!allConnections)){node.vx=(node.vx+(node.targetX-node.x)*.02*dt)*.9;node.vy=(node.vy+(node.targetY-node.y)*.02*dt)*.9;node.x+=Math.max(-3,Math.min(3,node.vx))*dt;node.y+=Math.max(-3,Math.min(3,node.vy))*dt;continue;}
     const target = node.visibility === 'inventory' ? 560 : Math.min(4, node.distance || 1) * 190;
     node.vx = (node.vx - node.x / distance * (distance - target) * .0006 * dt) * Math.pow(.93, dt);
     node.vy = (node.vy - node.y / distance * (distance - target) * .0006 * dt) * Math.pow(.93, dt);
@@ -503,6 +544,7 @@ function frame(time) {
   ctx.globalAlpha = 1;
   if (geographic) drawGeography();
   const geographicNodesByID=geographic?new Map(nodes.map(node=>[node.id,node])):null;
+  const nextEdgeCharts=[];
   for (const edge of edges) {
     if(geographic&&!geographicEdge(edge,geographicNodesByID))continue;
     const a = nodes.find(node => node.id === edge.a), b = nodes.find(node => node.id === edge.b);
@@ -511,14 +553,21 @@ function frame(time) {
     ctx.globalAlpha = matches(a) && matches(b) ? adjacent ? .95 : .5 : .12;
     ctx.lineCap = 'round';
     ctx.strokeStyle = '#40525f'; ctx.lineWidth = style.outer;
-    ctx.setLineDash(edge.kind === 'outbound' ? [2, 7] : edge.kind?.startsWith('route') ? [9, 6] : edge.capacity_mbps ? [] : [5, 7]);
+    ctx.setLineDash(['outbound','observed-connection','provider-relationship'].includes(edge.kind) ? [2, 7] : edge.kind?.startsWith('route') ? [9, 6] : edge.capacity_mbps ? [] : [5, 7]);
     ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
     ctx.setLineDash([]);
-    if (style.inner) {
-      ctx.strokeStyle = style.color; ctx.lineWidth = style.inner;
-      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
+    const chart=edgeChart(edge,edgeHistory.get(edge),p,q,nodeScreenRadius(a),nodeScreenRadius(b));
+    if(chart){
+      nextEdgeCharts.push(chart);
+      const active=hoveredEdge&&edgeID(hoveredEdge.edge)===edgeID(edge);
+      ctx.save();ctx.globalAlpha*=active?1:.9;ctx.strokeStyle=style.color;ctx.lineWidth=active?2.6:1.6;
+      for(const segment of chart.segments){
+        ctx.beginPath();segment.forEach((point,i)=>i?ctx.lineTo(point.x,point.y):ctx.moveTo(point.x,point.y));ctx.stroke();
+        if(segment.length===1){ctx.fillStyle=style.color;ctx.beginPath();ctx.arc(segment[0].x,segment[0].y,2,0,Math.PI*2);ctx.fill();}
+      }
+      ctx.restore();
     }
-    // Only source-attributed outbound measurements establish a direction.
+    // Only measured endpoint flows establish a traffic direction.
     for (const flow of trafficParticles(edge)) {
       const start = flow.a === edge.a ? p : q, end = flow.a === edge.a ? q : p;
       const count = Math.min(7, 1 + Math.ceil(Math.log10(1 + flow.actual_mbps * 100)));
@@ -533,6 +582,13 @@ function frame(time) {
     }
     ctx.lineWidth = 1;
 
+  }
+  edgeCharts=nextEdgeCharts;
+  if(hoverPoint&&!gesture&&time-lastEdgeHover>250){
+    hoveredEdge=hit(hoverPoint)?null:hitEdge(hoverPoint,edgeCharts);
+    if(hoveredEdge){edgeHover.show(hoveredEdge,hoverPoint,nodes,data,coordinatorContext);canvas.setAttribute('aria-describedby','edge-hover');}
+    else{edgeHover.hide();canvas.removeAttribute('aria-describedby');canvas.style.cursor='grab';}
+    lastEdgeHover=time;
   }
   const labelBoxes = [];
   for (const node of nodes.filter(node=>!geographic||node.geographic).sort((a, b) => Number(b.perspective) - Number(a.perspective) || Number(b.you) - Number(a.you))) {
@@ -556,8 +612,8 @@ function frame(time) {
     if ((labels && matches(node)) || node.perspective || node.you) {
       ctx.font = '12px system-ui';
       const important = node.perspective || node.you;
-      const text = (layer==='ip'&&node.ip_hop ? 'IP hop '+node.ip_hop+' · '+label(node) : label(node)) + (node.you ? ' · You' : '');
-      const textLimit=layer==='ip'?140:180;
+      const text = ((layer==='ip'&&!allConnections)&&node.ip_hop ? 'IP hop '+node.ip_hop+' · '+label(node) : label(node)) + (node.you ? ' · You' : '');
+      const textLimit=(layer==='ip'&&!allConnections)?140:180;
       const textWidth = Math.min(textLimit, ctx.measureText(text).width);
       const boxHeight = important ? node.test ? 55 : 40 : 20;
       const candidates = [
@@ -617,6 +673,12 @@ $('geographic').onchange = async event => {
   detailSignature=null; sync(); requestAnimationFrame(fit);
 
 };
+$('all-connections').onchange=event=>{
+  allConnections=event.target.checked;
+  if(allConnections&&geographic){geographic=false;geoRequested=false;$('geographic').checked=false;nodes=[];positionCache.clear();}
+  $('layer').disabled=allConnections;$('geographic').disabled=allConnections;
+  persistSettings();clearEdgeHover();if(data){sync();requestAnimationFrame(fit);}
+};
 $('layer').onchange = event => {layer=event.target.value;persistSettings();view=null;if(data)sync();};
 $('mine').onclick = () => { if (data) choose(data.viewer.id); };
 $('search').oninput = event => { filter = event.target.value.toLowerCase(); renderList(); renderHistory(); };
@@ -632,8 +694,14 @@ async function poll() {
   try {
     const response = await fetch('/api/devices?resolve='+(resolveNames?'1':'0'), {signal: AbortSignal.timeout(7000)});
     if (!response.ok) throw Error('HTTP ' + response.status);
+    const firstLoad=!data;
     data = await response.json(); sync();
+    if(embeddedLAN&&firstLoad)requestAnimationFrame(fit);
   } catch (error) { $('error').textContent = 'Monitor unavailable: ' + error.message; }
   setTimeout(poll, document.hidden ? 5000 : 1000);
 }
-poll(); requestAnimationFrame(frame);
+async function pollArtefactContext(){
+  if(!document.hidden){try{const r=await fetch('/api/distributed-tests',{cache:'no-store',signal:AbortSignal.timeout(4000)});if(!r.ok)throw Error();const result=await r.json();coordinatorContext={run:result.run,received:Date.now()};}catch{coordinatorContext=null;}}
+  setTimeout(pollArtefactContext,5000);
+}
+void pollArtefactContext();poll(); requestAnimationFrame(frame);

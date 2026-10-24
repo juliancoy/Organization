@@ -201,7 +201,7 @@ record evictions. Fragmented/non-TCP/UDP traffic can lack ports. Retained bytes
 cover each record's lifetime, not a chart window. Kernel packet-socket drops are
 reported per interval and since collector start; zero drops do not establish
 complete visibility. Other gateways, switched LAN traffic, unconnected host UDP,
-and sockets absent from the one-second socket inventory remain outside coverage.
+and sockets absent from the quarter-second socket inventory remain outside coverage.
 No packet payloads are stored. The presentation follows IPFIX observation-point
 and flow-key conventions (RFC 7011) without claiming to implement IPFIX export.
 
@@ -209,7 +209,7 @@ The source ranking can also group by **Host process**. A host-side `ss` inventor
 joins recent exact socket tuples to process name and PID on compai. It returns only executable/script identity, never full command arguments,
 environments, or remote process inventories. Unattributed
 traffic remains in the denominator, and sockets with multiple owners are counted
-once as a shared group. Ownership snapshots refresh every three seconds and are
+once as a shared group. Ownership snapshots refresh every half second and are
 not proof of ownership for all retained historical bytes. Grouping, direction,
 and device filters persist in browser localStorage.
 
@@ -229,26 +229,16 @@ and local/remote service role. Database names remain unknown. No SQL, file
 contents, connection strings, credentials, or remaining command arguments are
 returned. Resource context is available on compai; remote file names and
 socket-to-file or socket-to-database-name mappings require application
-instrumentation. Context is refreshed with socket ownership and expires after
+instrumentation. File context refreshes separately every three seconds and expires after
 ten seconds. Opening a process card reveals its file and database details.
 
 ### Distributed image preparation
 
-Before dispatching suites, the coordinator checks its Docker cache and every saved
-SSH machine for each required image. A complete cached copy is reused. Only when
-no machine has the image does the coordinator pull it from the registry. The
-combined Python/Node toolchain is also prepared once, rather than built on every
-worker.
-
-Images move directly from `docker image save | gzip -1` on the source to
-`gzip -d | docker image load` on the destination over SSH. The coordinator relays
-the stream through bounded memory pipes; no tar archives or intermediate image
-files are written. Docker stores imported images in the destination's normal
-image cache. Matching IDs or matching configuration and layer fingerprints skip
-transfers, including across Docker storage backends. Each device records its own
-verified image ID before dispatch. An unreachable peer does not prevent discovery on other machines. Workers use
-`--pull=never`, verify the image IDs in the source snapshot, and execute those exact
-image IDs rather than mutable tags. Image preparation is cancelled by **Stop all tests**.
+Before dispatching suites, the coordinator refreshes each required registry
+reference once and rebuilds derived images against the prepared base IDs.
+Matching worker image IDs skip transfers. Changed images use checksummed encrypted agent uploads, with two destinations at a time.
+Each worker records and executes its verified local image ID with `--pull=never`.
+Image preparation is cancelled by **Stop all tests**.
 
 Preparing images does not run a suite; stopped runs remain stopped. These changes
 apply on the next explicitly requested run after the coordinator loads this code.
@@ -270,8 +260,8 @@ does not start a server, container, test, or deployment.
 ### Cross-device WebRTC tests
 
 `Start all tests` includes a coordinated **Cross-device WebRTC P2P** suite after
-application shards finish. It requires at least two distinct saved SSH machine
-identities. Each participant runs a disposable, non-root browser container with
+application shards finish. It requires at least two distinct authenticated agent
+machine identities. Each participant runs a disposable, non-root browser container with
 all Linux capabilities dropped. This dedicated suite uses the host network for
 real ICE connectivity; ordinary application test containers remain offline.
 Only public SDK source is mounted. The coordinator keeps the enrollment signing
@@ -286,24 +276,153 @@ received fixtures. Cross-NAT and TURN coverage are reported separately; a LAN
 pass does not establish either. Device clocks must be synchronized within one
 minute so expiring invitations have consistent semantics.
 
-To run only this network suite against the saved devices:
-
-```sh
-python3 lan-monitor/p2p_network.py --report lan-monitor/.runtime/p2p/acceptance.json
-```
+The network suite runs through Start so SDK and fixture sources use the same published Organization commit as application tests.
 
 Reports contain machine fingerprints, tested SDK hash, fixture hash, selected
 routes and byte counts; invitations and signing keys are excluded. Normal
 integrated reports follow the distributed runner's retention policy. A manually
 chosen report remains until its operator removes it.
 
-Browser images use the shared image distributor: inspect existing image IDs,
-reuse a matching cached image, otherwise stream `docker image save` through
-compression and SSH directly into `docker image load`. Image archives are never
-staged as `.tar`/`.tar.gz` files on either device. The SDK transfer is a small
-source-only bundle, separate from container images. Browsers execute the verified
-image ID with `--pull=never`; Docker's ordinary image store remains necessary.
+Browser images use the same refresh, content verification, and encrypted
+agent delivery as application images. The SDK transfer is a small source-only bundle, separate
+from container images. Browsers execute the verified local image ID with
+`--pull=never`; Docker's ordinary image store remains necessary.
 
-The coordinator is also a worker: each new run includes the local machine, runs its shard directly without SSH, and starts all worker shards concurrently. Its suites appear in its machine card alongside the LAN workers.
+The coordinator participates through its own enrolled agent, using the same readiness checks and job protocol as other machines.
 
-Distributed-run preparation now initializes missing launcher WebRTC sessions on accessible saved machines and the local coordinator. It reuses healthy sessions, prepares/distributes the launcher image through the same LAN cache pipeline, and waits for fresh peer status before dispatching application suites. Offline machines are reported explicitly and excluded from assignment; incomplete fleet coverage cannot pass. Session sidecars persist between runs and do not restart the application stack. Internet enrollment and session renewal are documented in the root README.
+Distributed-run preparation verifies enrolled launcher agents, excludes unavailable machines and redistributes suites. Provisioning and updates are explicit operations outside Start.
+
+The API loads current coordinator modules on each new start through `live_distributed.py`; active runs retain their implementation. Agent process code changes only through explicit installed releases.
+
+The Network level chart includes **Docker images** operation labels. Exact image
+references from the test coordinator distinguish registry pulls, LAN image
+transfers, builds, and cached/ready images. Historical test selections do not
+appear as current coordinator activity, and coordinator labels expire if live
+polling stops. A read-only `DockerDownloads` worker also observes explicit local
+`docker pull` / `docker image pull` command references and recent image pull
+events from the local Engine socket. It never initiates a pull or reads registry
+authentication. Event history is in memory for 15 minutes, capped at 64 records;
+Docker itself retains only a bounded event history. Command observations mean a
+pull CLI is active, not that bytes are moving, and ambient client daemon contexts
+are not verified. Explicit alternate contexts are excluded. Compose, BuildKit,
+API-initiated pulls and remote hosts may be absent unless the coordinator reports
+them. The chart's device rate includes all traffic: no per-image Mb/s or layer
+progress is invented. General host observation requires loading the updated
+collector; coordinator labels use the existing test-context feed.
+
+The distributed-tests page embeds the live particle map above execution details. It shows all discovered LAN devices, including inventory without SSH access, with a node count, searchable device inspector, and fit/zoom/pause controls. External traffic destinations stay in the full network map. The embedded view uses the same discovery feed and does not start tests or scans.
+
+Each distributed run refreshes every required registry image once on the
+coordinator before distributing it, and rebuilds the derived toolchain from its declared bases. Docker reuses unchanged layers;
+unchanged peer contents are not retransmitted. A registry refresh failure stops
+preparation rather than silently testing an old tag. Version and digest pins
+remain explicit; refreshing does not upgrade a pinned version to another release.
+
+Start commits and pushes the selected source repositories (Organization, OrgPortal and PIdP) on their existing branches, verifies the GitHub branch tips, and records their exact commit IDs. It uses only fast-forward reconciliation; divergence, rejected pushes, unresolved conflicts and sensitive/runtime files stop publication with an explicit error. Repositories publish independently: a later failure does not undo an earlier successful commit/push.
+
+Every verified local worker initializes fresh checkouts, fetches the three pinned commits directly from GitHub, verifies FETCH_HEAD and HEAD, and records per-repository synchronization events. Existing working copies are untouched. No GitHub-hosted runner or SSH execution path participates. Private repositories require independent worker-side GitHub access; coordinator credentials are never copied into jobs. Test failures are reported, not automatically edited or committed as repairs. The worker verifies its daemon can read the exact run manifest through its host-local bind mount before executing suites.
+
+Map edges render up to two minutes of in-tab throughput history along the link.
+Each trace auto-scales independently; its hover card reports current rate, recent
+peak, and measurement scope. Endpoint relationships use matched bidirectional IP
+flows when available; other links keep their actual interface measurement scope.
+Unknown or stale data leaves gaps, not zero-rate samples. Time has a stable
+orientation based on endpoint identity. History is bounded and disappears when
+this tab closes. Hover an edge or tap it to inspect; Escape dismisses the card.
+
+Hover download context ranks matched flows by current download rate. Where a
+recent socket owner is known, its process/script and open writable filenames are
+shown as receiver context, with database endpoint hints where available. These
+are not proven per-flow file destinations. Concurrent Docker image operations
+appear only for relevant host/interface context or a Docker-owned socket, and
+are explicitly not assigned a per-image rate. The map reads existing coordinator
+observations; it does not start tests or network benchmarks.
+
+**All observed connections** switches to a topology-independent schematic view.
+It shows all retained captured endpoint pairs, including incoming-only flows,
+without the normal 75-destination / 200-relationship display cutoffs or the
+selected perspective's connected-component filter. Multiple sockets between the
+same device and remote IP remain one graph edge, with summed upload/download
+rates. Provider grouping remains optional. The choice persists in localStorage.
+Geographic and IP-hop layouts are paused while this mode is active, so unlocated
+endpoints and disconnected observed components stay visible. This means all
+available observations, not every physical or switched connection: collector
+retention, its flow limit, socket visibility and capture coverage still apply.
+
+Run history displays the latest ten independent records, including per-machine suites and bounded logs. Selecting a run reads that run ID and never replaces the latest run. Existing retention remains 30 days/up to 100 saved records; limiting the visible history to ten does not delete older records early.
+
+### Agent image distribution and package caches
+
+Distributed tests reuse worker images by immutable ID and transfer changed images through the authenticated agent API. Temporary image archives are removed after import. At most two destinations receive an image concurrently. Package caches remain separate from installed dependencies.
+
+Workers retain npm/pip download caches under
+`~/.cache/organization-tests/packages/`, separated by suite, checkout lockfiles,
+image ID, and CPU architecture. Installed dependencies remain isolated in each
+run's source directory; npm still uses `ci`. Cache files stay on their owning
+Docker host and are mounted into that host's containers. Removing the package
+cache directory while no tests are running forces fresh package downloads.
+Registry storage and package caches persist independently of the 30-day reports.
+
+Loopback registry handling follows the [Docker daemon registry policy](https://docs.docker.com/reference/cli/dockerd/#insecure-registries).
+
+
+Download attribution now keeps bounded socket-owner observation windows rather
+than only the latest `ss` output. Ownership is sampled every 0.5 seconds,
+independently of the three-second open-file scan. The packet collector refreshes
+its connected socket inventory every 0.25 seconds. A five-minute, in-memory
+ownership history (4,096 tuples, up to four identity windows each) lets a closed
+connection retain its observed process/script label while its flow is retained.
+
+Matches require the exact protocol/address/port tuple and an ownership window
+within 1.5 seconds of the last captured packet. This is temporal correlation,
+not a kernel event joining every packet to a process. Conflicting identities
+are **ambiguous**, never arbitrarily assigned. Process start ticks distinguish
+PID reuse and prevent joining a retained owner to a new process's open files.
+Observations without a readable process start identity are excluded. Labels
+explicitly distinguish **live**, **retained**, **ambiguous**, and **unknown**
+evidence; they do not attribute the entire historical byte count to one owner.
+
+The throughput page reports the fraction of *observed compai download rate*
+with a process match. Its denominator excludes remote devices and unseen traffic,
+so 100% is not proof of complete network visibility. Resource filenames remain
+current process context; exact per-file, image, or database-name attribution
+requires downloader/application transfer events or equivalent instrumentation.
+These source changes require reloading the collector and packet monitor to take
+effect; neither is automatically restarted by editing the files.
+
+The existing **Run history** panel on `/tests.html` now includes a saved-reason
+preview on each of its ten run cards and a **Why this run ended** explanation for
+the selected run. It shows the recorded coordinator or host error first, groups
+matching suite errors, includes phase/exit status, source revision and snapshot,
+and provides bounded diagnostic excerpts with direct navigation to recorded
+suite output. Infrastructure shutdowns without suite-specific error evidence
+are counted as blocked work, separately from suite failures, unexecuted jobs,
+timeouts, unavailable workers and deliberate stops. The last image preparation
+operation is context, not an inferred cause. Missing logs remain explicitly
+unknown; no diagnosis is invented from an empty log.
+
+Reason previews read existing saved reports, at most two concurrently, and cache
+summaries for the ten displayed runs. They do not start or rerun any tests and do
+not require a collector API change. Recorded terminal output includes captured
+failure details as well as its bounded log tail. Historical unfinished job
+statuses use the run's saved end/update time for duration, not the current clock.
+
+### Authenticated launcher agents
+
+Routine distributed runs use the existing launcher's encrypted `lifetech-agent.v1` API on TCP 8790, discovered through `_lifetech._tcp.local.` DNS-SD/mDNS (UDP 5353). Announcements contain only node/protocol metadata. They never enroll or authenticate a device. Missing multicast announcements can use an already-enrolled address, followed by the same authenticated readiness check. The coordinator requires its enrolled address on `enp7s0` and only schedules endpoints on that Ethernet subnet.
+
+The enrollment file supplies the fleet credential and enrolled addresses. This is fleet-level trust: possession of that credential grants agent execution control. Requests and responses use AES-GCM, protocol-specific authenticated data, request IDs, freshness limits and replay rejection. There is no shell-command endpoint or routine SSH fallback. SSH remains in the explicit enrollment/provisioning workflow and unrelated network monitoring collectors.
+
+Start checks the running source revision, Docker availability, physical addresses, machine fingerprint, capabilities and busy state. Current agents are reused. Offline, duplicate, outdated or incapable agents are excluded with a stage/reason; application suites are reassigned to surviving verified agents. Readiness is checked again after image preparation. Successful remaining work with exclusions is **Partial coverage**, not a full-fleet pass. One worker can run application suites; multi-device P2P remains explicitly unmeasured.
+
+Source code is fetched directly from GitHub by exact commit; image archives and synthetic P2P fixtures use bounded, ordered 1 MiB encrypted chunks and SHA-256 verification. Agents reject unsafe archive paths/links, enforce staging limits and available disk space, and execute immutable worker image IDs. Jobs have run IDs, sequence-numbered event polling, cancellation acknowledgements and a two-hour stop deadline. An event-history gap cannot produce a verified result. Agent restarts mark running work interrupted and clean up owned test containers. Reports distinguish infrastructure unavailability, excluded machines, missing coverage and suite failures.
+
+Image delivery currently stages a complete image tar temporarily at both ends (maximum 8 GiB per upload); it skips images already present by exact ID. It does not yet provide registry-layer delta transfers. P2P browser setup, WebDriver control, fixture delivery and cleanup use the agent API; Selenium remains loopback-only. Application containers are not restarted by Start.
+
+Agent sources update separately from tests. On an enrolled machine, `python3 scripts/launcher_update.py` atomically stages the current peer-agent sources; `--rollback` selects the previous installed release. The supervisor drains new jobs, waits for active jobs/browsers to finish, validates source checksums, and restores the previous release if the replacement fails its startup readiness check. An unchanged installed release does not reload. Updates to image dependencies or the supervisor itself require an explicit launcher-image rebuild/recreation. Initial activation of this migration also requires that rebuild on each machine; editing the coordinator files alone cannot upgrade existing agents.
+
+### Commit, push and test
+
+The Start control is labeled **Commit, push & test** because it publishes local changes before testing. The run report shows each repository's publication phase and commit ID; each machine shows its fetched/verified revisions. Authentication, push rejection and history divergence are preparation errors; a worker GitHub-fetch failure is a machine error while other workers continue. Outdated or unavailable agents are excluded before scheduling. A second readiness check after publication redistributes suites if a worker disappears. No publication, test or deployment happens simply by editing these files.
+
+The distributed master exposes authenticated REST at `/api/v1/master` and MCP Streamable HTTP at `/mcp`. See [MASTER_API.md](MASTER_API.md) for Codex configuration, token setup, operation semantics and the OpenAPI endpoint. Starting via either interface has the same GitHub publication and test effects as the dashboard.

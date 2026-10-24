@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from cpu import CpuMonitor
 from socket_owners import SocketOwners
+from docker_downloads import DockerDownloads
 from containers import ContainerMonitor
 """Ethernet-only LAN inventory, using standard Linux tools and Python."""
 import concurrent.futures
@@ -14,7 +15,9 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit, parse_qs
-from distributed import DistributedTests
+from live_distributed import LiveDistributedTests
+from master_api import MasterAPI
+from master_http import handle as handle_master
 from benchmark import Benchmark, SIZE, PAYLOAD as BENCHMARK_PAYLOAD
 from web_checks import WebChecks
 from remote_map import collect
@@ -41,9 +44,14 @@ def snapshot():
         return dict(state)
 
 
-distributed_tests = DistributedTests()
+distributed_tests = LiveDistributedTests()
+def master_suites():
+    from distributed_worker import SUITES
+    return SUITES
+master_api = MasterAPI(distributed_tests, snapshot, master_suites)
 cpu_monitor = CpuMonitor()
 socket_owners = SocketOwners()
+docker_downloads = DockerDownloads()
 container_monitor = ContainerMonitor()
 benchmark = Benchmark()
 checks = WebChecks(snapshot)
@@ -237,7 +245,14 @@ def worker():
 
 
 class Handler(BaseHTTPRequestHandler):
+    def do_DELETE(self):
+        if not handle_master(self,master_api):self.send_error(405)
+
+    def do_OPTIONS(self):
+        if not handle_master(self,master_api):self.send_error(405)
+
     def do_GET(self):
+        if handle_master(self,master_api):return
         path = urlsplit(self.path).path
         if path in ('/api/benchmark/ping', '/api/benchmark/download'):
             kind = path.rsplit('/', 1)[1]
@@ -277,8 +292,9 @@ class Handler(BaseHTTPRequestHandler):
             except (OSError, ValueError):
                 data['link_traffic'] = None
             data['process_resources'] = socket_owners.view_context()
+            data['docker_downloads'] = docker_downloads.view()
             own_mac = next((d.get('mac') for d in data.get('devices', []) if d.get('self')), None)
-            socket_owners.annotate((data.get('link_traffic') or {}).get('flows', {}).get('records', []), own_mac)
+            data['host_attribution'] = socket_owners.annotate((data.get('link_traffic') or {}).get('flows', {}).get('records', []), own_mac)
             # Resolve observed remote destinations in the background, including unselected nodes.
             relationships = (data.get('link_traffic') or {}).get('outbound', {}).get('relationships', [])
             if parse_qs(urlsplit(self.path).query).get('resolve', ['1'])[0] != '0':
@@ -330,6 +346,7 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def do_POST(self):
+        if handle_master(self,master_api):return
         path = urlsplit(self.path).path
         if path not in ('/api/resolve', '/api/geography', '/api/refresh', '/api/web-checks', '/api/benchmark/start', '/api/benchmark/upload', '/api/distributed-tests/start', '/api/distributed-tests/stop'):
             self.send_error(404)
@@ -422,6 +439,7 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == '__main__':
     threading.Thread(target=cpu_monitor.worker, daemon=True).start()
     threading.Thread(target=socket_owners.worker, daemon=True).start()
+    threading.Thread(target=docker_downloads.worker, daemon=True).start()
     threading.Thread(target=worker, daemon=True).start()
     threading.Thread(target=traffic_worker, daemon=True).start()
     threading.Thread(target=map_worker, daemon=True).start()

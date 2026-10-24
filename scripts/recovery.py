@@ -22,6 +22,7 @@ import urllib.request
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT))
 DEFAULT_STORE = Path('/mnt/PILEDRIVE/organization-dr')
 REPOS = sorted(p.name for p in ROOT.iterdir() if p.is_dir() and (p/'.git').exists())
 CONFIGS = ['OrgPortal/org-worker/wrangler.jsonc', 'OrgPortal/org-worker/journal.wrangler.jsonc',
@@ -256,7 +257,9 @@ def capture_local(target):
 def verify_postgres(snapshot, entry):
     name='organization-dr-drill-'+uuid.uuid4().hex[:12]
     try:
-        command(['docker','run','-d','--network','none','--name',name,'-e','POSTGRES_HOST_AUTH_METHOD=trust',entry['image']])
+        from docker_utils import ensure_image
+        image=ensure_image(entry['image'])
+        command(['docker','run','--pull=never','-d','--network','none','--name',name,'-e','POSTGRES_HOST_AUTH_METHOD=trust',image])
         for _ in range(45):
             # The image's temporary initialization server accepts Unix sockets;
             # TCP becomes ready only when the final server is running.

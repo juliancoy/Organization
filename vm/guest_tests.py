@@ -7,6 +7,7 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT))
 RESULTS = ROOT / '.vm-results'
 
 
@@ -51,7 +52,9 @@ def main():
     run('workspace-unit', [sys.executable, '-m', 'unittest', 'discover', '-s', 'tests'])
     run('portal-launcher-unit', [sys.executable, '-m', 'unittest', 'discover', '-s', 'scripts', '-p', 'test_local_*.py'], 'OrgPortal')
     run('service-names-unit', [sys.executable, '-m', 'unittest', 'discover', '-s', 'nginx/service-directory', '-p', 'test_names.py'], 'OrgPortal')
-    run('identity-postgres-start', ['docker', 'run', '--detach', '--name', 'organization-oauth-test',
+    from docker_utils import ensure_image
+    ensure_image('postgres:15-alpine')
+    run('identity-postgres-start', ['docker', 'run', '--pull=never', '--detach', '--name', 'organization-oauth-test',
         '--publish', '127.0.0.1:5432:5432', '--env', 'POSTGRES_DB=oauth_test',
         '--env', 'POSTGRES_USER=test', '--env', 'POSTGRES_PASSWORD=vm-test', 'postgres:15-alpine'])
     run('identity-postgres-ready', ['bash', '-c',

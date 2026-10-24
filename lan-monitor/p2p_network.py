@@ -1,4 +1,4 @@
-"""Real cross-machine WebRTC checks. SSH carries control and one initial seed only."""
+"""Real cross-machine WebRTC checks. Authenticated launcher agents carry control and the initial seed."""
 import argparse
 import base64
 import concurrent.futures
@@ -35,7 +35,7 @@ def execute(args,**kwargs):
 def direct_evidence(links,participants,local_host):
     """A socket opening or a same-machine browser pair is insufficient evidence."""
     if len({p['machine'] for p in participants})!=len(participants) or len(participants)<2:
-        raise RuntimeError('At least two distinct SSH machine identities are required')
+        raise RuntimeError('At least two distinct agent machine identities are required')
     peers={p['peer']:p for p in participants if p.get('peer')};found=[]
     for link in links:
         remote=peers.get(link['peer'])
@@ -72,8 +72,8 @@ STATS='''const result=[];for(const [id,link] of peer.links){
 
 class Browser:
     """Minimal W3C WebDriver client; no host Python/Node dependency installation."""
-    def __init__(self,base):
-        self.base=base;self.session=None
+    def __init__(self,base,transport=None):
+        self.base=base;self.transport=transport;self.session=None
         value=self.call('/session',{'capabilities':{'alwaysMatch':{'browserName':'chrome','goog:chromeOptions':{'args':[
             '--headless=new','--host-resolver-rules=MAP localhost 127.0.0.2','--no-sandbox','--disable-dev-shm-usage','--disable-features=WebRtcHideLocalIpsWithMdns',
             '--force-webrtc-ip-handling-policy=default_public_and_private_interfaces']}}}})
@@ -81,12 +81,14 @@ class Browser:
         self.command('/timeouts',{'script':120000,'pageLoad':45000})
         self.command('/url',{'url':'http://localhost:8789/'})
     def call(self,path,data=None):
-        request=urllib.request.Request(self.base+path,data=json.dumps(data).encode() if data is not None else None,
-            headers={'Content-Type':'application/json'})
-        try:
-            with urllib.request.urlopen(request,timeout=150) as response:result=json.load(response)
-        except urllib.error.HTTPError as error:
-            result=json.load(error)
+        if self.transport:
+            result=self.transport(path,data,'POST' if data is not None else 'GET')
+        else:
+            request=urllib.request.Request(self.base+path,data=json.dumps(data).encode() if data is not None else None,
+                headers={'Content-Type':'application/json'})
+            try:
+                with urllib.request.urlopen(request,timeout=150) as response:result=json.load(response)
+            except urllib.error.HTTPError as error:result=json.load(error)
         value=result.get('value')
         if isinstance(value,dict) and value.get('error'):raise RuntimeError('WebDriver '+str(value['error']))
         return value
@@ -104,65 +106,54 @@ class Browser:
         raise RuntimeError('Timed out waiting for browser peer state')
     def close(self):
         if self.session:
-            request=urllib.request.Request(self.base+'/session/'+self.session,method='DELETE')
-            try:urllib.request.urlopen(request,timeout=10).close()
+            try:
+                if self.transport:self.transport('/session/'+self.session,None,'DELETE')
+                else:
+                    request=urllib.request.Request(self.base+'/session/'+self.session,method='DELETE')
+                    urllib.request.urlopen(request,timeout=10).close()
             except Exception:pass
 
 
 class NetworkP2P:
-    def __init__(self,hosts,ident,ssh,emit=lambda *args:None,stopped=lambda:False,source_archive=None):
-        self.hosts=hosts;self.ident=ident;self.ssh=ssh;self.emit=emit;self.stopped=stopped
-        self.source_archive=source_archive;self.resources=[];self.report={'status':'running','coverage':{'direct':'pending','cross_nat':'not_measured','turn':'unavailable'},'checks':[],'participants':[]}
+    def __init__(self,hosts,ident,emit=lambda *args:None,stopped=lambda:False,source_commit=None):
+        self.hosts=hosts;self.ident=ident;self.emit=emit;self.stopped=stopped
+        self.source_commit=source_commit;self.resources=[];self.report={'status':'running','coverage':{'direct':'pending','cross_nat':'not_measured','turn':'unavailable'},'checks':[],'participants':[]}
     def check_stop(self):
         if self.stopped():raise RuntimeError('P2P run stopped')
     def log(self,host,line):self.emit(host,{'kind':'log','suite':'p2p','phase':'network','line':line})
     def source(self,name):
-        if self.source_archive:
-            with tarfile.open(self.source_archive) as archive:return archive.extractfile(name).read()
-        return (ROOT/name).read_bytes()
+        commit=self.source_commit
+        if not commit or not re.fullmatch('[a-f0-9]{40}',commit):raise RuntimeError('P2P source requires a published Organization commit')
+        return subprocess.check_output(['git','-C',str(ROOT),'show',commit+':'+name],timeout=30)
     def attest(self,host):
-        code='''import hashlib,json,pathlib,socket,subprocess
-rows=json.loads(subprocess.check_output(['ip','-j','addr']))
-addresses=[a['local'].split('%')[0] for row in rows if row['ifname'].startswith(('en','eth','wl')) for a in row.get('addr_info',[]) if a.get('scope')!='host']
-print(json.dumps({'hostname':socket.gethostname(),'machine':hashlib.sha256(pathlib.Path('/etc/machine-id').read_bytes()).hexdigest(),'addresses':addresses,'clock':__import__('time').time()}))
-'''
-        value=json.loads(execute(self.ssh(host)+['python3 -'],input=code.encode(),timeout=25))
-        if not value['addresses']:raise RuntimeError('No physical network interface addresses on '+host['host'])
-        value['clock_skew_seconds']=round(value.pop('clock')-time.time(),3)
-        if abs(value['clock_skew_seconds'])>60:raise RuntimeError(host['host']+' clock differs by more than 60 seconds; synchronize time before device invitations can work')
+        from agent_client import AgentClient
+        value=AgentClient(host).call('status')
+        if not value['addresses']:raise RuntimeError('No physical network addresses on '+host['host'])
+        value['clock_skew_seconds']=round(value['time']-time.time(),3)
+        if abs(value['clock_skew_seconds'])>60:raise RuntimeError('Agent clock differs by more than 60 seconds')
         return {**value,'host':host['host']}
+
     def prepare(self,host,source):
-        self.check_stop();self.log(host,'Preparing isolated browser on '+host['host'])
-        remote='/home/'+host['user']+'/organization-test-runs/'+self.ident+'-p2p'
-        name='orgportal-test-'+self.ident+'-p2p'
-        resource={'host':host,'remote':remote,'name':name,'tunnel':None,'browser':None};self.resources.append(resource)
-        execute(self.ssh(host)+['mkdir -p -m 755 '+shlex.quote(remote)],timeout=25)
-        with source.open('rb') as stream:execute(self.ssh(host)+['tar -xz -C '+shlex.quote(remote)],stdin=stream,timeout=60)
-        # Only public SDK code is mounted. Invitations stay in browser memory and SSH control.
-        docker=['docker','run','--pull=never','-d','--name',name,'--network','host','--cpus','1.5','--memory','2g','--pids-limit','512',
-            '--user','1200:1201','--shm-size','256m','--cap-drop','ALL',
-            '-e','SE_OPTS=--host 127.0.0.1 --port 4449','-e','SE_START_VNC=false','-e','SE_START_NO_VNC=false','-e','SE_START_XVFB=false',
-            '-e','SE_NODE_MAX_SESSIONS=1','--mount','type=bind,src='+remote+',dst=/p2p,readonly',
-            '--entrypoint','/usr/bin/python3',self.report['browser_images'][host['host']][IMAGE],'/p2p/remote.py']
-        execute(self.ssh(host)+[shlex.join(docker)],timeout=40)
-        with socket.socket() as available:available.bind(('127.0.0.1',0));port=available.getsockname()[1]
-        if host.get('local'):
-            port=4449
-        else:
-            args=self.ssh(host)
-            resource['tunnel']=subprocess.Popen(args[:-1]+['-N','-o','ExitOnForwardFailure=yes','-L',f'127.0.0.1:{port}:127.0.0.1:4449',args[-1]],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-        base='http://127.0.0.1:'+str(port);until=time.monotonic()+75
+        from agent_client import AgentClient
+        self.check_stop();self.log(host,'Preparing agent-owned isolated browser on '+host['host'])
+        client=AgentClient(host)
+        resource={'host':host,'client':client,'browser':None};self.resources.append(resource)
+        upload=client.upload(source,self.stopped)
+        client.call('p2p.start',{'id':self.ident,'upload':upload,'image':self.report['browser_images'][host['host']][IMAGE]},timeout=120)
+        def transport(path,data=None,method='POST'):
+            return client.call('p2p.webdriver',{'id':self.ident,'path':path,'data':data,'method':method},timeout=180)
+        until=time.monotonic()+75
         while time.monotonic()<until:
             self.check_stop()
-            if resource['tunnel'] and resource['tunnel'].poll() is not None:raise RuntimeError('SSH browser tunnel failed')
             try:
-                with urllib.request.urlopen(base+'/status',timeout=2) as response:
-                    if json.load(response)['value']['ready']:break
-            except (OSError,ValueError):pass
+                if transport('/status',None,'GET')['value']['ready']:break
+            except (OSError,ValueError,RuntimeError):pass
             time.sleep(.5)
-        else:raise RuntimeError('Isolated Selenium browser did not become ready on '+host['host'])
-        browser=Browser(base);resource['browser']=browser;self.log(host,'Browser ready: Chrome '+browser.version)
+        else:raise RuntimeError('Isolated browser did not become ready on '+host['host'])
+        browser=Browser('',transport);resource['browser']=browser
+        self.log(host,'Agent browser ready: Chrome '+browser.version)
         return resource
+
     def connect(self,resource,secret,room):
         # Load the bounded enrollment helper without placing its key in a worker snapshot.
         import sys
@@ -191,27 +182,22 @@ print(json.dumps({'hostname':socket.gethostname(),'machine':hashlib.sha256(pathl
     def cleanup(self):
         for resource in self.resources:
             if resource['browser']:resource['browser'].close()
-            if resource['tunnel']:
-                resource['tunnel'].terminate()
-                try:resource['tunnel'].wait(timeout=5)
-                except subprocess.TimeoutExpired:resource['tunnel'].kill()
-            command='docker rm -f '+shlex.quote(resource['name'])+' >/dev/null 2>&1; rm -rf -- '+shlex.quote(resource['remote'])
-            try:execute(self.ssh(resource['host'])+[command],timeout=30)
+            try:resource['client'].call('p2p.stop',{'id':self.ident},timeout=40)
             except Exception:self.report.setdefault('cleanup_errors',[]).append(resource['host']['host'])
     def run(self):
         started=time.monotonic()
         try:
-            if len(self.hosts)<2:raise RuntimeError('Cross-machine P2P requires at least two saved SSH test devices')
+            if len(self.hosts)<2:raise RuntimeError('Cross-machine P2P requires at least two verified agent devices')
             secret=KEY.read_text().strip()
             with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
                 self.report['participants']=list(pool.map(self.attest,self.hosts))
-            if len({p['machine'] for p in self.report['participants']})!=len(self.hosts):raise RuntimeError('Saved SSH targets resolve to the same machine')
+            if len({p['machine'] for p in self.report['participants']})!=len(self.hosts):raise RuntimeError('Enrolled agents resolve to the same machine')
             def image_progress(image,phase,source,destination):
                 for host in self.hosts:
                     if not destination or host['host']==destination:self.log(host,'Browser image '+phase+((' from '+source) if source else ''))
-            # The shared helper reuses exact image IDs and streams save|gzip|SSH|load.
-            # A container image archive is never staged on either machine's disk.
-            images=ImageDistributor(self.hosts,self.ssh,self.stopped,image_progress)
+            # Image delivery uses authenticated, checksummed agent uploads.
+            from distributed import no_remote_shell
+            images=ImageDistributor(self.hosts,no_remote_shell,self.stopped,image_progress)
             images.ensure(IMAGE,self.hosts)
             self.report['browser_images']=images.host_images
             self.sdk_hash=hashlib.sha256(self.source('peer-worker/public/peer.js')).hexdigest()
@@ -265,12 +251,4 @@ print(json.dumps({'hostname':socket.gethostname(),'machine':hashlib.sha256(pathl
 
 
 if __name__=='__main__':
-    parser=argparse.ArgumentParser();parser.add_argument('--report',type=Path,required=True);args=parser.parse_args()
-    from distributed import targets,ssh
-    ident='p2p-'+uuid.uuid4().hex[:12]
-    def log(host,event):print(host['host']+': '+event.get('line',''),flush=True)
-    result=NetworkP2P(targets(),ident,ssh,emit=log).run()
-    args.report.parent.mkdir(parents=True,exist_ok=True,mode=0o700);args.report.write_text(json.dumps(result,indent=2)+'\n');args.report.chmod(0o600)
-    print('Network P2P:',result['status'],'Report:',args.report,flush=True)
-    if result.get('error'):print(result['error'],flush=True)
-    raise SystemExit(0 if result['status']=='passed' else 1)
+    raise SystemExit('Run P2P through Start to publish and pin the GitHub source commits')

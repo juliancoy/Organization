@@ -3,11 +3,17 @@ const opened=new Set();
 export function resourceProcess(owner,data,now=Date.now()){
  const context=data.process_resources;
  if(context?.status!=='live'||now/1000-context.sampled_at>=10)return null;
- return context.processes?.[String(owner.pid)]||null;
+ const process=context.processes?.[String(owner.pid)]||null;
+ if(process&&owner.start_ticks!==undefined&&owner.start_ticks!==process.start_ticks)return null;
+ if(process&&owner.script&&process.script&&owner.script!==process.script)return null;
+ return process;
 }
 export function processLabel(owner,data){
- const r=resourceProcess(owner,data),script=r?.script?.split('/').pop();
+ const r=resourceProcess(owner,data),script=(owner.script||r?.script)?.split('/').pop();
  return (script?script+' · ':'')+owner.name+' (PID '+owner.pid+')';
+}
+export function attributionLabel(flow){
+ return ({current:'Live socket-owner snapshot',retained:'Retained packet-time owner match',ambiguous:'Ambiguous socket ownership',unknown:'No socket-owner match'})[flow.process_attribution]||'Socket ownership freshness unavailable';
 }
 export function renderResources(root,data,flowRows,device){
  root.replaceChildren();

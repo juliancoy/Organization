@@ -4,7 +4,7 @@ import re
 import subprocess
 import threading
 import time
-from distributed import targets, ssh
+from monitor_access import targets, ssh
 
 SCRIPT = '''import json,subprocess
 selected=SELECTED

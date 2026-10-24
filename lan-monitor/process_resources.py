@@ -10,6 +10,13 @@ MAX_PROCESSES = 64
 DATABASE_PORTS = {5432:'PostgreSQL',3306:'MySQL / MariaDB',27017:'MongoDB',6379:'Redis',1433:'SQL Server',9042:'Cassandra',8123:'ClickHouse HTTP'}
 
 
+def process_start(root):
+    try:
+        return (Path(root)/'stat').read_text().rsplit(')',1)[1].split()[19]
+    except (OSError,IndexError):
+        return None
+
+
 def database_file(path):
     name=Path(path).name.lower().removesuffix(' (deleted)')
     if name.endswith(('.sqlite','.sqlite3')):
@@ -49,7 +56,7 @@ def program_identity(root):
 
 def inspect_process(pid, name, proc=Path('/proc')):
     root=Path(proc)/str(pid)
-    result={'pid':pid,'name':name,**program_identity(root),'files':[],'file_count':0,'readable_files':0,'writable_files':0,'database_files':0,'status':'unavailable'}
+    result={'pid':pid,'name':name,'start_ticks':process_start(root),**program_identity(root),'files':[],'file_count':0,'readable_files':0,'writable_files':0,'database_files':0,'status':'unavailable'}
     try:
         descriptors=sorted((root/'fd').iterdir(),key=lambda p:int(p.name))
     except OSError:
@@ -68,6 +75,8 @@ def inspect_process(pid, name, proc=Path('/proc')):
             entry['readable'] |= read;entry['writable'] |= write
         except (OSError,ValueError,StopIteration):
             continue
+    if process_start(root)!=result['start_ticks']:
+        return result
     values=sorted(files.values(),key=lambda f:(not bool(f['database_hint']),not f['writable'],f['path']))
     result.update(status='available',files=values[:MAX_FILES],file_count=len(values),
                   readable_files=sum(f['readable'] for f in values),writable_files=sum(f['writable'] for f in values),

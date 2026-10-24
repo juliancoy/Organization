@@ -28,14 +28,15 @@ def launch_container(args):
         return 0
     with TemporaryDirectory(prefix='organization-launcher-') as folder:
         shutil.copyfile(ROOT / 'Dockerfile.launcher', Path(folder) / 'Dockerfile')
-        subprocess.run(['docker', 'build', '-t', image, folder], check=True)
+        from docker_utils import build_image
+        build_image(image,folder)
     if existing.returncode == 0:
         subprocess.run(['docker', 'rm', '--force', name], check=True)
     # The full launcher takes over the peer port from a test-initialized session.
     subprocess.run(['docker','rm','--force','lifetech-launcher-session'],capture_output=True)
     socket = Path('/var/run/docker.sock')
     docker_cli = Path(shutil.which('docker')).resolve()
-    command = ['docker', 'run', '--detach', '--init', '--name', name, '--restart', 'unless-stopped',
+    command = ['docker', 'run', '--pull=never', '--detach', '--init', '--name', name, '--restart', 'unless-stopped',
                '--log-opt', 'max-size=5m', '--log-opt', 'max-file=3',
                '--network', 'host', '--user', f'{os.getuid()}:{os.getgid()}', '--group-add', str(socket.stat().st_gid),
                '--label', 'organization.container-class=launcher', '--label', 'organization.color=biotech-gold',
@@ -44,10 +45,23 @@ def launch_container(args):
                '--mount', f'type=bind,src={docker_cli},dst=/usr/local/bin/docker,readonly',
                '--env', 'HOME=/tmp', '--env', 'PYTHONUNBUFFERED=1', '--env', 'ORGANIZATION_LAUNCHER_CONTAINER=1',
                '--env', 'ORGPORTAL_JOURNAL_AUTO_SYNC=false']
+    lan_inventory=Path.home()/'.local/state/orgportal/lan-ssh-devices.json'
+    ssh_folder=Path.home()/'.ssh'
+    if lan_inventory.exists():
+        command += ['--mount',f'type=bind,src={lan_inventory},dst=/run/docker-utils-inventory.json,readonly',
+                    '--env','DOCKER_UTILS_INVENTORY=/run/docker-utils-inventory.json']
+    if ssh_folder.exists():
+        command += ['--mount',f'type=bind,src={ssh_folder},dst=/run/lan-ssh,readonly',
+                    '--env','DOCKER_UTILS_SSH_KEY=/run/lan-ssh/orgportal_lan_ed25519',
+                    '--env','DOCKER_UTILS_KNOWN_HOSTS=/run/lan-ssh/known_hosts']
     peer_folder = Path.home() / '.config/lifetech-launcher'
     peer_folder.mkdir(parents=True,exist_ok=True,mode=0o700)
     command += ['--mount', f'type=bind,src={peer_folder},dst=/run/launcher-config',
                 '--env', 'LIFETECH_PEER_CONFIG=/run/launcher-config/peers.json']
+    job_root=ROOT/'.runtime/launcher-jobs'
+    job_root.mkdir(parents=True,exist_ok=True,mode=0o700)
+    command += ['--mount','type=bind,src=/etc/machine-id,dst=/etc/machine-id,readonly',
+                '--env','LIFETECH_JOB_ROOT='+str(job_root)]
     for key in os.environ:
         if key.startswith(('ORGPORTAL_', 'PIDP_', 'CHAT_')) and key != 'ORGPORTAL_JOURNAL_AUTO_SYNC':
             command += ['--env', key]
@@ -168,15 +182,15 @@ def main(argv=None):
     spec.loader.exec_module(module)
     # Keep lifecycle/configuration logic in its owning repository. The historical
     # volume namespace preserves existing accounts, local newsletters and D1 data.
+    sys.path.insert(0, str(ROOT / 'scripts'))
+    from launcher_peers import start
+    stop_peers = start(args.prefix)
     module.run(args.prefix, args.network)
     print(f'\nLocal portal: {base}/')
     print(f'Local administrator: {ROOT / "local-login"} --admin')
     if os.getenv('ORGANIZATION_LAUNCHER_CONTAINER'):
         Path('/tmp/launcher-ready').touch()
         print('Startup complete. Launcher is available in the machine container view.')
-        sys.path.insert(0, str(ROOT / 'scripts'))
-        from launcher_peers import start
-        stop_peers = start(args.prefix)
         def shutdown(*_):
             stop_peers()
             sys.exit(0)

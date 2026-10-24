@@ -49,6 +49,22 @@
 !/scripts/enroll_launcher_peers.py
 
 !/scripts/launcher_registration.py
-!/lan-monitor/launcher_sessions.py
+!/lan-monitor/agent_client.py
 
-!/lan-monitor/tests/test_launcher_sessions.py
+!/lan-monitor/tests/test_agent_sessions.py
+
+!/scripts/launcher_peer_supervisor.py
+
+!/pyproject.toml
+!/docker_utils/
+/docker_utils/__pycache__/
+/*.egg-info/
+/dist/
+/build/
+
+!/tests/test_docker_utils.py
+
+/.runtime/
+!/scripts/launcher_agent.py
+!/scripts/launcher_discovery.py
+!/scripts/launcher_update.py

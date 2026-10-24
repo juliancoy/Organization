@@ -1,172 +1,122 @@
-"""Share complete Docker images through bounded SSH pipes, without archive files."""
-from collections import deque
-import hashlib
-import json
-import re
+"""Workspace suite definitions on top of the shared LAN-first Docker module."""
+from pathlib import Path
+import sys
 import shlex
-import subprocess
-import time
-import threading
+from concurrent.futures import ThreadPoolExecutor
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+from docker_utils.images import ImageResolver
+from docker_utils.policy import prepare_build
+from distributed_worker import NODE,PYTHON,SUITES
 
-from distributed_worker import NODE, PYTHON, SUITES
-
-TOOLCHAIN = 'orgportal-distributed-python-node:1'
-TOOLCHAIN_DOCKERFILE = f'FROM {NODE} AS node\nFROM {PYTHON}\nCOPY --from=node /usr/local/bin/node /usr/local/bin/node\n'
-
-
-def required_images(host):
-    return list(dict.fromkeys(SUITES[suite]['image'] for suite in host['suites']))
+TOOLCHAIN='orgportal-distributed-python-node:1'
 
 
-class ImageDistributor:
-    def __init__(self, hosts, ssh, cancelled, notify):
-        self.hosts, self.ssh, self.cancelled, self.notify = hosts, ssh, cancelled, notify
-        self.images = {}
-        self.host_images = {}
+def required_images(host):return list(dict.fromkeys(SUITES[suite]['image'] for suite in host['suites']))
 
-    def command(self, host, command):
-        return self.ssh(host) + [shlex.join(command)] if host else command
 
-    def inspect(self, host, image):
-        try:
-            result = subprocess.run(self.command(host, ['docker', 'image', 'inspect', image, '--format', '{{json .Id}}']),
-                                    capture_output=True, text=True, timeout=25)
-            if result.returncode:
-                return None
-            image_id = json.loads(result.stdout)
-            return image_id if isinstance(image_id, str) and re.fullmatch(r'sha256:[a-f0-9]{64}', image_id) else None
-        except (OSError, subprocess.TimeoutExpired, ValueError):
-            # A disconnected peer must not hide a complete copy on another machine.
-            return None
+class ImageDistributor(ImageResolver):
+    def __init__(self,hosts,ssh,cancelled,notify):
+        self.refreshed=set()
+        self.failures={}
+        super().__init__(hosts,ssh,cancelled,notify,{
+            TOOLCHAIN:self.toolchain,
+            'organization-launcher:webrtc-1':self.launcher,
+        })
 
-    def fingerprint(self, host, image):
-        result = subprocess.run(self.command(host, ['docker', 'image', 'inspect', image]),
-                                capture_output=True, text=True, timeout=25)
-        if result.returncode:
-            return None
-        metadata = json.loads(result.stdout)[0]
-        # Classic and containerd stores expose different IDs for identical images.
-        content = {key: metadata[key] for key in ('RootFS', 'Config', 'Architecture', 'Os', 'Created')}
-        content['Config'] = {key: value for key, value in content['Config'].items() if value is not None}
-        content['Config']['WorkingDir'] = content['Config'].get('WorkingDir') or ''
-        return hashlib.sha256(json.dumps(content, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-
-    def wait(self, processes, timeout):
-        deadline = time.monotonic() + timeout
-        output = {process: deque(maxlen=20) for process in processes}
-        readers = []
-
-        def drain(process, stream):
-            for line in iter(stream.readline, b''):
-                output[process].append(line.decode(errors='replace')[:2000])
-            stream.close()
-
-        for process in processes:
-            for stream in (process.stdout, process.stderr):
-                if stream:
-                    reader = threading.Thread(target=drain, args=(process, stream), daemon=True)
-                    reader.start()
-                    readers.append(reader)
-        try:
-            while any(process.poll() is None for process in processes):
-                if self.cancelled():
-                    raise InterruptedError('Image preparation stopped')
-                if time.monotonic() >= deadline:
-                    raise TimeoutError('Image preparation timed out')
-                time.sleep(0.2)
-            for reader in readers:
-                reader.join(timeout=5)
-            for process in processes:
-                if process.returncode:
-                    raise RuntimeError(''.join(output[process])[-2000:] or 'Image command failed')
-        finally:
-            for process in processes:
-                if process.poll() is None:
-                    process.terminate()
-            for process in processes:
-                if process.poll() is None:
-                    try:
-                        process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait()
-
-    def local_command(self, command, input_text=None):
-        # Pull/build output is drained continuously; Docker progress cannot fill a pipe.
-        process = subprocess.Popen(command, stdin=subprocess.PIPE if input_text else subprocess.DEVNULL,
-                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        if input_text:
-            process.stdin.write(input_text.encode())
-            process.stdin.close()
-            process.stdin = None
-        self.wait([process], 1800)
-
-    def transfer(self, source, destination, image, expected):
-        if self.cancelled():
-            raise InterruptedError('Image distribution stopped')
-        source_name = source['host'] if source else 'compai.local'
-        target_name = destination['host'] if destination else 'compai.local'
-        self.notify(image, 'distributing', source_name, target_name)
-        # The tar stream travels through OS pipes only. No archive is written to disk.
-        export = 'docker image save ' + shlex.quote(image) + ' | gzip -1'
-        load = 'gzip -d | docker image load --quiet'
-        producer = subprocess.Popen(self.command(source, ['bash', '-o', 'pipefail', '-c', export]),
-                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        consumer = None
-        try:
-            consumer = subprocess.Popen(self.command(destination, ['bash', '-o', 'pipefail', '-c', load]),
-                                        stdin=producer.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            producer.stdout.close()
-            producer.stdout = None
-            self.wait([producer, consumer], 1800)
-            if self.inspect(destination, image) != expected and self.fingerprint(source, image) != self.fingerprint(destination, image):
-                raise RuntimeError(f'Image ID verification failed on {target_name}: {image}')
-        finally:
-            for process in (producer, consumer):
-                if process and process.poll() is None:
-                    process.kill()
-                    process.wait()
-
-    def ensure(self, image, destinations):
-        if self.cancelled():
-            raise InterruptedError('Image preparation stopped')
-        self.notify(image, 'locating', None, None)
-        source, expected = None, self.inspect(None, image)
-        if not expected:
-            for host in self.hosts:
-                expected = self.inspect(host, image)
-                if expected:
-                    source = host
-                    break
-        if not expected:
-            if image == TOOLCHAIN:
-                for base in (NODE, PYTHON):
-                    self.ensure(base, [None])
-                self.notify(image, 'building', 'compai.local', None)
-                self.local_command(['docker', 'build', '--pull=false', '--network=none', '-t', image, '-'], TOOLCHAIN_DOCKERFILE)
-            elif image == 'organization-launcher:webrtc-1':
-                from pathlib import Path
-                self.notify(image, 'building', 'compai.local', None)
-                dockerfile = Path(__file__).resolve().parents[1] / 'Dockerfile.launcher'
-                self.local_command(['docker', 'build', '-t', image, '-'], dockerfile.read_text())
+    def ensure(self,image,destinations,*,isolate_hosts=False):
+        # A run refreshes each required registry reference once, then shares its
+        # verified contents over the LAN. Pull failures never silently use stale tags.
+        if image not in self.refreshed:
+            if self.cancelled():raise InterruptedError('Image preparation stopped')
+            if image in self.builders:
+                self.notify(image,'building','compai.local',None)
+                self.builders[image](self)
             else:
-                self.notify(image, 'pulling', 'compai.local', None)
-                self.local_command(['docker', 'image', 'pull', image])
-            expected = self.inspect(None, image)
-            if not expected:
-                raise RuntimeError('Image preparation did not produce a complete image: ' + image)
-        self.notify(image, 'cached', source['host'] if source else 'compai.local', None)
-        for host in destinations:
-            actual = self.inspect(host, image)
-            if actual != expected and (not actual or self.fingerprint(source, image) != self.fingerprint(host, image)):
-                self.transfer(source, host, image, expected)
-            self.host_images.setdefault(host['host'] if host else 'local', {})[image] = self.inspect(host, image)
-        self.images[image] = expected
-        self.notify(image, 'ready', source['host'] if source else 'compai.local', None)
-        return expected
+                self.notify(image,'pulling','compai.local',None)
+                self.local_command(['docker','image','pull',image])
+            if not self.inspect(None,image) or not self.compatible(None,image):
+                raise RuntimeError('Image refresh did not produce a native-platform image: '+image)
+            self.refreshed.add(image)
+        def distribute(host):
+            try:return super(ImageDistributor,self).ensure(image,[host])
+            except InterruptedError:raise
+            except Exception as error:
+                if not isolate_hosts or host is None:raise
+                self.failures.setdefault(host['host'],{'stage':'image_preparation','reason':type(error).__name__+': '+str(error)[:600],'image':image})
+                self.notify(image,'failed',None,host['host'])
+                return None
+        if len(destinations)<2:
+            for host in destinations:distribute(host)
+        else:
+            with ThreadPoolExecutor(max_workers=2) as pool:list(pool.map(distribute,destinations))
+        return self.images.get(image) or self.inspect(None,image)
+
+    def inspect(self,host,reference):
+        if host and host.get('agent_endpoint'):
+            from agent_client import AgentClient
+            value=AgentClient(host).call('image.inspect',{'image':reference})
+            return value['id'] if value else None
+        return super().inspect(host,reference)
+
+    def compatible(self,host,reference):
+        if host and host.get('agent_endpoint'):
+            import json,subprocess
+            from agent_client import AgentClient
+            value=AgentClient(host).call('image.inspect',{'image':reference})
+            if not value:return False
+            local=json.loads(subprocess.check_output(['docker','image','inspect',reference],text=True,timeout=25))[0]
+            return (local['Os'],local['Architecture'])==(value['os'],value['architecture'])
+        return super().compatible(host,reference)
+
+    def fingerprint(self,host,reference):
+        if host and host.get('agent_endpoint'):
+            from agent_client import AgentClient
+            value=AgentClient(host).call('image.inspect',{'image':reference})
+            return value['fingerprint'] if value else None
+        return super().fingerprint(host,reference)
+
+    def transfer(self,source,destination,image,expected):
+        if destination and destination.get('agent_endpoint'):
+            import subprocess,tempfile
+            from agent_client import AgentClient
+            if source is not None:raise RuntimeError('Agent image delivery requires a coordinator-prepared image')
+            self.notify(image,'distributing','coordinator',destination['host'])
+            with tempfile.TemporaryDirectory(prefix='launcher-image-') as folder:
+                archive=Path(folder)/'image.tar'
+                subprocess.run(['docker','image','save','-o',str(archive),image],check=True,capture_output=True,timeout=600)
+                client=AgentClient(destination)
+                upload=client.upload(archive,self.cancelled)
+                result=client.call('image.import',{'upload':upload,'image':image,'fingerprint':self.fingerprint(None,image)},timeout=600)
+                if not result.get('id'):raise RuntimeError('Agent did not report its verified local image ID')
+            return
+        if destination is not None:raise RuntimeError('Image destination has no authenticated agent endpoint')
+        return super().transfer(source,destination,image,expected)
+
+    def toolchain(self,service):
+        for base in (NODE,PYTHON):self.ensure(base,[None])
+        node=self.host_images['local'][NODE]
+        python=self.host_images['local'][PYTHON]
+        dockerfile=f'FROM {node} AS node\nFROM {python}\nCOPY --from=node /usr/local/bin/node /usr/local/bin/node\n'
+        self.local_command(['docker','build','--pull=false','--network=none','-t',TOOLCHAIN,'-'],dockerfile)
+
+    def launcher(self,service):
+        dockerfile=Path(__file__).resolve().parents[1]/'Dockerfile.launcher'
+        text=dockerfile.read_text()
+        for line in text.splitlines():
+            tokens=shlex.split(line,comments=True)
+            if tokens and tokens[0].upper()=='FROM':self.ensure(tokens[1],[None])
+        text=prepare_build(text)
+        self.local_command(['docker','build','--pull=false','-t','organization-launcher:webrtc-1','-'],text)
 
     def prepare(self):
-        images = list(dict.fromkeys(image for host in self.hosts for image in required_images(host)))
+        images=list(dict.fromkeys(image for host in self.hosts for image in required_images(host)))
         for image in images:
-            self.ensure(image, [host for host in self.hosts if image in required_images(host)])
+            destinations=[host for host in self.hosts if host['host'] not in self.failures and image in required_images(host)]
+            if not destinations:continue
+            try:self.ensure(image,destinations,isolate_hosts=True)
+            except InterruptedError:raise
+            except Exception as error:
+                for host in destinations:
+                    self.failures.setdefault(host['host'],{'stage':'image_preparation','reason':type(error).__name__+': '+str(error)[:600],'image':image})
+                    self.notify(image,'failed',None,host['host'])
         return dict(self.images)

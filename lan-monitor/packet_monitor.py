@@ -241,7 +241,7 @@ class Destinations:
 def main():
     sockets, connections, config = {}, set(), None
     records, counts, flows = Destinations(), {}, Flows()
-    previous = time.monotonic(); refreshed = 0
+    previous = time.monotonic(); refreshed = 0; sockets_refreshed = 0
     dropped_total = 0
     buffer = bytearray(256)
     networks = []
@@ -262,7 +262,6 @@ def main():
                         sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(3))
                         sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4*1024*1024)
                         sock.bind((interface, 0)); sock.setblocking(False); sockets[interface] = sock
-                connections = socket_tuples()
                 networks = [ipaddress.ip_network(n) for n in config['local_networks']]
                 config['_networks'] = tuple(networks)
                 config['_internet_cache'] = {}
@@ -270,6 +269,8 @@ def main():
             except (OSError, ValueError, KeyError) as exc:
                 config = None; error = str(exc)
             refreshed = now
+        if config is not None and now-sockets_refreshed>=.25:
+            connections=socket_tuples();sockets_refreshed=now
         ready, _, _ = select.select(list(sockets.values()), [], [], .1)
         for sock in ready:
             # Bounded snapshot: headers only; Python discards bytes after parsing.

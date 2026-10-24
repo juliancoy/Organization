@@ -1,5 +1,5 @@
 import {valid} from './levels-model.js';
-import {processLabel} from './resource-context.js';
+import {processLabel,attributionLabel} from './resource-context.js';
 export function throughputSources(data,direction='download',device='',now=Date.now(),group='sender') {
  const capture=data.link_traffic,age=now-Date.parse(capture?.updated),fresh=capture&&!capture.capture_error&&Number.isFinite(age)&&age>=-5000&&age<10000;
  if(!fresh||!capture.flows)return {fresh:false,rows:[],sources:[],total:null,allTotal:null};
@@ -19,11 +19,11 @@ export function throughputSources(data,direction='download',device='',now=Date.n
   let key=direction==='download'?r.remote_ip:r.device_mac,name=direction==='download'?r.remoteName:r.deviceName,detail=direction==='download'?r.provider:r.local_ip;
   if(group==='process'){
    const owners=r.recent_processes||[];
-   key=owners.length?'process:'+owners.map(p=>p.pid).sort().join('+'):'unattributed:'+r.device_mac;
+   key=owners.length?'process:'+owners.map(p=>p.pid+':'+(p.start_ticks||'unknown')).sort().join('+'):'unattributed:'+r.device_mac;
    name=owners.length?owners.map(p=>processLabel(p,data)).join(' / '):r.deviceName+' · process unknown';
-   detail=owners.length?'Recent exact host socket-owner match': 'No process attribution for these observed flows';
+   detail=attributionLabel(r);
   }
-  if(!grouped.has(key))grouped.set(key,{id:key,name,detail,rate:0,flows:0});const g=grouped.get(key);g.rate+=r.rate;g.flows++;
+  if(!grouped.has(key))grouped.set(key,{id:key,name,detail,rate:0,flows:0});const g=grouped.get(key);if(group==='process'&&g.detail!==detail)g.detail='Mixed live / retained owner evidence; inspect individual flows';g.rate+=r.rate;g.flows++;
  }
  const sources=[...grouped.values()].sort((a,b)=>b.rate-a.rate).map(r=>({...r,share:total?r.rate/total:0}));
  return {fresh:true,rows,sources,total,allTotal,sampleSeconds:capture.sample_seconds,updated:capture.updated,evictions:capture.flows.evictions||0};
