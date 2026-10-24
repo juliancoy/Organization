@@ -18,7 +18,9 @@ class CheckoutTests(unittest.TestCase):
                 return subprocess.check_output(['git','-c','core.hooksPath=/dev/null','-C',str(path),*args],stderr=subprocess.PIPE,text=True).strip()
             source=root/'fixture';source.mkdir();git(source,'init','--quiet')
             (source/'fixture.txt').write_text('pinned content\n')
-            git(source,'add','fixture.txt');git(source,'-c','user.name=Fixture','-c','user.email=fixture@example.test','commit','-qm','fixture')
+            for name in ('usa/index.html','css/master.css','run.py','tests/usajobs-mobile.test.cjs','unrelated-media.bin'):
+                target=source/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_text('fixture')
+            git(source,'add','.');git(source,'-c','user.name=Fixture','-c','user.email=fixture@example.test','commit','-qm','fixture')
             commit=git(source,'rev-parse','HEAD');url='https://github.com/example/fixture.git'
             jobs=root/'jobs';cache=jobs/'git-cache'/(hashlib.sha256(url.encode()).hexdigest()+'.git');cache.mkdir(parents=True)
             git(cache,'init','--bare','--quiet');git(cache,'remote','add','origin',url)
@@ -35,3 +37,22 @@ class CheckoutTests(unittest.TestCase):
             self.assertEqual(git(work,'status','--porcelain'),'?? distributed-plan.json')
             self.assertFalse((work/'.git/objects/info/alternates').exists())
             self.assertEqual(git(cache,'for-each-ref','--format=%(refname)','refs/heads'),'')
+
+            # Interrupted fetches must not permanently poison the disposable cache.
+            (cache/'shallow.lock').write_text('abandoned')
+            recovered=jobs/'recovered'/'source';recovered.mkdir(parents=True)
+            agent.checkout(recovered,manifest,{},dict(sequence=0,events=[]))
+            self.assertFalse((cache/'shallow.lock').exists())
+            self.assertEqual((recovered/'fixture.txt').read_text(),'pinned content\n')
+
+            # The browser suite needs real pinned site code, not unrelated media.
+            mobile=jobs/'mobile'/'source';mobile.mkdir(parents=True)
+            manifest['repositories']['CodeCollective']={'url':url,'commit':commit}
+            manifest['hosts'][0]['suites']=['usajobs']
+            agent.checkout(mobile,manifest,{},dict(sequence=0,events=[]))
+            site=mobile/'CodeCollective'
+            self.assertEqual((site/'usa/index.html').read_text(),'fixture')
+            self.assertTrue((site/'tests/usajobs-mobile.test.cjs').is_file())
+            self.assertFalse((site/'unrelated-media.bin').exists())
+            self.assertEqual(git(site,'rev-parse','HEAD'),commit)
+            self.assertEqual(git(site,'status','--porcelain'),'')
