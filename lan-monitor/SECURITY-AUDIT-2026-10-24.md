@@ -64,7 +64,14 @@ also sit behind another HTTPS reverse proxy.
 
 The attached Pixel 3 successfully authenticated through the public HTTPS URL,
 sent a harmless instruction, and displayed the Codex reply. The test performed no
-shell/file actions. The browser holds the owner credential only in tab memory.
+shell/file actions. Phones can pair using an owner-issued, one-use invitation (ten-minute expiry).
+The URL fragment is removed before exchange; only hashes are stored on CompAI.
+The browser receives a revocable 30-day Secure/HttpOnly/SameSite=Strict session
+cookie, so it can reload without retaining the owner token. Lock revokes the
+current browser; the local owner can revoke all devices. Tests cover expiration,
+concurrent single-use redemption, replay, origin checks, cookie flags, and logout.
+This is owner-level access: pairing links must only be given to the owner’s own
+devices. The attached phone verified pairing and authentication across reload.
 Unauthenticated public history returns 401; other master APIs return 404; LAN
 Codex still returns 403. Local validation passed 135 monitor tests, including
 four new remote authorization and command-target regression tests.

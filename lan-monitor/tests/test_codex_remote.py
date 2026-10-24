@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch,Mock
 from http.server import ThreadingHTTPServer
 from codex_remote import Handler
+import codex_devices
 import codex_context
 
 class RemoteBoundaryTests(unittest.TestCase):
@@ -15,15 +16,17 @@ class RemoteBoundaryTests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         p=Path(self.temp.name)/'token';p.write_text('owner'*16)
         env=patch.dict(os.environ,{'MAP_CODEX_TOKEN_FILE':str(p)});env.start();self.addCleanup(env.stop)
+        device_path=patch.object(codex_devices,'FILE',Path(self.temp.name)/'devices.json');device_path.start();self.addCleanup(device_path.stop)
         self.server=ThreadingHTTPServer(('127.0.0.1',0),Handler);self.server.public_origin='https://compai.example'
         threading.Thread(target=self.server.serve_forever,daemon=True).start()
         self.addCleanup(self.server.server_close);self.addCleanup(self.server.shutdown)
-    def request(self,path,method='GET',token=None,origin=None,host='compai.example',body=None):
+    def request(self,path,method='GET',token=None,origin=None,host='compai.example',body=None,cookie=None):
         c=http.client.HTTPConnection(*self.server.server_address);headers={'Host':host}
+        if cookie:headers['Cookie']=cookie
         if token:headers['Authorization']='Bearer '+token
         if origin:headers['Origin']=origin
         if body is not None:headers['Content-Type']='application/json';body=json.dumps(body)
-        c.request(method,path,body=body,headers=headers);r=c.getresponse();status=r.status;r.read();c.close();return status
+        c.request(method,path,body=body,headers=headers);r=c.getresponse();status=r.status;self.last_cookie=r.getheader('Set-Cookie');r.read();c.close();return status
     def test_private_data_and_commands_require_owner_credentials(self):
         with patch('codex_remote.codex_context.rest') as rest:
             for path in ['/api/v1/master/codex/threads','/api/v1/master/codex/commands']:
@@ -42,6 +45,22 @@ class RemoteBoundaryTests(unittest.TestCase):
     def test_rebinding_host_is_denied_and_public_page_has_no_credentials(self):
         self.assertEqual(self.request('/',host='evil.example'),403)
         self.assertEqual(self.request('/'),200)
+
+    def test_pairing_cookie_reloads_without_owner_token_and_logout_revokes_it(self):
+        pair=codex_devices.issue()
+        self.assertEqual(self.request('/pair','POST',origin='https://evil.example',body={'token':pair}),403)
+        self.assertEqual(self.request('/pair','POST',origin='https://compai.example',body={'token':pair}),200)
+        cookie=self.last_cookie
+        self.assertIn('Secure; HttpOnly; SameSite=Strict',cookie)
+        self.assertTrue(cookie.startswith('__Host-compai_device='))
+        cookie=cookie.split(';')[0]
+        self.assertEqual(self.request('/pair','POST',origin='https://compai.example',body={'token':pair}),400)
+        self.assertEqual(self.request('/logout','POST',origin='https://compai.example',body={}),200)
+        self.assertTrue(codex_devices.valid(cookie.split('=',1)[1]))
+        with patch('codex_remote.codex_context.rest',return_value=(200,{'threads':[]})):
+            self.assertEqual(self.request('/api/v1/master/codex/threads',cookie=cookie),200)
+        self.assertEqual(self.request('/logout','POST',origin='https://compai.example',body={},cookie=cookie),200)
+        self.assertEqual(self.request('/api/v1/master/codex/threads',cookie=cookie),401)
 
 class CommandDeliveryTests(unittest.TestCase):
     def test_new_message_carries_target_thread_id(self):

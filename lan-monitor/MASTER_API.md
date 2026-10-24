@@ -283,11 +283,12 @@ The HTTPS tunnel routes only to the loopback service `codex_remote.py` on port
 LAN Codex route stays blocked.
 
 Unlock with the separate `~/.config/map-master/codex-token`; the master and
-launcher credentials do not authorize this page. The browser retains this token
-only in memory until Lock, reload, or tab closure. No credential is placed in a
-URL, source file, or browser storage. A paired phone tab may be unlocked locally
-through its authorized USB debugging connection without putting the token in
-chat or a command argument. Read history, choose a thread, then Send a new
+launcher credentials do not authorize this page. The owner token is exchanged once for a revocable, 30-day device session in a
+Secure, HttpOnly, SameSite=Strict cookie. The owner token is then cleared from
+browser memory. A device can instead use a ten-minute, one-use pairing invitation
+issued locally on CompAI; its fragment is removed immediately, and the owner
+token is never sent to that device. Reloads restore the paired session. Lock
+revokes that browser. No owner credential is placed in a URL or browser storage. Read history, choose a thread, then Send a new
 message or Steer a running turn. Existing VS Code thread permissions apply.
 
 The public service requires its configured HTTPS Host, validates browser Origin
@@ -304,3 +305,14 @@ credential is an owner-only file at
 `~/.config/map-master/compai-tunnel-token`. Never commit or share that credential.
 The Cloudflare connector is transport infrastructure; application authorization
 continues to use the independent owner credential on CompAI.
+
+Create a phone setup link locally with `python3 lan-monitor/codex_remote.py pair`.
+It is saved privately at `~/.config/map-master/codex-pairing-link`; the newest
+link invalidates any previous unused link. Send that single-use link privately
+to your own phone, open it in the browser you want to pair, and bookmark the
+plain site address. The pairing token is in the URL fragment, so it is not part
+of the HTTP request URL, and is removed before exchange. Session and invitation
+values are stored only as hashes in the owner-only `codex-devices.json` file.
+Use `python3 lan-monitor/codex_remote.py revoke-devices` locally to revoke all
+phones, or Lock on the site to revoke only that browser. Never share a setup
+link: whoever redeems it gets owner-level Codex control for that device.

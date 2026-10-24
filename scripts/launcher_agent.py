@@ -5,6 +5,7 @@ import contextlib
 import fcntl
 import hashlib
 import json
+import io
 import os
 from pathlib import Path
 import re
@@ -40,7 +41,10 @@ def browser_request(container,path,data,method):
     # Execute inside the owned browser namespace: rootless host networking is
     # separate from the physical host's loopback namespace.
     script="""import json,sys,urllib.request,urllib.error
-value=json.loads(sys.argv[1])
+from pathlib import Path
+source=Path(sys.argv[1])
+try:value=json.loads(source.read_text())
+finally:source.unlink()
 body=json.dumps(value['data']).encode() if value['data'] is not None else None
 request=urllib.request.Request('http://127.0.0.1:4449'+value['path'],data=body,method=value['method'],headers={'Content-Type':'application/json'})
 try:
@@ -49,7 +53,16 @@ except urllib.error.HTTPError as error:
  response=error
 with response:print(response.read(4*1024*1024+1).decode())
 """
-    code,output=container.exec_run(['/usr/bin/python3','-c',script,json.dumps({'path':path,'data':data,'method':method})],user='1200:1201')
+    # WebDriver scripts can exceed Linux's per-argument size limit. Keep the
+    # bounded request in a private, short-lived container file instead of argv.
+    name='webdriver-'+secrets.token_hex(16)+'.json'
+    payload=json.dumps({'path':path,'data':data,'method':method}).encode()
+    archive=io.BytesIO()
+    with tarfile.open(fileobj=archive,mode='w') as stream:
+        info=tarfile.TarInfo(name);info.size=len(payload);info.mode=0o600;info.uid=1200;info.gid=1201
+        stream.addfile(info,io.BytesIO(payload))
+    if not container.put_archive('/tmp',archive.getvalue()):raise RuntimeError('Owned browser request staging failed')
+    code,output=container.exec_run(['/usr/bin/python3','-c',script,'/tmp/'+name],user='1200:1201')
     if code or len(output)>4*1024*1024:raise RuntimeError('Owned browser WebDriver request failed')
     return json.loads(output)
 

@@ -4,6 +4,8 @@ Bind only to loopback. The tunnel publishes this service, never the test master.
 No test, shell, proxy, or arbitrary-file endpoints are exposed.
 """
 import json
+from http.cookies import SimpleCookie
+import codex_devices
 import mimetypes
 import os
 from pathlib import Path
@@ -18,12 +20,17 @@ API='/api/v1/master/codex/'
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self,*args):pass  # Never retain credentials, URLs, or conversation text.
-    def reply(self,status,value,kind='application/json'):
+    def device(self):
+        try:
+            cookie=SimpleCookie(self.headers.get('Cookie',''));return cookie['__Host-compai_device'].value if '__Host-compai_device' in cookie else None
+        except Exception:return None
+    def reply(self,status,value,kind='application/json',cookie=None):
         raw=value if isinstance(value,bytes) else json.dumps(value).encode()
         self.send_response(status)
         for k,v in {'Content-Type':kind,'Content-Length':str(len(raw)),'Cache-Control':'no-store',
                     'X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','X-Frame-Options':'DENY',
                     'Content-Security-Policy':"default-src 'self'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'",'Strict-Transport-Security':'max-age=31536000'}.items():self.send_header(k,v)
+        if cookie is not None:self.send_header("Set-Cookie",cookie)
         self.end_headers()
         try:self.wfile.write(raw)
         except (BrokenPipeError,ConnectionResetError):pass
@@ -35,13 +42,14 @@ class Handler(BaseHTTPRequestHandler):
         path=urlsplit(self.path).path
         if self.command=='GET' and path in ASSETS:
             name=ASSETS[path];return self.reply(200,(VIEW/name).read_bytes(),mimetypes.guess_type(name)[0] or 'application/octet-stream')
+        pairing=self.command=='POST' and path in ('/pair','/session','/logout')
         valid_read=self.command=='GET' and (path==API+'threads' or path.startswith(API+'threads/'))
         valid_write=self.command=='POST' and path==API+'commands'
-        if not (valid_read or valid_write):return self.reply(404,{'error':{'message':'Not found'}})
-        if not authorized(self.headers,'codex'):return self.reply(401,{'error':{'message':'Codex owner token required'}})
+        if not (valid_read or valid_write or pairing):return self.reply(404,{'error':{'message':'Not found'}})
+        if path not in ('/pair','/logout') and not (authorized(self.headers,'codex') or codex_devices.valid(self.device())):return self.reply(401,{'error':{'message':'Codex owner token required'}})
         body=None
         try:
-            if valid_write:
+            if valid_write or pairing:
                 if self.headers.get('Origin')!=origin:return self.reply(403,{'error':{'message':'Same-origin browser required'}})
                 if self.headers.get('Transfer-Encoding') or len(self.headers.get_all('Content-Length',[]))!=1:raise ValueError()
                 if self.headers.get('Content-Type','').split(';')[0]!='application/json':raise ValueError()
@@ -51,6 +59,13 @@ class Handler(BaseHTTPRequestHandler):
                 raw=self.rfile.read(size)
                 if len(raw)!=size:raise ValueError()
                 body=json.loads(raw)
+            if pairing:
+                if path=='/logout':
+                    if self.device():codex_devices.revoke(self.device())
+                    return self.reply(200,{'ok':True},cookie='__Host-compai_device=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0')
+                if path=='/pair' and (not isinstance(body,dict) or set(body)!={'token'}):raise ValueError()
+                token=codex_devices.session(body['token'] if path=='/pair' else None)
+                return self.reply(200,{'ok':True},cookie='__Host-compai_device='+token+'; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age='+str(codex_devices.LIFETIME))
             code,value=codex_context.rest(self.command,path,parse_qs(urlsplit(self.path).query),body)
             self.reply(code,value)
         except (ValueError,UnicodeDecodeError,TimeoutError):self.reply(400,{'error':{'message':'Invalid request body'}})
@@ -58,6 +73,15 @@ class Handler(BaseHTTPRequestHandler):
     do_POST=handle_request
 
 if __name__=='__main__':
+    import sys
+    if len(sys.argv)>1 and sys.argv[1]=='revoke-devices':
+        codex_devices.revoke();print('All paired devices revoked');sys.exit(0)
+    if len(sys.argv)>1 and sys.argv[1]=='pair':
+        origin=os.getenv('CODEX_PUBLIC_ORIGIN','https://compai.lifetech.fyi')
+        path=Path.home()/'.config/map-master/codex-pairing-link'
+        fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
+        with os.fdopen(fd,'w') as stream:stream.write(origin+'/#pair='+codex_devices.issue()+'\n')
+        path.chmod(0o600);print('One-time setup link saved to '+str(path)+' (expires in ten minutes)');sys.exit(0)
     origin=os.environ['CODEX_PUBLIC_ORIGIN']
     parsed=urlsplit(origin)
     if parsed.scheme!='https' or not parsed.hostname or parsed.path or parsed.query or parsed.fragment or parsed.username:raise ValueError('Configure one HTTPS origin')

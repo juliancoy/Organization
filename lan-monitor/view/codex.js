@@ -8,7 +8,7 @@ const title = el('div'); title.append(el('h2', secureRemote ? 'CompAI · Codex' 
 const lock = el('button', 'Lock'); lock.hidden = true; heading.append(title, lock);
 const unlock = el('form', '', 'codex-unlock');
 const label = el('label', 'Codex owner token '), password = el('input'); password.type = 'password'; password.autocomplete = 'off'; password.required = true; label.append(password);
-const connect = el('button', 'Connect'); connect.type = 'submit'; unlock.append(label, connect, el('small', secureRemote ? 'Private control of CompAI. Your owner token stays in this tab until you lock or close it.' : 'Use localhost or an SSH tunnel. This separate owner token is never shared with test workers.'));
+const connect = el('button', 'Connect'); connect.type = 'submit'; unlock.append(label, connect, el('small', secureRemote ? 'Open a one-time pairing link from CompAI, or use your owner token once. This browser stays paired for 30 days; Lock revokes it.' : 'Use localhost or an SSH tunnel. This separate owner token is never shared with test workers.'));
 if(!allowedBrowser){password.disabled=true;connect.disabled=true;}
 const status = el('p'); status.setAttribute('role', 'status');
 const workspace = el('div', '', 'codex-workspace'); workspace.hidden = true;
@@ -73,10 +73,12 @@ async function readThread() {
 }
 unlock.onsubmit = async event => {
   event.preventDefault(); token = password.value.trim(); connect.disabled = true;
-  try { await load(); password.value = ''; unlock.hidden = true; workspace.hidden = false; lock.hidden = false; form.hidden = !selected; }
+  try {
+    if(secureRemote){const response=await fetch('/session',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:'{}'});if(!response.ok)throw Error('Owner authentication failed');token='';}
+    await load(); password.value = ''; unlock.hidden = true; workspace.hidden = false; lock.hidden = false; form.hidden = !selected; }
   catch (error) { token = ''; failure(error); } finally { connect.disabled = false; }
 };
-lock.onclick = () => { generation++; token = ''; selected = null; input.value = ''; requestId = null; list.replaceChildren(); transcript.replaceChildren(); info.replaceChildren(); workspace.hidden = true; lock.hidden = true; unlock.hidden = false; status.textContent = 'Locked'; };
+lock.onclick = async () => { if(secureRemote){const response=await fetch('/logout',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(!response.ok){failure(Error('Could not revoke this device. Try Lock again.'));return;}} generation++; token = ''; selected = null; input.value = ''; requestId = null; list.replaceChildren(); transcript.replaceChildren(); info.replaceChildren(); workspace.hidden = true; lock.hidden = true; unlock.hidden = false; status.textContent = 'Locked'; };
 refresh.onclick = () => { load().then(readThread).catch(failure); };
 previous.onclick = () => { offset = Math.max(0, offset - 20); load().catch(failure); };
 more.onclick = () => { if (next !== null) { offset = next; load().catch(failure); } };
@@ -92,5 +94,13 @@ form.onsubmit = async event => {
   finally { busy = false; lock.disabled = false; await readThread().catch(failure); }
 };
 open.onclick = async () => { if (!selected || busy) return; open.disabled = true; try { const result = await api('commands', { thread_id: selected, action: 'open' }); status.textContent = result.message; } catch (error) { failure(error); } finally { open.disabled = false; } };
+async function restoreDevice(){
+  if(!secureRemote)return;
+  const pair=new URLSearchParams(location.hash.slice(1)).get('pair');
+  if(pair){history.replaceState(null,'',location.pathname);try{const response=await fetch('/pair',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:pair})});if(!response.ok)throw Error('This pairing link expired or was already used. Request a fresh one from CompAI.');}catch(error){failure(error);return;}}
+  try{await load();unlock.hidden=true;workspace.hidden=false;lock.hidden=false;form.hidden=!selected;}catch(error){if(pair)failure(error);}
+}
+window.addEventListener('hashchange',()=>void restoreDevice());
+void restoreDevice();
 let polling = false;
-setInterval(async () => { if (!token || document.hidden || busy || polling) return; polling = true; try { if (selected) await readThread(); } catch (error) { failure(error); } finally { polling = false; } }, 5000);
+setInterval(async () => { if ((!token && !secureRemote) || workspace.hidden || document.hidden || busy || polling) return; polling = true; try { if (selected) await readThread(); } catch (error) { failure(error); } finally { polling = false; } }, 5000);
