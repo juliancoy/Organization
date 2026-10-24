@@ -17,7 +17,7 @@ main{max-width:1440px;margin:auto;padding:28px}a{color:#b7e4cf}.intro,.panel-hea
 
 /* Each machine contains the suites assigned to it. */
 .machine-suites{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:18px;padding-top:16px;border-top:1px solid #ffffff18}
-.suite-tile{display:flex;flex-direction:column;align-items:flex-start;gap:7px;min-width:0;padding:12px 10px;border:1px solid var(--status);border-left-width:3px;border-radius:7px;background:color-mix(in srgb,var(--status) 13%,#101820);text-align:left}
+.suite-tile{display:flex;flex-direction:column;align-items:flex-start;gap:7px;min-width:0;padding:12px 10px;border:1px solid var(--status);border-left-width:3px;border-radius:7px;background:#101820;text-align:left}
 .host .suite-tile strong{font-size:12px;line-height:1.45;color:#ecf1f5;font-weight:500}
 .suite-state{font-size:11px;font-weight:600;color:var(--status)}
 .host .suite-tile small{font-size:10px;margin:0;line-height:1.5;overflow-wrap:anywhere;color:#becbd5}
@@ -43,3 +43,8 @@ main{max-width:1440px;margin:auto;padding:28px}a{color:#b7e4cf}.intro,.panel-hea
 .badge.reused{color:#b8d9ec;border-color:#688fa6;background:#1b303e}
 
 .run-activity{border-color:#477d75}.activity-stage{display:block;font-size:1.25rem;overflow-wrap:anywhere;color:#b7e4cf}.activity-clock{color:#b7e4cf;white-space:nowrap;font-variant-numeric:tabular-nums}.activity-detail,.activity-workers{color:#aebec9;overflow-wrap:anywhere}.run-activity progress{width:100%;height:12px;accent-color:#72dfcf}.activity-events{list-style:none;padding:0;max-height:280px;overflow:auto;overscroll-behavior:contain;border-top:1px solid #30434f;margin:14px 0}.activity-event{display:grid;grid-template-columns:100px minmax(0,1fr);gap:12px;padding:10px 0;border-bottom:1px solid #263842;font-size:.9rem;overflow-wrap:anywhere}.activity-event time{color:#91a4b2;font-variant-numeric:tabular-nums}.activity-event.error{color:#ffb4ae}@media(max-width:500px){.activity-event{grid-template-columns:1fr;gap:3px}.activity-stage{font-size:1.05rem}}
+
+/* Strong fill marks terminal suites; text and status colors retain the outcome. */
+.suite-tile[data-completed="true"],.suite-cell[data-completed="true"]{background:color-mix(in srgb,var(--status,#84929d) 32%,#101820)}
+.suite-tile[data-completed="false"].running,.suite-tile[data-completed="false"].preparing{background:color-mix(in srgb,var(--status) 10%,#101820)}
+.suite-cell[data-completed="true"]{box-shadow:inset 3px 0 var(--status,#84929d)}

@@ -118,7 +118,10 @@ class AgentSessions:
             try:
                 value=AgentClient(host).call('status')
                 required={'github-jobs','p2p-browser','cancel','events','layer-pull','registry-read'}
-                if value.get('protocol')!=PROTOCOL or not value.get('ready') or not required.issubset(value.get('capabilities',[])):raise RuntimeError('Agent protocol or capabilities unavailable')
+                if value.get('protocol')!=PROTOCOL:raise RuntimeError('Agent protocol mismatch; apply an explicit launcher update')
+                if not value.get('ready'):raise RuntimeError('Agent is not ready or is draining for an update')
+                missing=required-set(value.get('capabilities',[]))
+                if missing:raise RuntimeError('Agent capabilities missing: '+', '.join(sorted(missing))+'; apply an explicit launcher update')
                 if value.get('source_revision')!=expected:raise RuntimeError('Agent source is outdated; apply an explicit launcher update')
                 if value.get('active_jobs'):raise RuntimeError('Agent is busy with an existing job')
                 if host['lan_address'] not in value['addresses']:raise RuntimeError('Agent address is not on an attested physical interface')

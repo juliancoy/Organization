@@ -70,6 +70,13 @@ class ImageRegistry:
             with opener.open(request,timeout=15) as response:digest=response.headers.get('Docker-Content-Digest')
             if not digest or not re.fullmatch(r'sha256:[a-f0-9]{64}',digest):
                 raise RuntimeError('Registry did not return an immutable image digest')
+            # Verify the exact reference agents will use, not just the mutable tag.
+            request=urllib.request.Request(f'http://127.0.0.1:{PORT}/v2/{repository}/manifests/{digest}',
+                headers={'Accept':'application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json'})
+            with opener.open(request,timeout=15) as response:
+                manifest=response.read(4*1024*1024+1)
+            if len(manifest)>4*1024*1024 or 'sha256:'+hashlib.sha256(manifest).hexdigest()!=digest:
+                raise RuntimeError('Published registry manifest does not match its immutable digest: '+image)
             value=(repository,digest,fingerprint)
             self.published[key]=value
             return value

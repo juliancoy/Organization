@@ -112,7 +112,7 @@ function render(){
  const suites=el('span','','machine-suites');suites.setAttribute('role','list');suites.setAttribute('aria-label',host.host+(completed?' completed suites':' pending suites'));
  if(completed)suites.append(el('span','Completed · '+entries.length,'suite-group-label'));
  for(const [id,job] of entries){
-  const tile=el('span','','suite-tile '+job.status);tile.dataset.suite=id;tile.setAttribute('role','listitem');
+  const tile=el('span','','suite-tile '+job.status);tile.dataset.suite=id;tile.dataset.completed=String(completed);tile.setAttribute('role','listitem');
   tile.append(el('strong',job.name),el('span',label(job.status),'suite-state'));
   const counts=job.test_counts;
   const detail=[job.phase,counts?`${counts.passed??'—'} passed · ${counts.failed??0} failed`:null].filter(Boolean).join(' · ');
@@ -125,7 +125,7 @@ function render(){
  $('updated').textContent=run.updated?'Last result '+new Date(run.updated).toLocaleTimeString():'';
  const completedEverywhere=id=>hosts.filter(host=>host.jobs?.[id]).every(host=>terminal.has(host.jobs[id].status));
  const ids=[...new Set(hosts.flatMap(host=>host.suites||[]))].sort((a,b)=>Number(completedEverywhere(a))-Number(completedEverywhere(b)));const header=el('tr');header.append(el('th','Application suite'));for(const host of hosts)header.append(el('th',host.host));$('matrix-head').replaceChildren(header);$('matrix').replaceChildren();
- for(const id of ids){const row=el('tr');row.append(el('th',hosts.find(h=>h.jobs[id])?.jobs[id].name||id));for(const host of hosts){const cell=el('td'),job=host.jobs[id];if(job){cell.append(badge(job.status),el('small',(job.phase||'Waiting')+' · '+seconds(duration(job))+(job.test_counts?' · '+(job.test_counts.passed??'—')+' passed / '+(job.test_counts.failed??0)+' failed / '+(job.test_counts.skipped??0)+' skipped':'')));}else cell.append(el('span','Not assigned','muted'));row.append(cell);}$('matrix').append(row);}
+ for(const id of ids){const row=el('tr');row.append(el('th',hosts.find(h=>h.jobs[id])?.jobs[id].name||id));for(const host of hosts){const cell=el('td'),job=host.jobs[id];if(job){cell.className='suite-cell '+job.status;cell.dataset.completed=String(terminal.has(job.status));cell.append(badge(job.status),el('small',(job.phase||'Waiting')+' · '+seconds(duration(job))+(job.test_counts?' · '+(job.test_counts.passed??'—')+' passed / '+(job.test_counts.failed??0)+' failed / '+(job.test_counts.skipped??0)+' skipped':'')));}else cell.append(el('span','Not assigned','muted'));row.append(cell);}$('matrix').append(row);}
  $('timeline').replaceChildren();const first=Date.parse(run.started),end=run.finished?Date.parse(run.finished):Date.now(),span=Math.max(1,(end-first)/1000);
  for(const host of hosts)for(const [,job] of suiteEntries(host)){if(!job.started)continue;const row=el('div','','timeline-row'),track=el('div','','track'),bar=el('span','','bar '+job.status);bar.style.marginLeft=Math.max(0,100*(Date.parse(job.started)-first)/1000/span)+'%';bar.style.width=Math.min(100,100*(duration(job)||0)/span)+'%';track.append(bar);row.append(el('span',host.host+' · '+job.name),track,el('span',seconds(duration(job))));$('timeline').append(row);}
  const host=hosts.find(host=>host.host===selected);$('jobs').replaceChildren();

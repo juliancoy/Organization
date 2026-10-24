@@ -1,5 +1,6 @@
 """Loopback Docker registry bridge over authenticated agent requests."""
 import base64
+from collections import deque
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import re
@@ -8,6 +9,7 @@ import threading
 import time
 import urllib.request
 import urllib.error
+from urllib.parse import urlsplit
 
 PROTOCOL='lifetech-agent.v1'
 CHUNK=4*1024*1024
@@ -23,7 +25,15 @@ def read(args):
     if not head:headers['Range']=f'bytes={offset}-{offset+CHUNK-1}'
     request=urllib.request.Request('http://127.0.0.1:18791'+path,headers=headers,method='HEAD' if head else 'GET')
     opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
-    with opener.open(request,timeout=30) as response:
+    try:
+        response=opener.open(request,timeout=30)
+    except urllib.error.HTTPError as error:
+        with error:
+            detail=error.read(4096).decode(errors='replace')
+            if error.code==404:
+                return {'status':404,'data':'','total':0,'type':'application/json'}
+            raise RuntimeError(f'Registry {head and "HEAD" or "GET"} {path}: HTTP {error.code}: {detail}') from error
+    with response:
         if offset and response.status!=206:raise RuntimeError('Registry did not honor the blob range')
         total=int(response.headers.get('Content-Range','/').rsplit('/',1)[-1]) if response.status==206 else int(response.headers['Content-Length'])
         data=b'' if head else response.read(CHUNK)
@@ -55,9 +65,10 @@ def pull(agent,args):
         if value.get('nonce')!=request_id or value.get('node')!=coordinator or abs(time.time()-value['time'])>60:raise ValueError('Invalid registry response identity or freshness')
         if not value.get('ok'):raise RuntimeError(value.get('error','Registry read failed'))
         return value['result']
-    errors=[]
+    errors=deque(maxlen=10)
     layers={}
     started=time.monotonic()
+    samples=deque([(started,0)])
     with agent.lock:agent.image_progress[args['image']]={'transfer_phase':'starting','updated':time.time()}
 
     class Proxy(BaseHTTPRequestHandler):
@@ -74,11 +85,13 @@ def pull(agent,args):
         def do_HEAD(self):self.serve(False)
         def do_GET(self):self.serve(True)
         def serve(self,body):
-            if self.path=='/v2/':
+            # Docker may append a registry namespace query to immutable requests.
+            path=urlsplit(self.path).path
+            if path=='/v2/':
                 self.send_response(200);self.send_header('Content-Length','2');self.send_header('Docker-Distribution-Api-Version','registry/2.0');self.end_headers()
                 if body:self.wfile.write(b'{}')
                 return
-            if not PATH.fullmatch(self.path) or not self.path.startswith('/v2/'+repository+'/'):
+            if not PATH.fullmatch(path) or not path.startswith('/v2/'+repository+'/'):
                 self.send_error(404);return
             sent=False
             try:
@@ -86,12 +99,16 @@ def pull(agent,args):
                 match=re.fullmatch(r'bytes=(\d+)-(\d*)',requested) if requested else None
                 if requested and not match:raise ValueError('Invalid registry byte range')
                 offset=int(match[1]) if match else 0
-                first=request_chunk(self.path,offset,head=not body);total=first['total']
+                first=request_chunk(path,offset,head=not body)
+                if first.get('status')==404:
+                    errors.append('Registry resource missing: '+path)
+                    self.send_error(404,'Registry resource missing');return
+                total=first['total']
                 end=min(total-1,int(match[2])) if match and match[2] else total-1
                 if offset>end:raise ValueError('Invalid registry byte range bounds')
                 self.send_response(206 if match else 200);self.send_header('Content-Type',first['type']);self.send_header('Content-Length',str(end-offset+1))
                 self.send_header('Accept-Ranges','bytes')
-                self.send_header('Docker-Content-Digest',self.path.rsplit('/',1)[-1])
+                self.send_header('Docker-Content-Digest',path.rsplit('/',1)[-1])
                 if match:self.send_header('Content-Range',f'bytes {offset}-{end}/{total}')
                 self.send_header('Docker-Distribution-Api-Version','registry/2.0');self.end_headers();sent=True
                 if not body:return
@@ -100,7 +117,7 @@ def pull(agent,args):
                     data=base64.b64decode(value['data'],validate=True)[:end-offset+1]
                     if not data or len(data)>CHUNK or offset+len(data)>total or value['total']!=total:raise ValueError('Invalid registry chunk')
                     self.wfile.write(data);offset+=len(data)
-                    if offset<=end:value=request_chunk(self.path,offset)
+                    if offset<=end:value=request_chunk(path,offset)
             except Exception as error:
                 errors.append(type(error).__name__+': '+str(error)[:400])
                 self.close_connection=True
@@ -120,8 +137,12 @@ def pull(agent,args):
                     layers[layer]=(layers[layer][1],layers[layer][1])
                 current=sum(row[0] for row in layers.values())
                 total=sum(row[1] for row in layers.values())
-                elapsed=time.monotonic()-started
-                speed=current/elapsed if elapsed>=3 else 0
+                now=time.monotonic()
+                samples.append((now,current))
+                while len(samples)>2 and samples[1][0]<now-15:
+                    samples.popleft()
+                elapsed=now-samples[0][0]
+                speed=max(0,current-samples[0][1])/elapsed if elapsed>=3 else 0
                 remaining=max(0,total-current)
                 with agent.lock:
                     agent.image_progress[args['image']]={'transfer_phase':'downloading' if remaining else 'finalizing',
@@ -134,8 +155,8 @@ def pull(agent,args):
             with agent.lock:agent.image_progress.pop(args['image'],None)
             return {'id':image.id}
     except Exception as error:
-        detail=('; registry bridge: '+errors[-1]) if errors else ''
-        raise RuntimeError(str(error)[:1000]+detail) from error
+        detail=('Registry bridge: '+errors[-1]+'; ') if errors else ''
+        raise RuntimeError((detail+str(error))[:1000]) from error
     finally:
         with agent.lock:agent.image_progress.pop(args['image'],None)
         server.shutdown();server.server_close();thread.join(timeout=5)
