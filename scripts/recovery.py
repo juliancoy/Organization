@@ -21,7 +21,6 @@ import urllib.error
 import urllib.request
 import urllib.parse
 import uuid
-from dotenv import dotenv_values
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
@@ -317,6 +316,7 @@ def capture_sources(target, repositories=None):
 def secret_candidates(config, required):
     """Recover local candidates, never infer that they match deployed values."""
     if not required:return {},{},[]
+    from dotenv import dotenv_values
     parent = (ROOT / config).parent
     found = {name: {} for name in required}
     paths = set()
