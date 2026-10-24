@@ -421,12 +421,16 @@ the coordinator:
 The host must already trust the coordinator's SSH key and appear in its known
 hosts. Onboarding verifies the remote hostname, Docker, physical LAN address and
 authenticated agent machine identity. It retains the fleet key and existing
-members, saves the SSH account, copies the local launcher image when absent,
-and installs `lifetech-launcher-session` with automatic restart and bounded logs.
+members, saves the SSH account, installs Python dependencies in a private venv,
+and enables the `organization-test-agent` user service and login lingering.
+The supervised agent uses the host's selected local Docker socket, including
+rootless Docker, while observing real host interfaces. It restarts on failure
+and starts after reboot without an interactive login.
 It uses `~/.local/share/organization-node` on the worker and never starts the
 application stack. Existing online peers receive the updated membership;
 offline peers stay enrolled and are reported for a later onboarding retry.
-Inspect worker runtime output with `docker logs lifetech-launcher-session`.
+Inspect worker runtime output with
+`journalctl --user -u organization-test-agent.service`.
 The next distributed run includes the enrolled node automatically.
 
 Routine distributed runs use the existing launcher's encrypted `lifetech-agent.v1` API on TCP 8790, discovered through `_lifetech._tcp.local.` DNS-SD/mDNS (UDP 5353). Announcements contain only node/protocol metadata. They never enroll or authenticate a device. Missing multicast announcements can use an already-enrolled address, followed by the same authenticated readiness check. The coordinator requires its enrolled address on `enp7s0` and only schedules endpoints on that Ethernet subnet.

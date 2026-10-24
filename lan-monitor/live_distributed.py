@@ -11,6 +11,8 @@ class LiveDistributedTests:
         self.lock = threading.RLock()
         self.runner = self.load()
         self.reruns={}
+        from test_requests import TestRequests
+        self.requests=TestRequests(self)
         from snapshot_staging import SnapshotStaging
         self.staging=SnapshotStaging(self.runner.root)
 

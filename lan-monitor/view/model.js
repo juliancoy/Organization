@@ -205,6 +205,7 @@ export function networkView(data, requested, layer = 'links', allConnections = f
   }
   for (const row of relationships) {
     connect(row.source_mac, byIP(row.destination).id, {kind:row.bidirectional?'observed-connection':'outbound',
+      traffic_scope:byIP(row.destination).mac?'local':'external',
       upload_mbps:row.upload_mbps,download_mbps:row.download_mbps,
       evidence:row.bidirectional?'Observed bidirectional endpoint relationship; not a physical link':'Observed outbound IP traffic relationship; routed path, not a direct physical link',
       capacity_basis:'Not measured; a traffic relationship has no physical link capacity',
@@ -218,7 +219,7 @@ export function networkView(data, requested, layer = 'links', allConnections = f
     if(row.source_mac!==id)continue;
     for(const mac of [row.source_mac,row.destination_mac])if(!inventory.has(mac))add({id:mac,mac,title:'Observed LAN device',ports:[]});
     connect(row.source_mac,row.destination_mac,{kind:'outbound',
-      evidence:'Router hardware-observed LAN MAC delivery',traffic_basis:hardware.basis,
+      traffic_scope:'local',evidence:'Router hardware-observed LAN MAC delivery',traffic_basis:hardware.basis,
       observed:hardware.observed,hardware_packets:row.hardware_packets,
       capacity_basis:'Hardware packet counters do not measure byte throughput',actual_mbps:null});
   }

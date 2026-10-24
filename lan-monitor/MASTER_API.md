@@ -160,3 +160,38 @@ VS Code stdio session. Recheck the bridge after extension upgrades.
 These routes inherit master bearer, Host, Origin, JSON body-limit and no-store
 checks. They are REST dashboard routes, not MCP tools. No conversation content
 or access token is added to the public distributed-test status endpoint.
+
+## Always-listening focused test service
+
+The master user service stays online between tests. Submit a request with REST:
+
+```http
+POST /api/v1/master/test-requests
+Authorization: Bearer <master token>
+Content-Type: application/json
+
+{"paths":["lan-monitor/tests/test_test_requests.py"],"force":true}
+```
+
+Or call MCP `request_tests` with the same arguments. Use `suites: ["monitor"]`
+for a component. Paths and suites are unioned. Exact test files select individual
+jobs; source paths conservatively select their component's tests and build checks.
+Available suites: monitor, map, workspace, org-api, chat, web, identity,
+identity-python, visual, p2p. The API accepts no arbitrary commands.
+
+Acceptance returns HTTP 202 immediately after validation and durable storage.
+`list_test_requests` / `GET /api/v1/master/test-requests` lists the inbox;
+`get_test_request` / `GET /api/v1/master/test-requests/{request_id}` returns
+status, selection, run ID and final execution duration in seconds. The associated
+run uses the existing run-details/log APIs and dashboard history. Submission,
+start and finish timestamps distinguish queue time from execution time.
+
+Requests wait while a run is active, then use the shared resource-aware worker
+queue. Queued requests survive a master restart; interrupted active runs are
+reported as interrupted, never silently replayed. Each execution publishes the
+current source using the established commit-and-push flow, then pins worker
+checkouts to those commits. A queued request tests sources at execution time.
+Unchanged jobs can reuse verified results unless `force: true` is supplied.
+Focused requests do not trigger post-deployment or email verification. P2P and
+visual checks run only when explicitly selected (or visual via a whole-tree path).
+The bounded inbox accepts up to 100 unfinished requests and shows the latest 100.

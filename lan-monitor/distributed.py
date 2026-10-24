@@ -111,7 +111,7 @@ class DistributedTests:
             for path in sorted(self.folder.glob('*.json'), reverse=True)[:100]:
                 try:
                     data = json.loads(path.read_text())
-                    item={key: data.get(key) for key in ('id', 'started', 'finished', 'status', 'source_sha256')}
+                    item={key: data.get(key) for key in ('id', 'started', 'finished', 'status', 'source_sha256', 'selection')}
                     jobs=[job for host in data.get('hosts',[]) for job in host.get('jobs',{}).values()]
                     item.update(suites=len(jobs),passed=sum(job.get('status')=='passed' for job in jobs),reused=sum(job.get('status')=='reused' for job in jobs),
                                 failed=sum(job.get('status') in ('failed','timed_out','unavailable','interrupted') for job in jobs))
@@ -124,7 +124,7 @@ class DistributedTests:
     def artifact(self, run, host, suite, name):
         return self.artifacts.read(run, host, suite, name)
 
-    def start(self, selected_hosts=None, parent_run_id=None, launch=True, force=False):
+    def start(self, selected_hosts=None, parent_run_id=None, launch=True, force=False, selection=None):
         with self.lock:
             if self.running:
                 return False
@@ -134,6 +134,9 @@ class DistributedTests:
                         'status': 'preparing', 'started': now(), 'finished': None, 'force':force,
                         'hosts': hosts, 'repositories': {}, 'source_sha256': None,
                         'scope': 'Start commits and pushes Organization, OrgPortal and PIdP on their current branches; verified local agents fetch exact GitHub commits into fresh directories. Individual test files and build checks are pulled from a shared queue as CPU and memory become available. Each machine keeps one checkout and dependency setup for the run. Test containers have no network or deployment credentials. The dedicated P2P suite uses separate browser containers on authenticated agent machines, synthetic fixtures and short-lived dataset invitations; its network access is required for WebRTC.'}
+            if selection:
+                self.run["selection"]=selection
+                self.run["scope"]="Focused request: "+json.dumps(selection)+". Publishes current sources and runs selected file jobs on available workers. No post-deployment or email checks."
             if parent_run_id:self.run.update(parent_run_id=parent_run_id,targeted=True,status='queued')
             self.running = True
             self.save()
@@ -431,7 +434,7 @@ class DistributedTests:
                 self.running = False
                 self.run['finished'] = now()
                 self.save()
-                if self.run['status']=='passed' and not self.run.get('targeted'):
+                if self.run['status']=='passed' and not self.run.get('targeted') and not self.run.get('selection'):
                     completed=self.run
                     def post_deployment():
                         from post_deployment import execute

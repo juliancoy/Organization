@@ -12,14 +12,25 @@ from work_queue import catalog, pending, claim
 def execute(service, hosts, images):
     run = service.run
     tasks = catalog(service.root, SUITES, run['repositories'])
+    from test_scope import select
+    tasks = select(tasks, SUITES, run.get('selection'))
+    include_p2p = not run.get('selection') or 'p2p' in run['selection']['suites']
+    if run.get('selection') and run['selection']['suites'] == ['p2p'] and not run['selection']['paths']:
+        tasks = []
     with service.lock:
         run.update(granular=True, task_catalog=tasks, pending_tasks=pending(service.folder, tasks))
         for host in hosts:
-            host['suites'] = ['p2p']
-            host['jobs'] = {'p2p': {'name': SUITES['p2p']['name'], 'status': 'queued', 'phase': None, 'logs': []}}
+            host['suites'] = ['p2p'] if include_p2p else []
+            host['jobs'] = {'p2p': {'name': SUITES['p2p']['name'], 'status': 'queued', 'phase': None, 'logs': []}} if include_p2p else {}
             host.pop('org_api_shard', None)
             host['active_tasks'] = []
         service.save()
+
+    if not tasks:
+        with service.lock:
+            for host in hosts:host['status']='passed'
+            service.save()
+        return
 
     def worker(index, host):
         client = AgentClient(host)

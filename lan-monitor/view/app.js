@@ -559,10 +559,13 @@ function frame(time) {
     if(geographic&&!geographicEdge(edge,geographicNodesByID))continue;
     const a = nodes.find(node => node.id === edge.a), b = nodes.find(node => node.id === edge.b);
     const p = screen(a), q = screen(b), style = edgeStyle(edge);
+    const scope=edge.traffic_scope;
+    const trafficColor=scope==='local'?'#44d9e6':scope==='external'?'#ffac59':null;
+    if(trafficColor)style.color=trafficColor;
     const adjacent = edge.a === selectedId || edge.b === selectedId;
     ctx.globalAlpha = matches(a) && matches(b) ? adjacent ? .95 : .5 : .12;
     ctx.lineCap = 'round';
-    ctx.strokeStyle = '#40525f'; ctx.lineWidth = style.outer;
+    ctx.strokeStyle = trafficColor || '#40525f'; ctx.lineWidth = style.outer;
     ctx.setLineDash(['outbound','observed-connection','provider-relationship'].includes(edge.kind) ? [2, 7] : edge.kind?.startsWith('route') ? [9, 6] : edge.capacity_mbps ? [] : [5, 7]);
     ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
     ctx.setLineDash([]);

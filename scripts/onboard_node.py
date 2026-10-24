@@ -1,4 +1,4 @@
-"""Enroll one mDNS LAN node and install its supervised Docker test agent."""
+"""Enroll one mDNS LAN node and install its supervised user test agent."""
 import argparse
 import hashlib
 import ipaddress
@@ -11,7 +11,6 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-IMAGE = 'organization-launcher:webrtc-1'
 FILES = ('launcher_peers.py', 'launcher_discovery.py', 'launcher_registration.py',
          'launcher_agent.py', 'launcher_registry.py', 'launcher_peer_supervisor.py',
          'launcher_update.py')
@@ -55,7 +54,8 @@ def main():
 print(json.dumps(dict(host=socket.gethostname().lower()+'.local',home=str(pathlib.Path.home()),
  machine=hashlib.sha256(pathlib.Path('/etc/machine-id').read_bytes()).hexdigest(),
  interfaces=json.loads(subprocess.check_output(['ip','-j','-4','addr'],text=True)),
- docker=json.loads(subprocess.check_output(['docker','info','--format','{{json .}}'],text=True))['OSType'])))
+ docker=json.loads(subprocess.check_output(['docker','info','--format','{{json .}}'],text=True))['OSType'],
+ endpoint=subprocess.check_output(['docker','context','inspect','--format','{{.Endpoints.docker.Host}}'],text=True).strip())))
 '''))
     if probe['host'] != node or probe['docker'] != 'linux':
         raise RuntimeError('Remote hostname or Docker platform does not match the requested node')
@@ -71,6 +71,8 @@ print(json.dumps(dict(host=socket.gethostname().lower()+'.local',home=str(pathli
         raise RuntimeError('Fleet already has 24 nodes')
     if any(name != node and value == address for name, value in config['peers'].items()):
         raise RuntimeError('Address is already enrolled under another node name')
+    if not probe['endpoint'].startswith('unix://'):
+        raise RuntimeError('Node needs a local Unix Docker socket')
     print(f'Verified {node} at {address}; Docker Linux available', flush=True)
     # Keep the existing fleet credential and all existing peers.
     config['peers'][node] = address
@@ -95,40 +97,31 @@ if v['public_key']:
  old=p.read_text() if p.exists() else ''
  if v['public_key'] not in old.splitlines():p.write_text(old.rstrip()+'\\n'+v['public_key']+'\\n');p.chmod(0o600)
 ''', payload)
-    image_id = subprocess.check_output(['docker', 'image', 'inspect', IMAGE, '--format', '{{.Id}}'], text=True).strip()
-    present = remote("import subprocess;print(subprocess.run(['docker','image','inspect'," + repr(image_id) + "],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode)").strip() == '0'
-    if not present:
-        print('Transferring the existing launcher image over SSH', flush=True)
-        with subprocess.Popen(['docker', 'image', 'save', IMAGE], stdout=subprocess.PIPE) as producer:
-            loaded = subprocess.run(ssh + ['docker image load'], stdin=producer.stdout, timeout=600)
-            producer.stdout.close()
-            if producer.wait() or loaded.returncode:
-                raise RuntimeError('Launcher image transfer failed')
+    print('Installing supervised user agent and Python dependencies', flush=True)
     remote('''import json,os,pathlib,subprocess,sys
-v=json.load(sys.stdin);root=v['folder'];name='lifetech-launcher-session'
-result=subprocess.run(['docker','inspect',name],capture_output=True,text=True)
-if result.returncode==0:
- state=json.loads(result.stdout)[0]
- if state['State']['Running']:print('Existing supervised agent retained');sys.exit(0)
- subprocess.run(['docker','rm',name],check=True,stdout=subprocess.DEVNULL)
-jobs=root+'/.runtime/launcher-jobs';pathlib.Path(jobs).mkdir(parents=True,exist_ok=True)
-config=str(pathlib.Path.home()/'.config/lifetech-launcher')
-command=['docker','run','--detach','--init','--restart','unless-stopped','--name',name,
- '--network','host','--user',str(os.getuid())+':'+str(os.getgid()),
- '--group-add',str(os.stat('/var/run/docker.sock').st_gid),'--pull=never',
- '--log-opt','max-size=5m','--log-opt','max-file=3',
- '--label','organization.container-class=launcher',
- '--mount','type=bind,src='+root+',dst='+root,
- '--mount','type=bind,src='+config+',dst=/run/launcher-config',
- '--mount','type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock',
- '--mount','type=bind,src=/etc/machine-id,dst=/etc/machine-id,readonly',
- '--env','HOME=/tmp','--env','PYTHONUNBUFFERED=1',
- '--env','LIFETECH_PEER_CONFIG=/run/launcher-config/peers.json',
- '--env','LIFETECH_JOB_ROOT='+jobs,'--no-healthcheck',v['image'],
- 'python',root+'/scripts/launcher_peer_supervisor.py']
-subprocess.run(command,check=True,stdout=subprocess.DEVNULL)
-print('Installed supervised test agent')
-''', dict(folder=destination, image=image_id))
+v=json.load(sys.stdin);root=pathlib.Path(v['folder']);venv=root/'venv'
+subprocess.run(['python3','-m','venv',str(venv)],check=True)
+subprocess.run([str(venv/'bin/pip'),'install','--disable-pip-version-check',
+ 'docker>=7,<8','cryptography>=43','aiortc>=1.14,<2','aiohttp>=3.12,<4','zeroconf>=0.151,<1'],check=True)
+unit=pathlib.Path.home()/'.config/systemd/user/organization-test-agent.service'
+unit.parent.mkdir(parents=True,exist_ok=True)
+# Quote paths as systemd arguments, and escape literal percent specifiers.
+def quote(value):return json.dumps(str(value).replace('%','%%'))
+text='[Unit]\\nDescription=Organization distributed test agent\\nAfter=network-online.target\\n\\n[Service]\\n'
+text+='ExecStart='+quote(venv/'bin/python')+' '+quote(root/'scripts/launcher_peer_supervisor.py')+'\\n'
+text+='Environment='+quote('DOCKER_HOST='+v['endpoint'])+'\\n'
+text+='Environment='+quote('LIFETECH_PEER_CONFIG='+str(pathlib.Path.home()/'.config/lifetech-launcher/peers.json'))+'\\n'
+text+='Environment='+quote('LIFETECH_JOB_ROOT='+str(root/'.runtime/launcher-jobs'))+'\\n'
+text+='Environment=PYTHONUNBUFFERED=1\\nRestart=on-failure\\nRestartSec=5\\nUMask=0077\\n\\n[Install]\\nWantedBy=default.target\\n'
+changed=not unit.exists() or unit.read_text()!=text
+unit.write_text(text)
+subprocess.run(['loginctl','enable-linger'],check=True)
+subprocess.run(['systemctl','--user','daemon-reload'],check=True)
+subprocess.run(['systemctl','--user','enable','organization-test-agent.service'],check=True)
+active=subprocess.run(['systemctl','--user','is-active','--quiet','organization-test-agent.service']).returncode==0
+if not active:subprocess.run(['systemctl','--user','start','organization-test-agent.service'],check=True)
+elif changed:raise RuntimeError('Agent service configuration changed; restart explicitly after active jobs finish')
+''', dict(folder=destination, endpoint=probe['endpoint']), timeout=600)
     save(config_path, config)
     inventory_path = Path.home() / '.local/state/orgportal/lan-ssh-devices.json'
     inventory = json.loads(inventory_path.read_text()) if inventory_path.exists() else {}
@@ -150,7 +143,7 @@ print('Installed supervised test agent')
             except (OSError, ConnectionError):
                 pass
             if time.monotonic() >= deadline:
-                raise RuntimeError('Agent did not become ready; inspect docker logs lifetech-launcher-session on the node')
+                raise RuntimeError('Agent did not become ready; inspect journalctl --user -u organization-test-agent on the node')
             time.sleep(1)
     finally:
         client.close()

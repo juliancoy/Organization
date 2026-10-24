@@ -13,6 +13,9 @@ TOKEN_FILE=Path.home()/'.config/map-master/api-token'
 API='/api/v1/master'
 RUN_ID={'type':'string','pattern':r'^[0-9TZ-]+-[a-f0-9]{8}$','description':'Recorded run ID; omit to select the latest run.'}
 TOOLS=[
+ ('request_tests','Request focused tests','Queue tests for repository-relative code paths or named suites. COMMITS AND PUSHES current sources before execution. Uses available workers; no deployment or email checks.',{'paths':{'type':'array','items':{'type':'string'},'maxItems':100},'suites':{'type':'array','items':{'type':'string'},'maxItems':100},'force':{'type':'boolean','default':False}},[]),
+ ('list_test_requests','Test request inbox','List the latest 100 test requests and their run IDs.',{},[]),
+ ('get_test_request','Test request status','Read request status, runtime and associated run ID.',{'request_id':{'type':'string','minLength':36,'maxLength':36}},['request_id']),
  ('get_status','Master status','Inspect the current distributed run and preparation without starting work.',{},[]),
  ('list_runs','Run history','List the latest ten independent test run summaries.',{},[]),
  ('get_run','Run details','Read one run, its source revisions and per-machine suite results. Logs are accessed separately.',{'run_id':RUN_ID},[]),
@@ -35,9 +38,9 @@ class APIError(Exception):
 def tool_definitions():
     return [{'name':name,'title':title,'description':description,
              'inputSchema':{'type':'object','properties':properties,'required':required,'additionalProperties':False},
-             'annotations':{'readOnlyHint':name not in ('start_run','stop_run','rerun_suite','rerun_failed'),
-                            'destructiveHint':name in ('start_run','stop_run','rerun_suite','rerun_failed'),
-                            'idempotentHint':name not in ('start_run','rerun_suite','rerun_failed'),'openWorldHint':name in ('start_run','rerun_suite','rerun_failed')}}
+             'annotations':{'readOnlyHint':name not in ('start_run','stop_run','rerun_suite','rerun_failed','request_tests'),
+                            'destructiveHint':name in ('start_run','stop_run','rerun_suite','rerun_failed','request_tests'),
+                            'idempotentHint':name not in ('start_run','rerun_suite','rerun_failed','request_tests'),'openWorldHint':name in ('start_run','rerun_suite','rerun_failed','request_tests')}}
             for name,title,description,properties,required in TOOLS]
 
 
@@ -54,6 +57,10 @@ def validate(name,arguments):
             if not isinstance(value,str) or not rule.get('minLength',0)<=len(value)<=rule.get('maxLength',200):
                 raise APIError(400,'invalid_arguments','Invalid '+key)
             if rule.get('pattern') and not re.fullmatch(rule['pattern'],value):raise APIError(400,'invalid_arguments','Invalid '+key)
+        elif rule['type']=='boolean':
+            if type(value) is not bool:raise APIError(400,'invalid_arguments','Invalid '+key)
+        elif rule['type']=='array':
+            if not isinstance(value,list) or len(value)>rule['maxItems'] or any(not isinstance(v,str) or not 1<=len(v)<=300 for v in value):raise APIError(400,'invalid_arguments','Invalid '+key)
         elif rule['type']=='integer':
             if type(value) is not int or not rule['minimum']<=value<=rule['maximum']:raise APIError(400,'invalid_arguments','Invalid '+key)
     return arguments
@@ -67,6 +74,9 @@ class MasterAPI:
     def call(self,name,arguments=None):
         args=validate(name,{} if arguments is None else arguments)
         try:
+            if name=='request_tests':return self.tests.requests.submit(**args)
+            if name=='list_test_requests':return self.tests.requests.view()
+            if name=='get_test_request':return self.tests.requests.view(args['request_id'])
             if name=='list_suites':
                 return {'suites':[{'id':key,'name':value['name'],'image':value.get('image'),'coordinated':bool(value.get('coordinated'))}
                                   for key,value in self.suites().items()]}
@@ -132,6 +142,9 @@ class MasterAPI:
             import codex_context
             return codex_context.rest(method,path,query,body)
         if method=='GET':
+            if path==API+'/test-requests':return 200,self.call('list_test_requests')
+            if path.startswith(API+'/test-requests/'):
+                return 200,self.call('get_test_request',{'request_id':path.rsplit('/',1)[1]})
             if path==API+'/openapi.json':return 200,self.openapi()
             mapping={API:'get_status',API+'/status':'get_status',API+'/runs':'list_runs',API+'/machines':'list_machines',API+'/suites':'list_suites'}
             if path in mapping:
@@ -151,6 +164,7 @@ class MasterAPI:
                     return 200,self.call('get_logs',args)
         elif method=='POST':
             parameters(())
+            if path==API+'/test-requests':return 202,self.call('request_tests',body)
             if path==API+'/rerun-suite':return 202,self.call('rerun_suite',body)
             if path==API+'/rerun-failed':return 202,self.call('rerun_failed',body)
             if body not in ({},None):raise APIError(400,'invalid_body','This endpoint accepts an empty JSON object')
@@ -163,7 +177,7 @@ class MasterAPI:
     @staticmethod
     def openapi():
         paths={}
-        routes=[('post','/rerun-suite','rerun_suite'),('post','/rerun-failed','rerun_failed'),('get','/status','get_status'),('get','/runs','list_runs'),('post','/runs','start_run'),
+        routes=[('post','/test-requests','request_tests'),('get','/test-requests','list_test_requests'),('get','/test-requests/{request_id}','get_test_request'),('post','/rerun-suite','rerun_suite'),('post','/rerun-failed','rerun_failed'),('get','/status','get_status'),('get','/runs','list_runs'),('post','/runs','start_run'),
                 ('get','/runs/{run_id}','get_run'),('get','/runs/{run_id}/logs','get_logs'),
                 ('post','/runs/{run_id}/stop','stop_run'),('get','/machines','list_machines'),('get','/suites','list_suites')]
         definitions={tool['name']:tool for tool in tool_definitions()}
@@ -173,9 +187,9 @@ class MasterAPI:
                 '400':{'description':'Invalid arguments'},'401':{'description':'Bearer token required'},'409':{'description':'Run conflict'},'503':{'description':'Master unavailable'}}}
             parameters=[]
             for key,schema in tool['inputSchema']['properties'].items():
-                if key=='run_id':parameters.append({'name':key,'in':'path','required':True,'schema':schema})
+                if key in ('run_id','request_id'):parameters.append({'name':key,'in':'path','required':True,'schema':schema})
                 else:parameters.append({'name':key,'in':'query','required':key in tool['inputSchema']['required'],'schema':schema})
-            if name in ('rerun_suite','rerun_failed'):
+            if name in ('rerun_suite','rerun_failed','request_tests'):
                 operation['requestBody']={'required':True,'content':{'application/json':{'schema':tool['inputSchema']}}}
             elif parameters:operation['parameters']=parameters
             paths.setdefault(API+path,{})[method]=operation
