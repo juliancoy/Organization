@@ -508,11 +508,13 @@ class Agent:
                 if sparse:
                     git(path,'config','remote.origin.promisor','true')
                     git(path,'config','remote.origin.partialclonefilter','blob:none')
-                git(path,'fetch','--no-tags','--depth=1',*(['--filter=blob:none'] if sparse else []),str(cache),repo['commit'],local=True)
-            git(path,'remote','set-url','origin',repo['url'])
+                git(path,'fetch','--no-tags','--depth=1',*(['--filter=blob:none'] if sparse else []),'origin' if sparse else str(cache),repo['commit'],local=True)
             if sparse:
-                git(path,'sparse-checkout','set','--no-cone','/run.py','/usa/','/css/','/tests/usajobs-mobile.test.cjs')
-            git(path,'checkout','--detach','--force',repo['commit'])
+                git(path,'sparse-checkout','set','--no-cone','/run.py','/usa/','/css/','/tests/usajobs-mobile.test.cjs',local=True)
+            # Resolve sparse blobs through the verified local cache, which can
+            # fetch missing objects from its pinned GitHub promisor remote.
+            git(path,'checkout','--detach','--force',repo['commit'],local=sparse)
+            git(path,'remote','set-url','origin',repo['url'])
             if git(path,'rev-parse','HEAD')!=repo['commit'] or git(path,'status','--porcelain'):
                 raise ValueError('Checkout verification failed: '+name)
             event(name,repo,'verified',cache_hit=cached)
