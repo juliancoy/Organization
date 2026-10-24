@@ -185,7 +185,9 @@ def main(argv=None):
         return 0
     if args.swarm:
         import webbrowser
-        webbrowser.open('http://127.0.0.1:8791/launcher')
+        sys.path.insert(0,str(ROOT/'scripts'))
+        from launcher_peers import owner_launcher_url
+        webbrowser.open(owner_launcher_url())
         print('http://127.0.0.1:8791/launcher')
         return 0
     if args.peer_register:
