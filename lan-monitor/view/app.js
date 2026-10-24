@@ -164,7 +164,7 @@ function sync() {
   $('perspective-caption').textContent = view.id === data.viewer.id ? 'Your perspective' : 'Viewing from another device';
   $('perspective-title').textContent = label(view.source) + (view.id === data.viewer.id ? ' · You' : '');
   const observation = view.observation;
-  $('perspective-status').textContent = allConnections ? `${edges.length} observed endpoint relationships · topology-independent · capture coverage is partial` : view.source.external ? 'Passive destination perspective · dotted edges are observed routed traffic, not physical links.' : view.measured
+  $('perspective-status').textContent = allConnections ? `${edges.length} observed destinations sent to · last 5 minutes · capture coverage is partial` : view.source.external ? 'Passive destination perspective · dotted edges are observed routed traffic, not physical links.' : view.measured
     ? `${observation.interface} · ${observation.subnet} · ${edges.length} ${(layer === 'ip'&&!allConnections) ? 'route segments' : 'mapped links'}`
     : edges.length ? 'Infrastructure associations show this device’s attachment; no device login is available.' : 'No observations from this device. Dim particles are shared inventory.';
   $('updated').textContent = data.scanning || data.mapping ? 'Refreshing observations…' : 'Updated ' + new Date(data.updated || Date.now()).toLocaleTimeString();
@@ -685,6 +685,7 @@ $('geographic').onchange = async event => {
 };
 $('all-connections').onchange=event=>{
   allConnections=event.target.checked;
+  if(allConnections){lanOnly=false;$('lan-only').checked=false;}
   if(allConnections&&geographic){geographic=false;geoRequested=false;$('geographic').checked=false;nodes=[];positionCache.clear();}
   $('layer').disabled=allConnections;$('geographic').disabled=allConnections;$('group-providers').disabled=allConnections;
   persistSettings();clearEdgeHover();if(data){sync();requestAnimationFrame(fit);}

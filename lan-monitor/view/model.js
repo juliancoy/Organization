@@ -96,9 +96,10 @@ export function networkView(data, requested, layer = 'links', allConnections = f
       if(!flow.device_mac||!flow.remote_ip||Date.now()-Date.parse(flow.last_seen)>=300000)continue;
       const source=flow.device_mac.toLowerCase(),identity=source+'|'+flow.remote_ip;
       const row=pairs.get(identity)||{source_mac:source,source_ip:flow.local_ip,destination:flow.remote_ip,bytes:0,mbps:0,
-        upload_mbps:0,download_mbps:0,first_seen:flow.first_seen,last_seen:flow.last_seen,interface:flow.interface,
+        upload_mbps:0,download_mbps:0,upload_bytes:0,first_seen:flow.first_seen,last_seen:flow.last_seen,interface:flow.interface,
         basis:'Bidirectional client-side IP flow accounting',bidirectional:true};
       row.bytes+=(flow.upload_bytes||0)+(flow.download_bytes||0);
+      row.upload_bytes+=flow.upload_bytes||0;
       row.upload_mbps+=flow.upload_mbps||0;row.download_mbps+=flow.download_mbps||0;
       row.mbps=row.upload_mbps+row.download_mbps;
       if(flow.first_seen<row.first_seen)row.first_seen=flow.first_seen;
@@ -107,7 +108,8 @@ export function networkView(data, requested, layer = 'links', allConnections = f
     }
     for(const [identity,row]of pairs)uniqueFlows.set(identity,row);
   }
-  const recent = [...uniqueFlows.values()];
+  const trafficSource=inventory.has(requested)?requested:data.viewer.id;
+  const recent = [...uniqueFlows.values()].filter(row=>!allConnections||(row.source_mac===trafficSource&&(!row.bidirectional||row.upload_bytes>0))); 
   const totals = new Map();
   for (const row of recent) totals.set(row.destination, (totals.get(row.destination) || 0) + row.bytes);
   const priority = new Set(recent.filter(row => row.source_mac === requested).map(row => row.destination));
@@ -224,7 +226,7 @@ export function networkView(data, requested, layer = 'links', allConnections = f
   const connected=new Set(edges.flatMap(edge=>[edge.a,edge.b]));
   const ipHops = new Map((observation?.route?.hops || []).filter(hop=>hop.ip).map(hop=>[hop.ip,hop.ttl]));
   if (observation?.gateway && !ipHops.has(observation.gateway)) ipHops.set(observation.gateway, 1);
-  const nodes = [...inventory.values()].filter(device => !device.context || distances.has(device.id) || device.id === id || allConnections&&connected.has(device.id)).map(device => ({...device,
+  const nodes = [...inventory.values()].filter(device => allConnections ? device.id===id||connected.has(device.id) : !device.context||distances.has(device.id)||device.id===id).map(device => ({...device,
     title: device.mac === '7c:10:c9:b3:c2:38' ? 'ASUS access point' : device.title,
     perspective: device.id === id, you: device.id === data.viewer.id,
     visibility: device.id === id ? 'source' : distances.has(device.id)||allConnections&&connected.has(device.id) ? 'observed' : 'inventory',
