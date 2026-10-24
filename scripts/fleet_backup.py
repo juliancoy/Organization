@@ -63,14 +63,18 @@ class DecryptedReader:
     def __init__(self,folder,manifest,key):
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         self.folder,self.manifest,self.key=folder,manifest,AESGCM(key)
-        self.index=0;self.buffer=b''
+        self.index=0;self.buffer=io.BytesIO()
     def read(self,size):
-        while len(self.buffer)<size and self.index<len(self.manifest['parts']):
+        blocks=[];remaining=size
+        while remaining>0:
+            value=self.buffer.read(remaining)
+            if value:blocks.append(value);remaining-=len(value)
+            if remaining==0 or self.index>=len(self.manifest['parts']):break
             item=self.manifest['parts'][self.index];raw=(self.folder/(item['sha256']+'.enc')).read_bytes()
             if len(raw)!=item['size'] or hashlib.sha256(raw).hexdigest()!=item['sha256']:raise RuntimeError('Encrypted backup part corrupt')
             aad=(self.manifest['snapshot']+':'+str(self.index)).encode()
-            self.buffer+=self.key.decrypt(raw[:12],raw[12:],aad);self.index+=1
-        value,self.buffer=self.buffer[:size],self.buffer[size:];return value
+            self.buffer=io.BytesIO(self.key.decrypt(raw[:12],raw[12:],aad));self.index+=1
+        return b''.join(blocks)
 
 
 def verify(folder,private_key,expected=None,target=None):
@@ -120,6 +124,9 @@ def package(snapshot,store,cache=DEFAULT_CACHE,key_file=KEY_FILE,part_size=PART_
         info=json.loads((folder/'manifest.json').read_text())
         if info['sourceManifestSha256']!=expected[snapshot.name+'/manifest.json']:raise RuntimeError('Fleet snapshot identity changed')
         if (folder/'verified.json').exists() and all((folder/(p['sha256']+'.enc')).is_file() and sha(folder/(p['sha256']+'.enc'))==p['sha256'] for p in info['parts']):return folder
+        progress('Verifying existing encrypted generation before resuming replication')
+        write_json(folder/'verified.json',verify(folder,private_key,expected))
+        return folder
     key=os.urandom(32);writer=EncryptedWriter(folder,key,snapshot.name,part_size)
     with gzip.GzipFile(fileobj=writer,mode='wb',compresslevel=1,mtime=0) as compressed:
         with tarfile.open(fileobj=compressed,mode='w|') as archive:
