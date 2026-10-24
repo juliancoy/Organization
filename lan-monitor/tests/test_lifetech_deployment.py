@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-import lifetech_test_deployment as deploy
+import swarm_test_deployment as deploy
 
 class ArtifactTests(unittest.TestCase):
     def test_only_fixed_bounded_apk_and_no_symlinks(self):
@@ -34,7 +34,7 @@ class RtcTests(unittest.IsolatedAsyncioTestCase):
         import asyncio
         from aiortc import RTCPeerConnection,RTCConfiguration
         peer=RTCPeerConnection(RTCConfiguration(iceServers=[]))
-        manager=deploy.Deployment();channel=peer.createDataChannel('lifetech-test.v1')
+        manager=deploy.Deployment();channel=peer.createDataChannel('swarm-control-test.v1')
         opened=asyncio.Event();responses=asyncio.Queue()
         channel.on('open',opened.set)
         channel.on('message',lambda raw:responses.put_nowait(json.loads(raw)))

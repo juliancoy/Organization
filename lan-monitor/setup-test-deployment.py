@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install the optional P2P runtime and publish LifeTech Test on the owner console."""
+"""Install the optional P2P runtime and publish Swarm Control on the owner console."""
 import os
 from pathlib import Path
 import subprocess
@@ -20,5 +20,5 @@ dropin.write_text('[Service]\nExecStart=\nExecStart='+quote(python)+' '+quote(fo
 subprocess.run(['systemctl','--user','daemon-reload'],check=True)
 subprocess.run(['systemctl','--user','restart','compai-codex.service'],check=True)
 subprocess.run(['systemctl','--user','is-active','compai-codex.service'],check=True)
-print('Published: https://compai.lifetech.fyi/lifetech-test')
+print('Published: https://compai.lifetech.fyi/swarm-control')
 print('The paired phone must receive the APK and approve installation on Android.')

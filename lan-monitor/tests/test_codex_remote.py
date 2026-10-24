@@ -49,7 +49,7 @@ class RemoteBoundaryTests(unittest.TestCase):
             self.assertEqual(self.request(endpoint+name,method,body={} if method=='POST' else None),401)
         broker=Mock();broker.status.return_value={'app':None,'peers':[]}
         broker.offer.return_value={'type':'answer','sdp':'fixture'}
-        with patch('lifetech_test_deployment.manager',return_value=broker):
+        with patch('swarm_test_deployment.manager',return_value=broker):
             self.assertEqual(self.request(endpoint+'status',token='owner'*16),200)
             self.assertEqual(self.request(endpoint+'offer','POST','owner'*16,body={}),403)
             self.assertEqual(self.request(endpoint+'offer','POST','owner'*16,'https://evil.example',body={}),403)

@@ -16,7 +16,7 @@ from master_api import authorized
 
 VIEW=Path(__file__).with_name('view')
 ASSETS={'/':'codex.html','/codex.html':'codex.html','/codex.js':'codex.js','/codex.css':'codex.css','/style.css':'style.css','/test-deployment.js':'test-deployment.js',
-        '/test-deployment.css':'test-deployment.css','/lifetech-test':'lifetech-test.html'}
+        '/test-deployment.css':'test-deployment.css','/swarm-control':'swarm-control.html'}
 API='/api/v1/master/codex/'
 
 class Handler(BaseHTTPRequestHandler):
@@ -31,7 +31,7 @@ class Handler(BaseHTTPRequestHandler):
         for k,v in {'Content-Type':kind,'Content-Length':str(len(raw)),'Cache-Control':'no-store',
                     'X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','X-Frame-Options':'DENY',
                     'Content-Security-Policy':"default-src 'self'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'",'Strict-Transport-Security':'max-age=31536000'}.items():self.send_header(k,v)
-        if kind=='application/vnd.android.package-archive':self.send_header('Content-Disposition','attachment; filename="lifetech-test.apk"')
+        if kind=='application/vnd.android.package-archive':self.send_header('Content-Disposition','attachment; filename="swarm-control-test.apk"')
         if cookie is not None:self.send_header("Set-Cookie",cookie)
         self.end_headers()
         try:self.wfile.write(raw)
@@ -70,7 +70,7 @@ class Handler(BaseHTTPRequestHandler):
                 token=(codex_devices.session(body['token']) if path=='/pair' else codex_devices.owner_session())
                 return self.reply(200,{'ok':True},cookie='__Host-compai_device='+token+'; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age='+str(codex_devices.LIFETIME))
             if deployment:
-                from lifetech_test_deployment import manager,artifact
+                from swarm_test_deployment import manager,artifact
                 if path.endswith('/download'):
                     data,_=artifact()
                     return self.reply(200,data,'application/vnd.android.package-archive')

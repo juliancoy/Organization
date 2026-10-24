@@ -1,4 +1,4 @@
-"""Owner-authorized, short-lived WebRTC delivery of one fixed LifeTech test APK.
+"""Owner-authorized, short-lived WebRTC delivery of one fixed Swarm Control test APK.
 
 No shell, proxy, file path, browser-control or Codex operations on this channel.
 Peer status/receipts live in memory for at most ten minutes; no device IDs stored.
@@ -14,7 +14,7 @@ import secrets
 import threading
 import time
 
-ARTIFACT = Path(__file__).resolve().parents[1]/'.runtime/mobile/lifetech-test.apk'
+ARTIFACT = Path(__file__).resolve().parents[1]/'.runtime/mobile/swarm-control-test.apk'
 MAX_BYTES = 16*1024*1024
 CHUNK = 16384
 LIFETIME = 600
@@ -22,12 +22,12 @@ LIFETIME = 600
 
 def artifact():
     if not ARTIFACT.is_file() or ARTIFACT.is_symlink():
-        raise ValueError('LifeTech test APK has not been published on CompAI')
+        raise ValueError('Swarm Control test APK has not been published on CompAI')
     with ARTIFACT.open('rb') as stream:
         data=stream.read(MAX_BYTES+1)
     if not 0<len(data)<=MAX_BYTES or not data.startswith(b'PK'):
         raise ValueError('Invalid or oversized test APK')
-    return data, {'name':'lifetech-test.apk','package':'fyi.lifetech.test','size':len(data),
+    return data, {'name':'swarm-control-test.apk','package':'app.swarmcontrol.test','size':len(data),
                   'sha256':hashlib.sha256(data).hexdigest(),'chunkSize':CHUNK}
 
 
@@ -38,7 +38,7 @@ def request(data, manifest, message):
     if type(ident) is not int or not 0<=ident<2**31:
         raise ValueError('Invalid request ID')
     op=message.get('op')
-    if op=='ping':return {'id':ident,'ok':True,'transport':'webrtc','app':'LifeTech Test'}
+    if op=='ping':return {'id':ident,'ok':True,'transport':'webrtc','app':'Swarm Control'}
     if op=='manifest':return {'id':ident,'ok':True,**manifest}
     if op=='chunk':
         offset=message.get('offset')
@@ -54,7 +54,7 @@ class Deployment:
     def __init__(self):
         self.loop=asyncio.new_event_loop()
         self.peers={}
-        threading.Thread(target=self.loop.run_forever,daemon=True,name='lifetech-p2p').start()
+        threading.Thread(target=self.loop.run_forever,daemon=True,name='swarm-control-p2p').start()
     async def close(self,ident):
         record=self.peers.pop(ident,None)
         if record:
@@ -80,7 +80,7 @@ class Deployment:
         @pc.on('datachannel')
         def channel(dc):
             record['channels']+=1
-            if record['channels']!=1 or dc.label!='lifetech-test.v1':dc.close();return
+            if record['channels']!=1 or dc.label!='swarm-control-test.v1':dc.close();return
             @dc.on('message')
             def incoming(raw):
                 if time.time()-record['created']>=LIFETIME or not valid():
