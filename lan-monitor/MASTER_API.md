@@ -274,3 +274,33 @@ search, history selection, and filter reset at phone, landscape, and desktop siz
 It requires no production data or credentials and runs with external networking
 disabled during the test phase. CodeCollective is included in source publication,
 worker checkout, preparation, and cache fingerprints for this suite.
+
+## Phone / internet Codex controls
+
+`https://compai.lifetech.fyi/` serves the dedicated owner-authenticated Codex page.
+The HTTPS tunnel routes only to the loopback service `codex_remote.py` on port
+8091. It does not publish the distributed test master or Docker. The existing
+LAN Codex route stays blocked.
+
+Unlock with the separate `~/.config/map-master/codex-token`; the master and
+launcher credentials do not authorize this page. The browser retains this token
+only in memory until Lock, reload, or tab closure. No credential is placed in a
+URL, source file, or browser storage. A paired phone tab may be unlocked locally
+through its authorized USB debugging connection without putting the token in
+chat or a command argument. Read history, choose a thread, then Send a new
+message or Steer a running turn. Existing VS Code thread permissions apply.
+
+The public service requires its configured HTTPS Host, validates browser Origin
+on commands, bounds requests, disables framing/caching, serves only a fixed asset
+list, and exposes only the authenticated Codex read/command routes. The origin
+port binds to loopback. The tunnel is outbound; no router port forwarding is
+needed. The app uses ordinary HTTP behind TLS and can be served by another HTTPS
+reverse proxy by setting `CODEX_PUBLIC_ORIGIN`.
+
+Both user services are enabled for restart: `compai-codex.service` and
+`compai-codex-tunnel.service`. Their reviewable unit files are under `systemd/`.
+The connector binary is installed in `~/.local/bin/cloudflared` and its tunnel
+credential is an owner-only file at
+`~/.config/map-master/compai-tunnel-token`. Never commit or share that credential.
+The Cloudflare connector is transport infrastructure; application authorization
+continues to use the independent owner credential on CompAI.

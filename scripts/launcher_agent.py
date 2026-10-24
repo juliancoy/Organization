@@ -180,8 +180,14 @@ class Agent:
             reply.update(nonce=value['nonce'], node=config['name'], time=time.time())
             nonce = secrets.token_bytes(12)
             return nonce+cipher.encrypt(nonce,json.dumps(reply).encode(),VERSION.encode())
-        except Exception:
-            raise ValueError('Agent authentication rejected')
+        except Exception as error:
+            import logging
+            reason=str(error)
+            if reason not in {'Controller signature rejected','Execution requires the enrolled controller',
+                              'Invalid request identity or freshness','Replayed request or request limit'}:
+                reason='Invalid encrypted request or response'
+            logging.warning('Agent RPC rejected: %s; replay entries=%d',reason,len(self.nonces))
+            raise ValueError('Agent authentication rejected') from None
 
     def folder(self, ident):
         if not isinstance(ident,str) or not re.fullmatch(r'[0-9TZ-]+-[a-f0-9]{8}(?:-p2p)?',ident):

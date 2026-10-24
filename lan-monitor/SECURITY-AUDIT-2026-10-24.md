@@ -48,3 +48,23 @@ The controller signing key is `~/.config/map-master/controller-signing.key` (raw
 ## AI-specific guidance
 
 The OpenAI [agent safety guidance](https://developers.openai.com/api/docs/guides/agent-builder-safety) describes prompt injection as a risk requiring layered controls, including untrusted-data isolation, structured extraction, and limited tool authority. Labels or a system prompt alone are not an enforceable security boundary. This audit's regression tests verify deterministic service behavior, not model resistance to every adversarial prompt.
+
+## Follow-up: owner-requested phone access
+
+Later on October 24, the owner requested access from cellular and other Wi-Fi
+networks. `https://compai.lifetech.fyi/` now publishes a separate narrow Codex
+service through an outbound HTTPS tunnel. This is an intentional addition to the
+original localhost-only arrangement; the LAN Codex route remains blocked.
+The service on loopback port 8091 requires the separate Codex owner bearer,
+restricts Host/Origin and static assets, caps command bodies, and exposes only
+Codex history/command routes. It does not publish the master, shell, or Docker
+APIs. The tunnel credential and owner credential are separate private files.
+Cloudflare is part of the transport trust boundary; the origin application can
+also sit behind another HTTPS reverse proxy.
+
+The attached Pixel 3 successfully authenticated through the public HTTPS URL,
+sent a harmless instruction, and displayed the Codex reply. The test performed no
+shell/file actions. The browser holds the owner credential only in tab memory.
+Unauthenticated public history returns 401; other master APIs return 404; LAN
+Codex still returns 403. Local validation passed 135 monitor tests, including
+four new remote authorization and command-target regression tests.
