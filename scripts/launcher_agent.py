@@ -158,16 +158,16 @@ class Agent:
         return self.root/ident
 
     def dispatch(self, op, args):
-        policy=worker_policy(self.config)
-        if op=='worker.policy':return policy
+        if op=='worker.policy':return worker_policy(self.config)
         if op in ('job.start','source.stage','p2p.start','image.pull') or (op=='job.feed' and args.get('tasks')):
+            policy=worker_policy(self.config)
             if not policy['accepting_jobs']:raise RuntimeError(policy['reason'])
         if op in ('tests.request','tests.status'):
             config=json.loads(self.config.read_text())
             if not config.get('master_api'):raise RuntimeError('This launcher is not a test master')
             token=(self.config.parent/'master-api-token').read_text().strip()
             if op=='tests.request' and (set(args)-{'paths','suites','force'}):raise ValueError('Invalid test selection')
-            request=urllib.request.Request('http://127.0.0.1:8088/api/v1/master/'+('test-requests' if op=='tests.request' else 'status'),
+            request=urllib.request.Request('http://127.0.0.1:8089/api/v1/master/'+('test-requests' if op=='tests.request' else 'status'),
                 data=json.dumps(args).encode() if op=='tests.request' else None,
                 headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
             with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request,timeout=30) as response:
@@ -190,6 +190,7 @@ class Agent:
             result=subprocess.run([sys.executable,'-c',METRIC_SAMPLE],capture_output=True,text=True,timeout=8,check=True)
             return json.loads(result.stdout)
         if op == 'status':
+            policy=worker_policy(self.config)
             config = json.loads(self.config.read_text())
             import socket
             with self.client() as client:

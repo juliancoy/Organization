@@ -591,3 +591,36 @@ coverage; it does not yet cover interactive identity login or mobile WebRTC.
 The run owns a new Chrome tab and closes it afterward. It removes its USB forwards
 and restores the prior keep-awake setting. Screenshots, per-check durations and a
 JSON report are retained with the run; the device card links to that exact run.
+
+
+### Launcher participation and remote jobs
+
+Open `http://127.0.0.1:8791/launcher` on an enrolled machine (or `./run.py --swarm`).
+The loopback page shows enrollment and live WebRTC channels, submits authenticated
+focused test requests, and controls worker participation. Choose Automatic (AC
+power only), Always accept jobs, or Submit only. `./run.py --worker-mode
+{auto,always,paused}` sets the same persistent local policy without restarting.
+New jobs, source preparation, image pulls and P2P browsers obey this policy;
+already accepted work finishes. Battery state is read from Linux power-supply
+telemetry. An unreadable policy declines new work. Submission stays available.
+
+The master accepts `tests.request` and `tests.status` through the existing
+AES-GCM agent protocol. Only its private launcher config enables `master_api`,
+and its REST credential stays in `master-api-token` beside that config, never on
+client laptops. This retains the existing fleet-level execution trust model.
+
+Enrolled internet nodes map fleet names to registration peer IDs in
+`internet_nodes`. The loopback port 8791 gateway tries the enrolled LAN endpoint
+first, then WebRTC on connection failure. It does not retry ambiguous completed
+writes. WebRTC transports the same encrypted requests with nonce, freshness,
+identity and replay checks; chunk assembly, concurrency and response sizes are
+bounded. Registry layer downloads also use this gateway. Signaling and job
+execution remain separate: registration alone is not proof of a working channel.
+The local Test WebRTC path control explicitly bypasses LAN HTTP.
+
+The current signaling origin is configurable per enrollment; this integration
+uses no proprietary VPN client. Internet reachability and ICE connectivity are
+required. Restrictive NATs may require a standard TURN relay; the deployed
+signaling service currently reports no configured TURN relay. Ethernet plus
+Xfinity Wi-Fi can be used together: keep the test LAN route on Ethernet and the
+internet default route on Wi-Fi. A captive hotspot sign-in is still required.

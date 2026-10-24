@@ -157,7 +157,20 @@ def execute(service, hosts, images):
                         if changed or (closed and not close_sent):service.save()
                 if outgoing or (closed and not close_sent) or release_p2p:
                     p2p_finished=network.done.is_set()
-                    client.call('job.feed', {'id': ident, 'tasks': outgoing, 'close': closed,'p2p_finished':p2p_finished})
+                    try:
+                        client.call('job.feed', {'id': ident, 'tasks': outgoing, 'close': closed,'p2p_finished':p2p_finished})
+                    except RuntimeError:
+                        policy=client.call('worker.policy')
+                        if policy['accepting_jobs'] or not outgoing:raise
+                        # The agent rejected the whole feed before accepting files.
+                        # Preserve already running jobs and return unaccepted work.
+                        with service.lock:
+                            for task in outgoing:
+                                run['pending_tasks'].append(task);active.discard(task)
+                                host['jobs'].pop(task,None);host['suites'].remove(task)
+                            host['worker_policy']=policy;service.save()
+                        closed=True
+                        client.call('job.feed', {'id':ident,'tasks':[],'close':True,'p2p_finished':p2p_finished})
                     p2p_released=p2p_finished
                     close_sent = closed
             else:

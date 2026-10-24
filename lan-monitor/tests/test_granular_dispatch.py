@@ -15,6 +15,7 @@ class DispatchLifecycleTests(unittest.TestCase):
         state={'status':'running','closes':0}
         host={'host':'worker','session':{'machine':'machine'},'agent_status':{'source_revision':'source'}}
         def call(operation,args=None,**kwargs):
+            if operation=='worker.policy':return {'accepting_jobs':True,'reason':'Accepting worker jobs'}
             if operation=='status':return {'ready':True,'machine':'machine','source_revision':'source'}
             if operation=='job.start':
                 events.append({'kind':'capacity','cpus':4,'memory_mb':4096})

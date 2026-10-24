@@ -14,6 +14,8 @@ class FileQueueProtocolTests(unittest.TestCase):
         ident='20261024T120000Z-1234abcd'
         with tempfile.TemporaryDirectory() as folder:
             agent=Agent.__new__(Agent)
+            agent.config=Path(folder)/'peers.json'
+            (Path(folder)/'worker-policy.json').write_text('{"mode":"always"}')
             agent.root=Path(folder)
             agent.lock=threading.RLock()
             agent.jobs={ident:{'status':'running'}}
