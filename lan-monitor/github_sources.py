@@ -7,7 +7,7 @@ import re
 import subprocess
 import tempfile
 
-REPOSITORIES=('.', 'OrgPortal', 'PIdP')
+REPOSITORIES=('.', 'OrgPortal', 'PIdP', 'CodeCollective')
 
 
 def github_url(value):

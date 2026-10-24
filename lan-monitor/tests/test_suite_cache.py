@@ -60,3 +60,15 @@ class SuiteCacheTests(unittest.TestCase):
         self.assertEqual(before,cache.fingerprint('web',worker(),run,image))
         entries[0]=('web/src/App.tsx',b'web-v2')
         self.assertNotEqual(before,cache.fingerprint('web',worker(),run,image))
+
+    def test_usajobs_styles_and_test_changes_invalidate_browser_results(self):
+        cache=SuiteCache('.','.',{'mobile':{'base':'usajobs','image':'browser','test':['node','--test']}})
+        image=Mock();image.fingerprint.return_value='browser-v1'
+        run={'repositories':{'.':{'commit':'root','url':'root-url'},'CodeCollective':{'commit':'site','url':'site-url'}}}
+        entries=[('usa/index.html',b'layout-v1'),('css/master.css',b'css-v1'),('tests/usajobs-mobile.test.cjs',b'test-v1'),('README.md',b'docs-v1')]
+        cache.tree=lambda name,commit:[('lan-monitor/distributed_worker.py',b'runner-v1')] if name=='.' else entries
+        before=cache.fingerprint('mobile',worker(),run,image)
+        entries[3]=('README.md',b'docs-v2')
+        self.assertEqual(before,cache.fingerprint('mobile',worker(),run,image))
+        entries[0]=('usa/index.html',b'layout-v2')
+        self.assertNotEqual(before,cache.fingerprint('mobile',worker(),run,image))

@@ -11,6 +11,7 @@ INPUTS={
  'monitor':{'.':('lan-monitor/*.py','lan-monitor/tests/')},
  'map':{'.':('lan-monitor/*.js','lan-monitor/view/','lan-monitor/package.json','lan-monitor/package-lock.json','lan-monitor/tests/*.js')},
  'workspace':{'.':('*.py','tests/','scripts/','vm/','Dockerfile.launcher')},
+ 'usajobs':{'CodeCollective':('usa/','css/','run.py','tests/usajobs-mobile.test.cjs')},
  'org-api':{'OrgPortal':('org-worker/','chat-worker/','shared/','docs/','scripts/','package.json','package-lock.json','tsconfig.json')},
  'chat':{'OrgPortal':('chat-worker/','shared/','package.json','package-lock.json','tsconfig.json')},
  'web':{'OrgPortal':('web/','shared/','docs/','scripts/','package.json','package-lock.json','tsconfig.json')},

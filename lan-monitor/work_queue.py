@@ -10,6 +10,7 @@ FILES = {
     'monitor': ('.', 'lan-monitor/', ('tests/**/test*.py',)),
     'map': ('.', 'lan-monitor/', ('tests/*.test.js',)),
     'workspace': ('.', '', ('tests/**/test*.py',)),
+    'usajobs': ('CodeCollective', '', ('tests/usajobs-mobile.test.cjs',)),
     'org-api': ('OrgPortal', 'org-worker/', ('test/*.test.ts',)),
     'chat': ('OrgPortal', 'chat-worker/', ('test/*.test.ts',)),
     'web': ('OrgPortal', 'web/', ('src/**/*.test.ts', 'src/**/*.test.tsx')),
@@ -48,7 +49,7 @@ def catalog(root, specs, repositories=None, bases=None):
             elif base == 'web':
                 command = ['npm', 'test', '--', path, '--maxWorkers=1']
             else:
-                command = ['node', *(['--import', 'tsx'] if base != 'map' else []), '--test', '--test-concurrency=1', path]
+                command = ['node', *(['--import', 'tsx'] if base not in ('map','usajobs') else []), '--test', '--test-concurrency=1', path]
             ident = base + '--' + hashlib.sha256(path.encode()).hexdigest()[:16]
             specs[ident] = {**specs[base], 'base': base, 'file': path, 'test': command,
                             'name': specs[base]['name'] + ' · ' + path, 'cpus': 1,

@@ -28,6 +28,11 @@ class ScopeTests(unittest.TestCase):
     def test_suite_and_path_are_unioned(self):
         self.assertEqual(select(list(self.specs), self.specs, normalize(['lan-monitor/tests/test_one.py'], ['web'])), ['one','web','build'])
 
+    def test_usajobs_source_selects_the_real_codecollective_browser_suite(self):
+        specs = {'mobile': {'base': 'usajobs', 'file': 'tests/usajobs-mobile.test.cjs'}}
+        self.assertEqual(select(list(specs), specs, normalize(['CodeCollective/usa/index.html'])), ['mobile'])
+        self.assertEqual(select(list(specs), specs, normalize([], ['usajobs'])), ['mobile'])
+
     def test_invalid_selection_fails_closed(self):
         for value in (['../secret'], ['/tmp/test.py'], ['a/../../b']):
             with self.assertRaises(ValueError): normalize(value)

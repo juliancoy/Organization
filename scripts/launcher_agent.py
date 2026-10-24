@@ -371,9 +371,9 @@ class Agent:
             work=folder/'source'
             manifest=args['manifest']
             repositories=manifest.get('repositories',{})
-            if not {'.','OrgPortal','PIdP'}.issubset(repositories) or len(repositories)>24:raise ValueError('Expected the three GitHub repositories and bounded submodules')
+            if not {'.','OrgPortal','PIdP','CodeCollective'}.issubset(repositories) or len(repositories)>24:raise ValueError('Expected the application GitHub repositories and bounded submodules')
             for name in repositories:
-                if name not in ('.','OrgPortal','PIdP') and (Path(name).is_absolute() or '..' in Path(name).parts or not name.startswith(('OrgPortal/','PIdP/'))):raise ValueError('Invalid nested repository path')
+                if name not in ('.','OrgPortal','PIdP','CodeCollective') and (Path(name).is_absolute() or '..' in Path(name).parts or not name.startswith(('OrgPortal/','PIdP/','CodeCollective/'))):raise ValueError('Invalid nested repository path')
             for repo in repositories.values():
                 if not re.fullmatch(r'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.git',repo.get('url','')) or not re.fullmatch('[a-f0-9]{40}',repo.get('commit','')):raise ValueError('Invalid GitHub repository or commit')
             refs={name:{key:repo[key] for key in ('url','commit')} for name,repo in repositories.items()}
@@ -426,7 +426,7 @@ class Agent:
                         prepared=json.loads(marker.read_text())
                         target=manifest['hosts'][next(i for i,h in enumerate(manifest['hosts']) if h['host']==json.loads(self.config.read_text())['name'])]
                         if prepared.get('source_sha256')!=manifest['source_sha256'] or any(prepared.get('images',{}).get(k)!=v for k,v in target['images'].items()):continue
-                        if not all((source/name/'.git').exists() for name in ('.','OrgPortal','PIdP')):continue
+                        if not all((source/name/'.git').exists() for name in ('.','OrgPortal','PIdP','CodeCollective')):continue
                         source.rename(work)
                         (work/'distributed-plan.json').write_text(json.dumps(manifest))
                         previous['status']='consumed'
@@ -439,7 +439,7 @@ class Agent:
         # The runner always comes from Organization; application repositories are
         # selected by the actual shard, not by the whole fleet's manifest.
         application={'org-api':'OrgPortal','chat':'OrgPortal','web':'OrgPortal',
-                     'visual':'OrgPortal','identity':'PIdP','identity-python':'PIdP'}
+                     'visual':'OrgPortal','identity':'PIdP','identity-python':'PIdP','usajobs':'CodeCollective'}
         known=set(application)|{'monitor','map','workspace','p2p'}
         needed={'.'}
         for suite in target['suites']:

@@ -25,7 +25,7 @@ class CheckoutTests(unittest.TestCase):
             git(cache,'fetch','--depth=1',str(source),commit+':refs/cache/'+commit)
             self.assertEqual(git(cache,'for-each-ref','--format=%(refname)','refs/heads'),'')
             config=root/'peers.json';config.write_text(json.dumps({'name':'fixture.local'}))
-            agent=Agent.__new__(Agent);agent.root=jobs;agent.config=config;agent.lock=threading.RLock()
+            agent=Agent.__new__(Agent);agent.root=jobs;agent.config=config;agent.lock=threading.RLock();agent.jobs={};agent.changed=threading.Condition(agent.lock)
             work=jobs/'run'/'source';work.mkdir(parents=True)
             manifest={'repositories':{'.':{'url':url,'commit':commit}},'hosts':[{'host':'fixture.local','suites':['monitor'],'jobs':{}}]}
             job={'sequence':0,'events':[]}

@@ -62,7 +62,7 @@ class LiveCoordinationTests(unittest.TestCase):
             return (('a'*40+'\n') if operation=='rev-parse' else 'https://github.com/example/repo.git\n' if operation=='remote' else '').encode()
         with patch('snapshot_staging.subprocess.check_output',side_effect=git):
             refs=snapshot('/checkout')
-        self.assertEqual(set(refs),{'.','OrgPortal','PIdP'})
+        self.assertEqual(set(refs),{'.','OrgPortal','PIdP','CodeCollective'})
         self.assertTrue(all(c[3] in ('rev-parse','remote','ls-tree') for c in calls))
 
     def test_matching_prepared_checkout_is_consumed_without_touching_an_active_checkout(self):
@@ -73,7 +73,7 @@ class LiveCoordinationTests(unittest.TestCase):
             agent.config=root/'peers.json';agent.config.write_text(json.dumps({'name':'worker'}))
             old='20261024T000000Z-1234abcd';new='20261024T000001Z-1234abcd'
             source=agent.folder(old)/'source';source.mkdir(parents=True)
-            for repo in ('.','OrgPortal','PIdP'):(source/repo/'.git').mkdir(parents=True)
+            for repo in ('.','OrgPortal','PIdP','CodeCollective'):(source/repo/'.git').mkdir(parents=True)
             (source/'pinned.txt').write_text('immutable source')
             marker={'source_sha256':'digest','images':{'python':'sha256:abc'},'packages':['web']}
             (source/'.prepared-packages.json').write_text(json.dumps(marker))

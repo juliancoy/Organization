@@ -15,6 +15,7 @@ class FileQueueTests(unittest.TestCase):
             '.': ['lan-monitor/tests/test_monitor.py', 'lan-monitor/tests/model.test.js', 'tests/test_tool.py'],
             'OrgPortal': ['org-worker/test/api.test.ts', 'chat-worker/test/chat.test.ts',
                           'web/src/root.test.ts', 'web/src/nested/component.test.tsx', 'web/src/not-a-test.ts'],
+            'CodeCollective': ['tests/usajobs-mobile.test.cjs'],
             'PIdP': ['serverless/test/identity.test.mjs', 'tests/test_one.py', 'tests/nested/two_test.py'],
         }
         repos = {name: {'commit': name+'-pinned'} for name in trees}
@@ -22,18 +23,22 @@ class FileQueueTests(unittest.TestCase):
         def tree(command, **kwargs):
             calls.append(command)
             name = Path(command[2]).name
-            repo = name if name in ('OrgPortal','PIdP') else '.'
+            repo = name if name in ('OrgPortal','PIdP','CodeCollective') else '.'
             return '\0'.join(trees[repo]).encode()
         specs = copy.deepcopy(SUITES)
         with patch('work_queue.subprocess.check_output', side_effect=tree):
             tasks = catalog('/checkout', specs, repos)
         files = [specs[task].get('file') for task in tasks if specs[task].get('file')]
         self.assertEqual(len(tasks), len(set(tasks)))
+        self.assertIn('tests/usajobs-mobile.test.cjs', files)
+        mobile = next(specs[task] for task in tasks if specs[task].get('base') == 'usajobs')
+        self.assertNotIn('tsx', mobile['test'])
+        self.assertEqual(mobile['cwd'], 'CodeCollective')
         self.assertIn('src/root.test.ts', files)
         self.assertIn('src/nested/component.test.tsx', files)
         self.assertIn('tests/nested/two_test.py', files)
         self.assertNotIn('src/not-a-test.ts', files)
-        self.assertEqual(len(files), 10)
+        self.assertEqual(len(files), 11)
         self.assertEqual({call[-1] for call in calls}, {r['commit'] for r in repos.values()})
         self.assertIn('web--build-bundle', tasks)
         self.assertIn('web--typecheck', tasks)

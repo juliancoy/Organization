@@ -9,7 +9,7 @@ import time
 import uuid
 
 from agent_client import AgentClient, CONFIG, wait_for_events
-from github_sources import github_url, source_digest
+from github_sources import REPOSITORIES, github_url, source_digest
 
 
 def snapshot(root):
@@ -25,7 +25,7 @@ def snapshot(root):
                 _,child=entry.split('\t',1)
                 nested=str(Path(name)/child)
                 if (Path(root)/nested/'.git').exists():read(nested)
-    for name in ('.','OrgPortal','PIdP'):read(name)
+    for name in REPOSITORIES:read(name)
     return refs
 
 
@@ -82,7 +82,7 @@ class SnapshotStaging:
             status=client.call('status')
             if not {'snapshot-stage','event-wait'}.issubset(status.get('capabilities',[])):
                 update(status='waiting_for_launcher_update');return
-            bases=['monitor','map','workspace','org-api','chat','web','visual','identity','identity-python']
+            bases=['monitor','map','workspace','org-api','chat','web','visual','identity','identity-python','usajobs']
             images={}
             missing=[]
             for image in dict.fromkeys([PYTHON]+[SUITES[b]['image'] for b in bases]):

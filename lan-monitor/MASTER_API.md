@@ -259,3 +259,14 @@ explicitly marked `coordinator_estimate`.
 Request records also retain `queue_seconds`, `duration_seconds` (execution wall
 time including preparation), and `total_seconds` from submission to completion.
 Parallel job durations must not be summed and presented as elapsed run time.
+
+### USAJOBS mobile browser coverage
+
+Request `{"suites":["usajobs"],"force":true}` through the test-request endpoint
+(or select `CodeCollective/usa/index.html`). The `usajobs` file job uses the pinned
+CodeCollective commit, a matching Playwright package/browser image, and local
+synthetic snapshots. It checks visible scrollable results, touch navigation,
+search, history selection, and filter reset at phone, landscape, and desktop sizes.
+It requires no production data or credentials and runs with external networking
+disabled during the test phase. CodeCollective is included in source publication,
+worker checkout, preparation, and cache fingerprints for this suite.
