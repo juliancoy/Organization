@@ -189,7 +189,7 @@ def main():
     if manifest.get('granular') or any('--' in task for task in target['suites']):
         from work_queue import catalog
         catalog(work, SUITES, manifest['repositories'],
-                bases=None if manifest.get('granular') else {task.split('--',1)[0] for task in target['suites']})
+                bases={task.split('--',1)[0] for task in manifest.get('task_catalog',target['suites'])})
     # No inherited deployment, cloud, database, or SSH credentials enter a job.
     env = {key: value for key, value in os.environ.items() if key in ('PATH', 'LANG', 'LC_ALL', 'HOME')}
     env.update(CI='true', PYTHONDONTWRITEBYTECODE='1',

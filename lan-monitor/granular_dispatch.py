@@ -97,7 +97,7 @@ def execute(service, hosts, images):
                 if result['status'] not in ('running', 'starting'):
                     if cursor != previous:continue  # Drain final events without feeding an exited worker.
                     if result['status'] != 'completed' or active:
-                        raise RuntimeError(result.get('error') or 'Worker ended before its tasks completed')
+                        raise RuntimeError(result.get('error') or ('Worker ended before its tasks completed: '+''.join(host.get('logs',[])[-3:])))
                     break
                 outgoing = []
                 with service.lock:

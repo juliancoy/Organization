@@ -111,3 +111,4 @@ main{max-width:1440px;margin:auto;padding:28px}a{color:#b7e4cf}.intro,.panel-hea
 .suite-tile,.suite-cell{line-height:1.5;min-width:0;overflow-wrap:anywhere}
 @media(max-width:1000px){.levels-workspace{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:760px){.panel-heading{gap:14px}.flow-controls{display:grid;grid-template-columns:1fr;width:100%}.flow-controls label,.flow-controls select{width:100%;max-width:100%;min-width:0}.pressure-directions{flex-wrap:wrap}.levels-devices h3 small{white-space:normal}.panel{padding:16px}.intro{flex-wrap:wrap}}
+@media(max-width:560px){.flow-contributor{display:grid;grid-template-columns:minmax(0,1fr);gap:8px}.flow-amount{display:flex;align-items:baseline;justify-content:space-between;text-align:left;gap:12px}.flow-amount small{max-width:none}.flow-identity strong{font-size:14px}.flow-heading{flex-wrap:wrap}.pressure-state{max-width:none}.docker-download-row{min-width:0}}

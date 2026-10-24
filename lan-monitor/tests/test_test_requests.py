@@ -35,6 +35,16 @@ class ScopeTests(unittest.TestCase):
         with self.assertRaises(ValueError): normalize()
         with self.assertRaises(ValueError): select(list(self.specs), self.specs, normalize(['unknown/file.py']))
 
+    def test_catalog_only_reads_repositories_needed_by_selected_bases(self):
+        from work_queue import catalog
+        from distributed_worker import SUITES
+        specs=copy.deepcopy(SUITES)
+        with patch('work_queue.subprocess.check_output',return_value=b'lan-monitor/tests/test_one.py\0') as git:
+            tasks=catalog('/workspace',specs,{'.':{'commit':'abc'}},bases={'monitor'})
+        self.assertEqual(len(git.call_args_list),1)
+        self.assertEqual(git.call_args.args[0][2],'/workspace')
+        self.assertTrue(any(task.startswith('monitor--') for task in tasks))
+
     def test_p2p_selection_does_not_add_ordinary_tests(self):
         self.assertEqual(select(list(self.specs), self.specs, normalize([], ['p2p'])), [])
 

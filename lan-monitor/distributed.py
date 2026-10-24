@@ -171,6 +171,9 @@ class DistributedTests:
             if kind=='source':
                 host.setdefault('source_sync',{})[event['repository']]={key:event[key] for key in ('commit','status') if key in event}
                 host['status']='running' if len(host['source_sync'])==len(self.run['repositories']) and all(row.get('status')=='verified' for row in host['source_sync'].values()) else 'preparing'
+            if kind == 'log' and not event.get('suite'):
+                host.setdefault('logs',[]).append(str(event.get('line',''))[:2000])
+                host['logs']=host['logs'][-80:]
             suite = event.get('suite')
             if suite in host['jobs']:
                 job = host['jobs'][suite]
