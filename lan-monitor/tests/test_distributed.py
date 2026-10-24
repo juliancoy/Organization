@@ -44,6 +44,25 @@ class DistributedTestsTests(unittest.TestCase):
         self.assertEqual([host['org_api_shard'] for host in hosts],
                          [{'index':i,'count':3} for i in range(1,4)])
 
+    def test_readiness_precedes_sharding_so_offline_workers_leave_no_coverage_holes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            service=DistributedTests(state=folder)
+            original=plan([{'host':name+'.local'} for name in ('a','b','offline')])
+            service.start(selected_hosts=original,launch=False)
+            with patch('agent_client.AgentSessions') as sessions, patch('distributed.ImageDistributor') as images, patch('github_sources.publish',side_effect=RuntimeError('stop after planning')):
+                images.return_value.failures={}
+                sessions.return_value.accessible.return_value=original
+                sessions.return_value.verify.return_value=original[:2]
+                service.execute()
+            active=[h for h in service.run['hosts'] if not h.get('excluded')]
+            self.assertEqual([h['org_api_shard'] for h in active],[{'index':1,'count':2},{'index':2,'count':2}])
+            for suite in ('web','visual','identity','chat','workspace','identity-python'):
+                self.assertEqual(sum(suite in h['suites'] for h in active),1)
+            offline=next(h for h in service.run['hosts'] if h.get('excluded'))
+            self.assertEqual(offline['host'],'offline.local')
+            self.assertEqual(offline['jobs'],{})
+            self.assertEqual(offline['exclusion_stage'],'launcher_verification')
+
     def test_github_urls_and_pinned_source_manifest(self):
         from github_sources import github_url,source_digest
         self.assertEqual(github_url('git@github.com:owner/Organization.git'),'https://github.com/owner/Organization.git')

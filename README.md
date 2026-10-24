@@ -8,7 +8,9 @@ Run `./push-all.sh --dry-run --deploy-all` to inspect scope, then
 branches, validates, commits, pushes, calls the global distributed suite, and
 blocks deployment unless the tested revisions and suites pass. Follow progress
 at `http://map.local/tests.html`. Matching active runs are reused; unrelated runs
-finish before a new release run starts.
+finish before a new release run starts. Workers are authenticated before API
+shards are assigned, so an offline enrolled machine stays visible as excluded
+while the entire suite runs across the available worker pool.
 
 OrgPortal uses its own pinned release container. Identity, chat, CodeCollective,
 MedTech/LifeTech, Deism production Pages and the peer Worker retain their owning

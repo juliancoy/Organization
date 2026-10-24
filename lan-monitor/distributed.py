@@ -290,6 +290,8 @@ class DistributedTests:
                     if host['host'] in names:continue
                     reason = host.get('error') or images.failures.get(host['host'],{}).get('reason') or 'Worker verification failed'
                     host.update(status='unavailable',excluded=True,exclusion_stage=stage,error=reason,finished=now())
+                    if not run.get('targeted'):
+                        host.update(jobs={},suites=[])
                     for job in host.get('jobs',{}).values():
                         job.update(status='unavailable',not_executed=True,phase=stage)
                         job.setdefault('logs',[]).append('Not executed: '+reason)
@@ -303,12 +305,13 @@ class DistributedTests:
                     self.save()
             reachable = sessions.accessible()
             exclude(hosts,reachable,'preflight')
-            hosts = reachable if run.get('targeted') else plan(reachable) if reachable else []
+            hosts = reachable
             images.hosts = hosts
             publish()
             initialized = sessions.verify(hosts) if hosts else []
             exclude(hosts,initialized,'launcher_verification')
-            hosts = initialized
+            hosts = initialized if run.get('targeted') else plan(initialized) if initialized else []
+            images.hosts = hosts
             publish()
             if not hosts:
                 raise RuntimeError('No verified connected workers; see excluded machine details')
@@ -433,7 +436,7 @@ class DistributedTests:
                 if any('p2p' in h['jobs'] for h in hosts):self.network(run,images)
             with self.lock:
                 run['status'] = ('failed' if any(host['status'] not in ('passed','partial') for host in hosts) else
-                                 'partial' if excluded or any(host['status']=='partial' for host in hosts) else 'passed')
+                                 'partial' if (excluded and run.get('targeted')) or any(host['status']=='partial' for host in hosts) else 'passed')
         except Exception as exc:
             with self.lock:
                 self.run.update(status='failed', error=type(exc).__name__ + ': ' + str(exc)[:500])
