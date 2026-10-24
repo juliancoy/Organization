@@ -1,4 +1,4 @@
-export type Ticket = {aud: 'archive-peers-v1' | 'launcher-enroll-v1' | 'launcher-session-v1' | 'launcher-admin-v1'; room: string; peer: string; iat: number; exp: number};
+export type Ticket = {aud: 'archive-peers-v1' | 'launcher-enroll-v1' | 'launcher-session-v1' | 'launcher-admin-v1' | 'launcher-backup-v1'; room: string; peer: string; iat: number; exp: number};
 export const ROOM = /^[a-f0-9]{64}$/;
 const encoder = new TextEncoder();
 

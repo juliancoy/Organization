@@ -116,8 +116,15 @@ name coverage is recorded without logging values. Coverage is not proof that the
 provided values match production; confirm them during an authentication restore drill.
 
 Chat messages and memberships are in D1; the current chat Durable Object holds live
-WebSocket connections only, which clients re-establish. In-flight push queues are
-not copied: durable outboxes must be reconciled before replay. Other unhandled
+WebSocket connections only, which clients re-establish. Launcher Durable Object
+registrations are exported separately through a short-lived, object-scoped backup
+ticket. This read-only export retains credential hashes, revocation state and
+the original expiry; it never returns device credentials. Original room mappings
+are retained for new/renewed registrations. Historical registrations without a
+room mapping are flagged for namespace preservation or operator re-enrollment.
+Registration files are hash-verified, included in local restores and available
+in the private dev baseline. Restore review must reapply revocations and expiry.
+Socket connections and expiring ICE credentials are re-established. Other unhandled
 bindings are explicitly reported as gaps. External calendars, Gmail/provider copies,
 and third-party systems are outside these workspace backups. Published dependencies
 are rebuilt from lockfiles; deployed static assets are rebuilt from source.

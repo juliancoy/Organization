@@ -84,6 +84,12 @@ def refresh(store, root):
             private_json(pending / 'buckets' / (bucket + '.json'), records)
             buckets[bucket] = {'objects': len(records), 'bytes': sum(r['size'] for r in records)}
             print('Prepared dev bucket:', bucket, len(records), flush=True)
+        if (source/'durable-objects').exists():
+            for path in (source/'durable-objects').rglob('*'):
+                if path.is_file() and digest(path)!=manifest['files'][str(path.relative_to(source))]:raise RuntimeError('Durable registration archive hash mismatch')
+            shutil.copytree(source/'durable-objects',pending/'durable-objects')
+            for path in (pending/'durable-objects').rglob('*'):
+                if path.is_file():path.chmod(0o400)
         private_json(pending / 'manifest.json', {
             'version': 1, 'createdAt': now(), 'sourceSnapshot': source.name,
             'sourceManifestSha256': digest(source / 'manifest.json'),
@@ -91,6 +97,7 @@ def refresh(store, root):
             'databases': databases, 'buckets': buckets, 'dataComplete': True,
             'serviceRecoveryComplete': not bool(manifest['gaps']), 'recoveryGaps': manifest['gaps'],
             'productionWrites': False, 'productionRuntimeConfigurationIncluded': False,
+            'launcherRegistrations':manifest.get('launcherRegistrations'),
         })
         pending.rename(final)
         private_json(root / 'latest.json', {'path': str(final.relative_to(root))})

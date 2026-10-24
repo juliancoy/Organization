@@ -7,19 +7,18 @@ from urllib.parse import urlencode
 
 MAX_FILE = 4 * 1024 * 1024
 MAX_TOTAL = 32 * 1024 * 1024
-MAX_FILES = 64
+# 68 layout captures, four contact sheets and bounded JSON reports.
+MAX_FILES = 96
 CHUNK = 8192
 NAME = re.compile(r'^[a-z0-9][a-z0-9._-]{0,120}\.(?:png|json)$')
 
 
 def publish(folder, suite, emit):
     total = 0
-    files = sorted(Path(folder).glob('*'))
+    files = [path for path in sorted(Path(folder).glob('*')) if path.is_file() and NAME.fullmatch(path.name)]
+    if len(files) > MAX_FILES:
+        raise ValueError('Too many visual artifacts')
     for path in files:
-        if not path.is_file() or not NAME.fullmatch(path.name):
-            continue
-        if len(files) > MAX_FILES:
-            raise ValueError('Too many visual artifacts')
         data = path.read_bytes()
         total += len(data)
         if len(data) > MAX_FILE or total > MAX_TOTAL:

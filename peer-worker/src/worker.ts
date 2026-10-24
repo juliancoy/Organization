@@ -31,6 +31,14 @@ export default {
       } catch {return json({error:'Invalid request'},400);}
       const token=request.headers.get('Authorization')?.replace(/^Bearer /,'')||'';
       try {
+        if(url.pathname==='/launchers/backup') {
+          const admin=await verifyTicket(token,env.PEER_SIGNING_KEY,Date.now(),['launcher-backup-v1']);
+          if(body.objectId!==undefined) {
+            if(typeof body.objectId!=='string'||!ROOM.test(body.objectId)||admin.room!==body.objectId)return json({error:'Object scope denied'},403);
+            return env.SIGNAL_ROOMS.get(env.SIGNAL_ROOMS.idFromString(body.objectId)).backup();
+          }
+          return env.SIGNAL_ROOMS.getByName(admin.room).backup();
+        }
         if(url.pathname==='/launchers/register') {
           const invite=await verifyTicket(token,env.PEER_SIGNING_KEY,Date.now(),['launcher-enroll-v1']);
           if(typeof body.name!=='string'||!body.name.trim()||body.name.length>100||typeof body.credential!=='string')return json({error:'Invalid device'},400);
@@ -109,6 +117,7 @@ export class SignalRoom extends DurableObject<Env> {
   async register(invite:Ticket,name:string,credential:string):Promise<Response> {
     const hash=await credentialHash(credential);
     const result=await this.ctx.storage.transaction(async storage=>{
+      await storage.put('room',invite.room);
       const previous=await storage.get<Device>('device:'+invite.peer);
       if(previous)return previous.hash===hash&&!previous.revoked&&previous.expires>Date.now()?previous:null;
       const devices=await storage.list<Device>({prefix:'device:',limit:1024});
@@ -118,6 +127,7 @@ export class SignalRoom extends DurableObject<Env> {
       return device;
     });
     if(!result)return json({error:'Invitation already consumed, revoked, or fleet full'},409);
+    await this.expire();
     return json({room:invite.room,peer:invite.peer,name:result.name,expires:result.expires});
   }
 
@@ -126,6 +136,7 @@ export class SignalRoom extends DurableObject<Env> {
     const device=await this.ctx.storage.transaction(async storage=>{
       const current=await storage.get<Device>('device:'+peer);
       if(!current||current.revoked||current.expires<=Date.now()||current.hash!==hash)return null;
+      await storage.put('room',room);
       await storage.put('device:'+peer,{...current,lastSeen:Date.now()});return current;
     });
     if(!device)return json({error:'Device registration invalid'},401);
@@ -160,6 +171,16 @@ export class SignalRoom extends DurableObject<Env> {
     const alarm=await this.ctx.storage.getAlarm();
     if (!alarm || alarm>ticket.exp*1000) await this.ctx.storage.setAlarm(ticket.exp*1000);
     return json(value);
+  }
+
+  async backup():Promise<Response> {
+    const result=await this.ctx.storage.transaction(async storage=>{
+      const devices=await storage.list<Device>({prefix:'device:',limit:1025});
+      if(devices.size>1024)throw Error('Device inventory exceeds its bound');
+      return {version:1,objectId:this.ctx.id.toString(),room:await storage.get<string>('room')||null,
+        devices:Array.from(devices,([key,value])=>({peer:key.slice(7),...value}))};
+    });
+    return json(result);
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
@@ -199,6 +220,12 @@ export class SignalRoom extends DurableObject<Env> {
     for (const [key,lease] of leases) {
       if (lease.expires<=Date.now()) await this.ctx.storage.delete(key);else next=Math.min(next,lease.expires);
     }
+    const devices=await this.ctx.storage.list<Device>({prefix:'device:',limit:1024});let active=0;
+    for(const [id,device] of devices) {
+      if(device.expires<=Date.now())await this.ctx.storage.delete(id);
+      else {active++;next=Math.min(next,device.expires);}
+    }
+    if(!active)await this.ctx.storage.delete('room');
     if (Number.isFinite(next)) await this.ctx.storage.setAlarm(next);else await this.ctx.storage.deleteAlarm();
   }
   async alarm() {await this.expire();}

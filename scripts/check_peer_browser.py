@@ -38,7 +38,7 @@ def main():
                         time.sleep(1)
                 else:
                     raise RuntimeError('Local peer Worker did not become ready')
-                for script in ['browser.py', 'public-browser.py']:
+                for script in ['backup.py', 'browser.py', 'public-browser.py']:
                     subprocess.run([sys.executable, str(ROOT / 'peer-worker/test' / script)], env=env, check=True)
             finally:
                 child.terminate()

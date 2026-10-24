@@ -19,6 +19,7 @@ import time
 import tomllib
 import urllib.error
 import urllib.request
+import urllib.parse
 import uuid
 from dotenv import dotenv_values
 
@@ -346,6 +347,52 @@ def verified_secret_escrow(required,values,proof,active):
                 and all(hashlib.sha256(values.get(name,'').encode()).hexdigest()==proof['fingerprints'][name] for name in required))
 
 
+def peer_object_inventory(account,namespace):
+    result=[];cursor=None;seen=set()
+    while True:
+        path='/workers/durable_objects/namespaces/'+namespace+'/objects?limit=1000'
+        if cursor:path+='&cursor='+urllib.parse.quote(cursor,safe='')
+        request=urllib.request.Request('https://api.cloudflare.com/client/v4/accounts/'+account+path,headers={'Authorization':'Bearer '+cf_token()})
+        with urllib.request.urlopen(request,timeout=90) as response:data=json.load(response)
+        if data.get('success') is not True:raise RuntimeError('Durable Object enumeration failed')
+        result.extend(row['id'] for row in data['result'] if row.get('hasStoredData'))
+        cursor=data.get('result_info',{}).get('cursor')
+        if not cursor:return sorted(set(result))
+        if cursor in seen:raise RuntimeError('Durable Object enumeration cursor repeated')
+        seen.add(cursor)
+
+
+def capture_peer_registrations(snapshot,account,escrow):
+    import re
+    from peer_archive import ticket
+    settings=json.loads((snapshot/'workers/organization-archive-peers/settings.json').read_text())
+    namespace=next(b['namespace_id'] for b in settings['bindings'] if b['type']=='durable_object_namespace' and b['name']=='SIGNAL_ROOMS')
+    key=escrow['organization-archive-peers']['PEER_SIGNING_KEY']
+    objects=peer_object_inventory(account,namespace);devices=0;unmapped=0
+    folder=snapshot/'durable-objects/launcher-registrations';folder.mkdir(parents=True,mode=0o700)
+    for ident in objects:
+        if not re.fullmatch('[a-f0-9]{64}',ident):raise RuntimeError('Invalid Durable Object identifier')
+        _,token=ticket(key,ident,60,'launcher-backup-v1')
+        request=urllib.request.Request('https://organization-archive-peers.jcloiacon.workers.dev/launchers/backup',
+            data=json.dumps({'objectId':ident}).encode(),headers={'Authorization':'Bearer '+token,'Content-Type':'application/json','User-Agent':'OrgPortal-CLI/0.1'})
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request,timeout=30) as response:
+            raw=response.read(2*1024*1024+1)
+        if len(raw)>2*1024*1024:raise RuntimeError('Registration export exceeds its bound')
+        value=json.loads(raw)
+        if value.get('version')!=1 or value.get('objectId')!=ident or not isinstance(value.get('devices'),list) or len(value['devices'])>1024:
+            raise RuntimeError('Registration export identity or bounds mismatch')
+        for device in value['devices']:
+            if not isinstance(device.get('name'),str) or len(device['name'])>100 or not re.fullmatch('[a-f0-9]{64}',device.get('hash','')) or not isinstance(device.get('revoked'),bool):
+                raise RuntimeError('Invalid registration record')
+            if str(uuid.UUID(device['peer']))!=device['peer'] or not all(isinstance(device.get(k),int) and device[k]>0 for k in ['expires','lastSeen']):
+                raise RuntimeError('Invalid registration identity or clock')
+        if value['devices'] and not value.get('room'):unmapped+=1
+        devices+=len(value['devices']);private_json(folder/(ident+'.json'),value)
+    if objects!=peer_object_inventory(account,namespace):raise RuntimeError('Registration object inventory changed during capture')
+    private_json(folder/'index.json',{'namespace':namespace,'objects':objects,'devices':devices,'unmappedRooms':unmapped,'capturedAt':now()})
+    return {'objects':len(objects),'devices':devices,'unmappedRooms':unmapped,'namespace':namespace}
+
+
 def backup(args):
     import boto3
     from botocore.config import Config
@@ -515,7 +562,15 @@ def backup(args):
                     if secrets and not validated: manifest['gaps'].append(worker+': secret escrow lacks current production-version validation'+(' (missing: '+', '.join(missing)+')' if missing else ''))
                 except RuntimeError:
                     manifest['gaps'].append(worker+': deployed settings/source could not be read; repository source retained')
-            # Sockets are transient; messages/membership are durable in the chat D1 export.
+            # Registration credentials are durable; socket and ICE leases are transient.
+            if 'organization-archive-peers' in inv['workers']:
+                try:
+                    manifest['launcherRegistrations']=capture_peer_registrations(pending,account,escrow)
+                    if manifest['launcherRegistrations']['unmappedRooms']:
+                        manifest['gaps'].append('Launcher registrations include historical unnamed rooms; retain the namespace or re-enroll those devices during recovery')
+                except (OSError,ValueError,KeyError,StopIteration,RuntimeError):
+                    manifest['gaps'].append('Launcher registration Durable Object capture failed; do not claim complete identity recovery')
+            # Chat messages/membership are durable in its D1 export.
             queue_recovery=False
             for binding in inv['otherBindings']:
                 if binding['kind']=='durable_objects' and binding['config'] in {'OrgPortal/chat-worker/wrangler.jsonc','peer-worker/wrangler.jsonc'}: continue
@@ -548,6 +603,7 @@ def backup(args):
                                       'serviceRecoveryComplete':not bool(manifest['gaps']),
                                       'emailBindingConfigurationCaptured':True,
                                       'queuedWorkRecoverableFromOutbox':queue_recovery,
+                                      'launcherRegistrationsCaptured':'launcherRegistrations' in manifest,
                                       'inFlightQueuesCaptured':False})
             private_json(pending/'manifest.json',manifest)
             verify_snapshot(pending,store)
@@ -646,6 +702,7 @@ def restore(args):
     if (snapshot/'workers').exists():shutil.copytree(snapshot/'workers',target/'workers')
     if (snapshot/'local').exists():shutil.copytree(snapshot/'local',target/'local')
     if (snapshot/'secrets').exists():shutil.copytree(snapshot/'secrets',target/'secrets')
+    if (snapshot/'durable-objects').exists():shutil.copytree(snapshot/'durable-objects',target/'durable-objects')
     private_json(target/'manifest.json',manifest)
     print(json.dumps({'restoredTo':str(target),'status':manifest['status'],'trafficEnabled':False,'gaps':manifest['gaps']}))
 
