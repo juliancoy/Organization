@@ -1,13 +1,15 @@
 const root = document.querySelector('#codex-context');
+const secureRemote=root.dataset.remote==='true' && location.protocol==='https:';
+const allowedBrowser=secureRemote || ['localhost','127.0.0.1','[::1]'].includes(location.hostname);
 const el = (tag, text, cls) => { const node = document.createElement(tag); if (text) node.textContent = text; if (cls) node.className = cls; return node; };
 let token = '', selected = null, offset = 0, next = null, busy = false, generation = 0;
 const heading = el('div', '', 'panel-heading');
-const title = el('div'); title.append(el('h2', 'Local VS Code · Codex'), el('p', 'Read conversations and send instructions to Codex on this machine.', 'muted'));
+const title = el('div'); title.append(el('h2', secureRemote ? 'CompAI · Codex' : 'Local VS Code · Codex'), el('p', secureRemote ? 'Read conversations and send instructions to Codex on CompAI.' : 'Read conversations and send instructions to Codex on this machine.', 'muted'));
 const lock = el('button', 'Lock'); lock.hidden = true; heading.append(title, lock);
 const unlock = el('form', '', 'codex-unlock');
 const label = el('label', 'Codex owner token '), password = el('input'); password.type = 'password'; password.autocomplete = 'off'; password.required = true; label.append(password);
-const connect = el('button', 'Connect'); connect.type = 'submit'; unlock.append(label, connect, el('small', 'Use localhost or an SSH tunnel. This separate owner token is never shared with test workers.'));
-if(!['localhost','127.0.0.1','[::1]'].includes(location.hostname)){password.disabled=true;connect.disabled=true;}
+const connect = el('button', 'Connect'); connect.type = 'submit'; unlock.append(label, connect, el('small', secureRemote ? 'Private control of CompAI. Your owner token stays in this tab until you lock or close it.' : 'Use localhost or an SSH tunnel. This separate owner token is never shared with test workers.'));
+if(!allowedBrowser){password.disabled=true;connect.disabled=true;}
 const status = el('p'); status.setAttribute('role', 'status');
 const workspace = el('div', '', 'codex-workspace'); workspace.hidden = true;
 const sidebar = el('div', '', 'codex-sidebar'), list = el('div', '', 'codex-list'), controls = el('div', '', 'codex-pagination');
@@ -22,7 +24,7 @@ let requestId = null;
 // UUID generation also works on trusted LAN HTTP, where randomUUID is unavailable.
 function uuid() { const b = crypto.getRandomValues(new Uint8Array(16)); b[6] = (b[6] & 15) | 64; b[8] = (b[8] & 63) | 128; return [...b].map((x, i) => ([4,6,8,10].includes(i) ? '-' : '') + x.toString(16).padStart(2, '0')).join(''); }
 async function api(path, body) {
-  if(!['localhost','127.0.0.1','[::1]'].includes(location.hostname))throw Error('Open this page through localhost or an SSH tunnel before entering a Codex owner token.');
+  if(!allowedBrowser)throw Error('Open this page through localhost or an SSH tunnel before entering a Codex owner token.');
   const response = await fetch('/api/v1/master/codex/' + path, { method: body ? 'POST' : 'GET', cache: 'no-store', headers: { Authorization: 'Bearer ' + token, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(20000) });
   const value = await response.json();
   if (!response.ok) throw new Error(value.error?.message || 'Codex connection failed');

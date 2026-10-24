@@ -207,7 +207,7 @@ def mutate(body):
             inputs = [{'type': 'text', 'text': text, 'text_elements': []}]
             params = {'conversationId': row['id']}
             if action == 'send':
-                params['turnStart'] = {'request': {'input': inputs, 'clientUserMessageId': request_id}, 'context': {'inheritThreadSettings': True}}
+                params['turnStart'] = {'request': {'threadId': row['id'], 'input': inputs, 'clientUserMessageId': request_id}, 'context': {'inheritThreadSettings': True}}
                 method, version = 'thread-follower-start-turn', 2
             else:
                 params.update(input=inputs, clientUserMessageId=request_id, attachments=[],
