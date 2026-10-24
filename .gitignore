@@ -87,3 +87,6 @@
 !/swarm-control/
 /swarm-control/node_modules
 /swarm-control/dist/
+/swarm-control/node_modules/
+/swarm-control/android/.gradle/
+/swarm-control/android/**/build/
