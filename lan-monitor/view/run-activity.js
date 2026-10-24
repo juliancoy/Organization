@@ -25,7 +25,7 @@ export function renderActivity(run){
  // Keep the event list stable between polls so readers retain their scroll position.
  if(root.dataset.run!==run.id){root.dataset.run=run.id;root.replaceChildren();rendered='';
   const heading=make('div','','panel-heading');heading.append(make('h2','Run activity'),make('span','', 'activity-clock'));root.append(heading,make('strong','','activity-stage'),make('p','','activity-detail'));
-  const progress=document.createElement('progress');progress.setAttribute('aria-label','Completed suites');root.append(progress,make('p','','activity-workers'));
+  const progress=document.createElement('progress');progress.setAttribute('aria-label','Completed suites');root.append(progress,make('p','','activity-workers'),make('p','','post-deployment-status'));
   const list=make('ol','','activity-events');list.setAttribute('aria-label','Recorded run events, newest first');root.append(list,make('small','Latest 300 coordinator events are retained with each run. Process output is below.','muted'));
  }
  root.querySelector('.activity-stage').textContent=stage+(!complete?transferEta:'');
@@ -36,6 +36,8 @@ export function renderActivity(run){
  root.querySelector('.activity-detail').textContent=finished+' / '+jobs.length+' suites completed'+(complete?'':' · Last coordinator event '+age(quiet)+' ago')+(!complete&&quiet>=60?' · Waiting for an update; this alone does not mean the operation has stalled.':'');
  const progress=root.querySelector('progress');progress.max=jobs.length||1;progress.value=finished;
  root.querySelector('.activity-workers').textContent=[...active,...preparing.map(h=>h.host+' · '+(h.preparation||'preparing'))].join('   /   ')||(complete?'Results saved.':'Each node starts independently when its images are ready.');
+ const post=run.post_deployment;
+ root.querySelector('.post-deployment-status').textContent=post?'Post-deployment: '+post.status.replaceAll('_',' ')+' · '+(post.checks||[]).map(c=>c.name+': '+c.status+' — '+c.detail).join(' / '):complete?'Post-deployment checks run after a passing test run and wait for its deployed commit.':'';
  const events=run.activity||[];
  root.querySelector('small.muted').textContent=events.length?'Latest 300 coordinator events retained with this run. Process output is below.':'Current snapshot only. Full event recording begins with the next run.';
  const fallback=events.length?events:[{time:run.updated||run.started,message:imageText||run.preparation||'Run '+run.status}];

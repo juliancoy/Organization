@@ -51,6 +51,7 @@ class SuiteCache:
         context={'schema':1,'suite':suite,'sources':content,'spec':self.specs[suite],'image':image,
                  'machine':host['session']['machine'],'platform':host.get('agent_status',{}).get('platform'),
                  'agent':host.get('agent_status',{}).get('source_revision')}
+        if suite=='org-api':context['shard']=host.get('org_api_shard')
         if suite=='p2p':
             context['fleet']=sorted((worker['host'],worker.get('session',{}).get('machine'),worker.get('lan_address'),
                 worker.get('agent_status',{}).get('source_revision')) for worker in run['hosts'] if not worker.get('excluded'))

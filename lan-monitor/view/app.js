@@ -19,11 +19,12 @@ if (embeddedLAN) {
   document.documentElement.classList.add('embedded-lan');
   const controls=document.createElement('div');controls.className='embedded-map-controls';
   const count=document.createElement('span');count.id='lan-node-count';count.setAttribute('role','status');controls.append(count);
+  controls.append($('all-connections').closest('label'));
   for(const id of ['mine','pause','fit','zoom-in','zoom-out'])controls.append($(id));
   document.querySelector('.scene').append(controls);
 }
 const settings=loadSettings();
-if(embeddedLAN)Object.assign(settings,{layer:'links',allConnections:false,geographic:false,groupProviders:false,labels:true});
+if(embeddedLAN)Object.assign(settings,{layer:'links',geographic:false,groupProviders:false,labels:true});
 let layer = settings.layer;
 let allConnections=settings.allConnections;
 let geographic = settings.geographic&&!allConnections, land, geoRequested=false;
@@ -42,6 +43,7 @@ const positionCache = new Map();
 const resolvingIPs = new Set();
 $('all-connections').checked=allConnections;
 $('layer').disabled=allConnections;
+$('group-providers').disabled=allConnections;
 $('geographic').disabled=allConnections;
 $('geographic').checked=geographic;
 $('group-providers').checked=groupProviders;
@@ -105,12 +107,12 @@ function sync() {
   $('dns-summary').textContent=`IPv6: ${named} named · ${absent} without PTR · ${pending} pending / failed. ${data.name_resolution?.pending||0} lookups queued. ${resolveNames?'Automatic lookup on.':'Automatic lookup paused in this browser.'}`;
   requestGeography();
 
-  view = groupProviders ? groupNetwork(rawView) : rawView;
+  view = groupProviders&&!allConnections ? groupNetwork(rawView) : rawView;
   if(embeddedLAN){
-    view={...view,nodes:view.nodes.filter(node=>!node.external)};
+    view={...view,nodes:view.nodes.filter(node=>allConnections||!node.external)};
     const ids=new Set(view.nodes.map(node=>node.id));
     view.edges=view.edges.filter(edge=>ids.has(edge.a)&&ids.has(edge.b));
-    $('lan-node-count').textContent=view.nodes.length+' LAN nodes';
+    $('lan-node-count').textContent=view.nodes.length+(allConnections?' traffic nodes · direct endpoints':' LAN nodes');
   }
   if (!view.nodes.some(node => node.id === selectedId)) selectedId = view.id;
 
@@ -150,6 +152,7 @@ function sync() {
   document.body.dataset.measured = String(view.measured);
   document.body.dataset.selected = selectedId;
   document.body.dataset.layer = layer;
+  document.body.dataset.directTraffic=String(allConnections);
   $('viewer').textContent = 'Your connection: ' + data.viewer.ip + (data.viewer.recognized ? '' : ' · not yet identified');
   $('perspective-caption').textContent = view.id === data.viewer.id ? 'Your perspective' : 'Viewing from another device';
   $('perspective-title').textContent = label(view.source) + (view.id === data.viewer.id ? ' · You' : '');
@@ -631,7 +634,7 @@ function frame(time) {
       ctx.fillText(text, box.x+box.w/2, box.y+14, textLimit);
       if (important) {
         ctx.font = '10px system-ui'; ctx.fillStyle = '#8fa6b5';
-        ctx.fillText((node.ip || '')+(layer!=='ip'&&node.ip_hop ? ' · IP hop '+node.ip_hop : node.id===data.router?.mac ? ' · L2 bridge' : ''), box.x+box.w/2, box.y+30,textLimit);
+        ctx.fillText((node.ip || '')+(!allConnections&&layer!=='ip'&&node.ip_hop ? ' · IP hop '+node.ip_hop : node.id===data.router?.mac ? ' · L2 bridge' : ''), box.x+box.w/2, box.y+30,textLimit);
         if (node.test) {
           ctx.fillStyle = node.test.status === 'passed' ? '#a6dfc4' : '#a5afba';
           ctx.fillText(node.test.transfer ? `${node.test.transfer.mbps.toFixed(1)} Mbps · ${node.test.status}` : 'Tests ' + node.test.status, box.x+box.w/2, box.y+45,textLimit);
@@ -676,7 +679,7 @@ $('geographic').onchange = async event => {
 $('all-connections').onchange=event=>{
   allConnections=event.target.checked;
   if(allConnections&&geographic){geographic=false;geoRequested=false;$('geographic').checked=false;nodes=[];positionCache.clear();}
-  $('layer').disabled=allConnections;$('geographic').disabled=allConnections;
+  $('layer').disabled=allConnections;$('geographic').disabled=allConnections;$('group-providers').disabled=allConnections;
   persistSettings();clearEdgeHover();if(data){sync();requestAnimationFrame(fit);}
 };
 $('layer').onchange = event => {layer=event.target.value;persistSettings();view=null;if(data)sync();};

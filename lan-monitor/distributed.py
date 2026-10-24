@@ -41,12 +41,15 @@ def plan(hosts):
     hosts = copy.deepcopy(hosts)
     for host in hosts:
         host.update(status='queued', suites=['monitor', 'map', 'p2p'], jobs={})
-    for index, suite in enumerate(['org-api', 'web', 'identity', 'chat', 'workspace', 'identity-python']):
+    for index, suite in enumerate(['web', 'identity', 'chat', 'workspace', 'identity-python']):
         # Browser/identity work goes to the last host; frontend to the middle.
         slot = {'org-api': 0, 'chat': 0, 'web': 1, 'workspace': 3, 'identity': 2, 'identity-python': 2}[suite] % len(hosts)
         hosts[slot]['suites'].append(suite)
-    for host in hosts:
+    for index,host in enumerate(hosts):
+        host['suites'].insert(0,'org-api')
+        host['org_api_shard']={'index':index+1,'count':len(hosts)}
         host['jobs'] = {suite: {'name': SUITES[suite]['name'], 'status': 'queued', 'phase': None, 'logs': []} for suite in host['suites']}
+        host['jobs']['org-api']['name'] += f' · shard {index+1}/{len(hosts)}'
     return hosts
 
 
@@ -304,16 +307,24 @@ class DistributedTests:
                     with self.lock:
                         host.update(status='preparing',preparation='Preparing required images')
                         self.save()
-                    for image in required_images(host):
+                    with self.lock:cache_plan=copy.deepcopy(run)
+                    cache=SuiteCache(self.root,self.folder,SUITES)
+                    cache.apply(cache_plan,images,{host['host']})
+                    candidate=next(row for row in cache_plan['hosts'] if row['host']==host['host'])
+                    needed=list(dict.fromkeys(SUITES[suite]['image'] for suite,job in candidate['jobs'].items() if job['status']!='reused'))
+                    if any(job['status']!='reused' and not SUITES[suite].get('coordinated') for suite,job in candidate['jobs'].items()):
+                        from distributed_worker import PYTHON
+                        if PYTHON not in needed:needed.append(PYTHON)
+                    for image in needed:
                         if run.get('stop_requested'):return
                         images.ensure(image,[host])
                     verified=sessions.verify([host])
                     if not verified:raise RuntimeError(host.get('error') or 'Worker readiness verification failed')
                     with self.lock:
-                        host['images']=dict(images.host_images[host['host']])
+                        host['images']=dict(images.host_images.get(host['host'],{}))
                         run['images'].update(images.images)
                         cache_plan=copy.deepcopy(run)
-                    SuiteCache(self.root,self.folder,SUITES).apply(cache_plan,images,{host['host']})
+                    cache.apply(cache_plan,images,{host['host']})
                     with self.lock:
                         cached=next(row for row in cache_plan['hosts'] if row['host']==host['host'])
                         host['jobs']=cached['jobs']
@@ -372,6 +383,18 @@ class DistributedTests:
                 self.running = False
                 self.run['finished'] = now()
                 self.save()
+                if self.run['status']=='passed':
+                    completed=self.run
+                    def post_deployment():
+                        from post_deployment import execute
+                        def persist():
+                            with self.lock:
+                                path=self.folder/(completed['id']+'.json')
+                                temporary=path.with_suffix('.post.tmp')
+                                temporary.write_text(json.dumps(completed));temporary.chmod(0o600);temporary.replace(path)
+                        execute(completed,persist)
+                    threading.Thread(target=post_deployment,daemon=True).start()
+
 
     def network(self,run,images=None):
         from p2p_network import NetworkP2P

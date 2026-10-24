@@ -436,3 +436,19 @@ Only a recorded actual pass with the same fingerprint is reused. A newer execute
 This scheduling decision happens after source publication and image/agent verification, so preparation may still perform network work even when suites are reused. An already-running run keeps its pinned implementation; this policy applies to subsequent runs. The first run with fingerprints creates passing baselines for later reuse.
 
 Worker preparation is independent: after shared source publication and initial identity verification, each machine receives its required images and starts its ordinary suites as soon as it is ready. A slow or failed transfer on another machine does not block it. Shared image refresh/publication happens once; delivery runs outside that image lock. Cross-machine P2P checks wait for the participant preparation and ordinary jobs to finish.
+
+**Direct traffic (ignore hops)** is available on the full LAN map and the embedded distributed-tests map. It draws every retained observed source/destination relationship directly, including incoming-only flows, with intermediate route segments and provider grouping hidden. The preference is saved in the browser and honored by both views. Remote endpoints remain visible in the embedded map when this mode is enabled. It changes presentation, not packet capture coverage or physical connectivity.
+
+Runtime optimization: passing-baseline checks use each worker's installed image fingerprint before image preparation. Fully reusable suites need no image pull or delivery; missing or changed inputs still execute. Ordinary jobs always prepare the Python bind-mount probe image when required. Organization API tests use deterministic Node test-file shards across the verified fleet, with two test processes per container; shard 1 also runs type-checking and the bundle check. Shard index and fleet size are fingerprinted so changing membership invalidates shard reuse.
+
+### Post-deployment checks
+
+A passing distributed run starts a separate background verification stage, recorded as `post_deployment` in that run and shown in Run activity. It waits up to 10 minutes for the tested OrgPortal commit to appear on both frontend and proxied API health endpoints, then checks the frontend entry asset. It never deploys. A missing release is `deployment_not_observed`, not a passing smoke test. Collector shutdown interrupts this in-process watcher; it does not automatically repeat email sends after restart.
+
+Optional configuration: `~/.config/map-master/post-deployment.json` (keep private):
+
+```json
+{"origin":"https://orgportal-web.jcloiacon.workers.dev","email":{"campaign_id":"DEDICATED_TEST_CAMPAIGN_ID","token_file":"/absolute/path/to/private-organizer-bearer-token"}}
+```
+
+Email configuration enables one call per run to the existing authenticated campaign `/test` endpoint, defaulting to the connected sender's own mailbox. No audience-send endpoint is used. It polls the newly created test delivery for up to three minutes. Provider acceptance is checked; inbox arrival is not measured. Missing email configuration produces partial coverage with an explicit blocked email check. The bearer token stays on the coordinator and is never sent to test workers or included in run records. Post-deployment results are separate from isolated suite results; an overall suite pass does not imply deployment or email delivery passed.

@@ -185,7 +185,7 @@ def main():
                ORGPORTAL_BUILD_COMMIT=manifest['repositories']['OrgPortal']['commit'])
     emit('host', hostname=__import__('socket').gethostname(), cpus=os.cpu_count(),
          python=__import__('sys').version.split()[0], suites=target['suites'])
-    for image in dict.fromkeys(SUITES[suite]['image'] for suite in target['suites']):
+    for image in dict.fromkeys([PYTHON]+[SUITES[suite]['image'] for suite in target['suites'] if target['jobs'][suite]['status']!='reused']):
         result = subprocess.run(['docker', 'image', 'inspect', image, '--format', '{{json .Id}}'],
                                 capture_output=True, text=True, timeout=25)
         if result.returncode or json.loads(result.stdout) != target['images'].get(image):
@@ -216,6 +216,14 @@ def main():
             continue  # The coordinator must drive real peers together, across hosts.
         # Execute the verified image ID, independent of later tag changes.
         spec = {**spec, 'image': target['images'][spec['image']]}
+        if suite_id=='org-api':
+            shard=target['org_api_shard']
+            index,count=shard['index'],shard['count']
+            if not isinstance(index,int) or not isinstance(count,int) or not 1<=index<=count<=24:
+                raise ValueError('Invalid Org API shard')
+            command=f'npm run build:metadata && node --import tsx --test --test-concurrency=2 --test-shard={index}/{count} test/*.test.ts'
+            if index==1:command+=' && npm run typecheck && npm run check:bundle'
+            spec={**spec,'test':['sh','-c',command]}
         started = time.monotonic()
         emit('suite', suite=suite_id, status='running', name=spec['name'])
         status = run(work, suite_id, 'prepare', spec, manifest['id'], env)
