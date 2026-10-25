@@ -31,6 +31,22 @@ class LiveDistributedTests:
             result['active_reruns']=[r.run['id'] for r in self.reruns.values() if r.running]
             return result
 
+    def cpu_activity(self, ident=None):
+        """Bounded scheduling metadata; telemetry never copies test output/artifacts."""
+        with self.lock:
+            selected=self.reruns.get(ident,self.runner)
+            with selected.lock:
+                hosts=[]
+                if selected.running:
+                    for host in (selected.run or {}).get('hosts',[]):
+                        hosts.append({'host':host['host'],'status':host.get('status'),
+                            'active_tasks':bool(host.get('active_tasks')),
+                            'dependency_preparation':{k:{'status':v.get('status')} for k,v in host.get('dependency_preparation',{}).items()},
+                            'jobs':{key:{k:job.get(k) for k in ('status','phase','cpus')} for key,job in host.get('jobs',{}).items()
+                                    if job.get('status') in ('queued','running')}})
+                return {'running':selected.running,'run':{'hosts':hosts},
+                        'active_reruns':[key for key,runner in self.reruns.items() if runner.running]}
+
     def artifact(self, run, host, suite, name):
         with self.lock:
             return self.runner.artifact(run, host, suite, name)

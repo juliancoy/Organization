@@ -51,7 +51,7 @@ def master_suites():
     from distributed_worker import SUITES
     return SUITES
 master_api = MasterAPI(distributed_tests, snapshot, master_suites)
-cpu_monitor = CpuMonitor(activity=distributed_tests.view)
+cpu_monitor = CpuMonitor(activity=distributed_tests.cpu_activity)
 socket_owners = SocketOwners()
 docker_downloads = DockerDownloads()
 container_monitor = ContainerMonitor()

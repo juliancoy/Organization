@@ -69,7 +69,7 @@ class CpuMonitor:
                         executing=[j for j in jobs if j.get('status')=='running' and j.get('phase') not in ('prepare','waiting_for_dependencies')]
                         entry=activity.setdefault(host['host'],{'running_test_jobs':0,'scheduled_cpu_slots':0,'workload_phase':'idle'})
                         entry['running_test_jobs']+=len(executing)
-                        entry['scheduled_cpu_slots']+=sum(j.get('cpus',0) for j in jobs if j.get('status') in ('queued','running'))
+                        entry['scheduled_cpu_slots']+=sum(j.get('cpus') or 0 for j in jobs if j.get('status') in ('queued','running'))
                         phase='testing' if executing else 'preparing' if host.get('status')=='preparing' or any(v.get('status')=='preparing' for v in host.get('dependency_preparation',{}).values()) else 'waiting' if host.get('active_tasks') else 'idle'
                         if phase=='testing' or entry['workload_phase']!='testing':entry['workload_phase']=phase
             except (OSError,ValueError,TypeError,KeyError,RuntimeError):activity={};activity_status='unavailable'

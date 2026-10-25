@@ -66,3 +66,20 @@ class CpuTests(unittest.TestCase):
         self.assertGreater(values['ram_total_bytes'],0)
         self.assertGreaterEqual(values['ram_percent'],0)
         self.assertIn('cpu',values['cpu_counters'])
+
+    def test_activity_projection_omits_logs_and_keeps_reruns(self):
+        import threading
+        from types import SimpleNamespace
+        from live_distributed import LiveDistributedTests
+        service=LiveDistributedTests.__new__(LiveDistributedTests)
+        service.lock=threading.RLock()
+        host={'host':'a','status':'running','jobs':{'one':{'status':'running','phase':'test','cpus':1,'logs':['private output']},'finished':{'status':'passed','logs':['large output']}}}
+        service.runner=SimpleNamespace(lock=threading.RLock(),running=True,run={'hosts':[host]})
+        service.reruns={'rerun':SimpleNamespace(lock=threading.RLock(),running=True,run={'hosts':[host]})}
+        result=service.cpu_activity()
+        self.assertEqual(result['active_reruns'],['rerun'])
+        self.assertNotIn('logs',result['run']['hosts'][0]['jobs']['one'])
+        self.assertNotIn('finished',result['run']['hosts'][0]['jobs'])
+        self.assertTrue(service.cpu_activity('rerun')['running'])
+        service.runner.running=False
+        self.assertEqual(service.cpu_activity()['run']['hosts'],[])
