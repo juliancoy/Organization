@@ -28,6 +28,14 @@ class HTTPBoundaryTests(unittest.TestCase):
         self.assertEqual(self.request(p,'launcher'),401)
         self.assertEqual(self.request(p,'codex',True),403)
         self.assertEqual(self.request(p,'codex'),200)
+    def test_large_screenshot_body_is_limited_to_codex_commands(self):
+        raw=b'{"text":"'+b'x'*100000+b'"}'
+        for path,scope,expected in [('/api/v1/master/codex/commands','codex',200),('/api/v1/master/codex/commands','master',401),('/api/v1/master/test-requests','master',413)]:
+            with self.subTest(path=path,scope=scope):
+                h=Mock(path=path,command='POST',wfile=io.BytesIO(),rfile=io.BytesIO(raw));h.headers=Message()
+                for key,value in {'Host':'localhost:8089','Authorization':'Bearer '+scope*40,'Content-Type':'application/json','Content-Length':str(len(raw))}.items():h.headers[key]=value
+                handle(h,self.api);self.assertEqual(h.send_response.call_args.args[0],expected)
+
     def test_launcher_cannot_stop_runs_or_access_mcp(self):
         self.assertEqual(self.request('/api/v1/master/status','launcher'),200)
         for path in ['/api/v1/master/runs','/mcp','/api/v1/master/stop']:

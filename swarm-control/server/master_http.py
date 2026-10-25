@@ -70,7 +70,8 @@ def handle(handler,api):
             if media!='application/json':raise APIError(415,'unsupported_media_type','Use application/json')
             try:size=int(handler.headers.get('Content-Length','-1'))
             except ValueError:raise APIError(400,'invalid_body','Invalid Content-Length') from None
-            if not 0<=size<=MAX_BODY:raise APIError(413,'body_too_large','Request limit is 64 KiB')
+            limit=6*1024*1024 if path==API+'/codex/commands' else MAX_BODY
+            if not 0<=size<=limit:raise APIError(413,'body_too_large','Request exceeds the size limit')
             if mcp and not {'application/json','text/event-stream'}.issubset(set(x.split(';')[0].strip() for x in handler.headers.get('Accept','').split(','))):
                 raise APIError(406,'not_acceptable','MCP clients must accept application/json and text/event-stream')
             if mcp and handler.headers.get('MCP-Protocol-Version') and handler.headers['MCP-Protocol-Version'] not in VERSIONS:
