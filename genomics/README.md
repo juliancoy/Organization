@@ -43,9 +43,10 @@ does not classify variants as pathogenic.
 Start local to the data on PILEDRIVE. Raw reads and BAMs are much larger than
 called variants; do not duplicate them across the cluster. The current general
 swarm execution and artifact paths are not an approved private-genome scheduler.
-Before real chromosome jobs are sent to a worker, add explicit enrollment for
-private data, encrypted transport/storage, access controls, bounded retention,
-and a separate private artifact path. GPU presence alone is not authorization.
+The explicit private runner below uses enrolled identities, encrypted transport,
+RAM-only worker inputs, resource limits, and private controller results. This
+command is the authorization to send the specified inputs to enrolled computers.
+GPU presence alone is not authorization.
 CPU chromosome parallelism is the first useful scaling step; phones remain useful
 for synthetic browser/visualization tests rather than handling private genomes.
 
@@ -64,3 +65,41 @@ called real allele adjacent to NON_REF is preserved. It runs when bcftools is
 installed and explicitly skips otherwise. The remaining tests have no external
 dependencies. Request `tests/test_genomics.py` through the distributed master's
 focused-test API to exercise those checks on workers without private inputs.
+
+## Explicit distributed private run
+
+The standalone runner now supports private CPU jobs on the enrolled computers:
+
+```bash
+~/.local/share/swarm-control/venv/bin/python -m scripts.genomics_distributed \
+  --qc "$GENOMICS_CALLED_VCF" \
+  --annotations "$GENOMICS_ANNOTATED_VCF" \
+  --output "$GENOMICS_REPORT_DIR"
+```
+
+It rechecks authenticated launcher identity and accepting/battery policy, pinned
+SSH host keys, matching image contents, and Docker memory/swap enforcement.
+Each machine has up to two one-CPU containers; new batches wait when RAM is low
+or CPU utilization exceeds 85%. Another active test session does not by itself
+exclude a machine with remaining capacity. Containers use an existing immutable
+Python image, no network, no mounts, read-only filesystems, no swap, disabled
+Docker logging and core dumps, and automatic removal. Genomic payloads travel
+through SSH stdin and remain in container memory. No private inputs or results go
+through the general test upload/artifact APIs. SSH host administrators remain
+trusted; this does not defend against an already compromised worker OS.
+
+Batches stop at chromosome boundaries or 50,000 records. Results include the
+compressed-input checksum, input count, worker identity, and measured runtime.
+The private state.json tracks assignment, capacity waits, completion, and failure.
+Per-batch results and merged QC/annotation summaries remain on the controller's
+data disk. Any missing or mismatched result fails the run. Failed runs retain
+completed private reports for inspection; this first runner does not yet resume
+or automatically retry failed batches.
+
+The QC summary counts retained records, filter labels, variant/genotype classes,
+allele-level transitions/transversions, and DP/GQ histograms. It does not apply
+additional filtering or estimate genome-wide coverage. Annotation jobs summarize
+existing VEP CSQ consequences; they do not execute VEP or transfer its cache.
+This is a separate explicit private batch runner, not a general private-data
+extension of the public test scheduler. Its native integration tests use invented
+variants, and can run through the ordinary distributed test master.
