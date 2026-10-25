@@ -114,3 +114,10 @@ main{max-width:1440px;margin:auto;padding:28px}a{color:#b7e4cf}.intro,.panel-hea
 @media(max-width:560px){.flow-contributor{display:grid;grid-template-columns:minmax(0,1fr);gap:8px}.flow-amount{display:flex;align-items:baseline;justify-content:space-between;text-align:left;gap:12px}.flow-amount small{max-width:none}.flow-identity strong{font-size:14px}.flow-heading{flex-wrap:wrap}.pressure-state{max-width:none}.docker-download-row{min-width:0}}
 
 .overall-progress{border-color:#72b7aa;scroll-margin-top:20px}.overall-progress progress{width:100%;height:18px;accent-color:#83d9ae;margin:14px 0}.overall-total{font-size:24px;font-variant-numeric:tabular-nums}.overall-counts{display:flex;flex-wrap:wrap;gap:10px 22px;margin:10px 0}.overall-counts span{color:var(--status,#b2c1cc)}.overall-counts strong{font-size:21px;font-variant-numeric:tabular-nums}.overall-stage{overflow-wrap:anywhere}.overall-progress small{display:block;margin:12px 0}.overall-progress .muted{overflow-wrap:anywhere}@media(max-width:600px){.overall-progress .panel-heading{display:block}.overall-total{display:block;margin-top:12px;font-size:21px}.overall-counts{gap:10px 16px}}
+
+[hidden]{display:none!important}
+.dashboard-sections{display:flex;gap:8px;flex-wrap:wrap;max-width:1440px;margin:0 auto;padding:16px 28px 0}
+.dashboard-sections a{padding:10px 16px;border:1px solid #3a4e59;border-radius:8px;color:#bdd0dc;text-decoration:none;font-size:15px}
+.dashboard-sections a[aria-current=page]{background:#244a40;color:#e9fff2;border-color:#88cdb2}
+.dashboard-sections a:hover{background:#24343f}
+@media(max-width:560px){.dashboard-sections{padding:12px 12px 0}.dashboard-sections a{flex:1;text-align:center;white-space:nowrap}}

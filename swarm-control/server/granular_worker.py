@@ -6,7 +6,7 @@ from pathlib import Path
 import threading
 import time
 
-from distributed_worker import SUITES, emit, run, clean
+from distributed_worker import SUITES, emit, run, clean, prepare_package
 
 
 def capacity():
@@ -61,7 +61,7 @@ class Dependencies:
                     else:
                         setup['prepare'] = SUITES[package].get('prepare')
                     preparing=time.monotonic()
-                    try:self.results[package] = run(self.work, task, 'prepare', setup, self.manifest['id'], self.env, cancel=getattr(self,'cancel',None))
+                    try:self.results[package] = prepare_package(self.work,task,package,setup,self.manifest['id'],self.env,run,cancel=getattr(self,'cancel',None))
                     finally:timings['prepare']=timings.get('prepare',0)+time.monotonic()-preparing
                 if self.results[package]:
                     return self.results[package]

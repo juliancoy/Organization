@@ -98,20 +98,81 @@ def parse_counts(line, counts):
 
 def dependency_cache(work,suite_id,spec):
     """Keep package downloads, never installed dependencies, on the worker host."""
-    digest=hashlib.sha256((suite_id+'\0'+spec['image']+'\0'+os.uname().machine).encode())
-    ignored={'node_modules','.git','.venv','venv','dist','build','.test-deps','__pycache__'}
-    locks={'package-lock.json','npm-shrinkwrap.json','yarn.lock','pnpm-lock.yaml',
+    digest=hashlib.sha256(('v2\0'+suite_id+'\0'+spec['image']+'\0'+os.uname().machine+'\0'+spec['cwd']+'\0'+json.dumps(spec.get('prepare'),sort_keys=True)).encode())
+    cwd=work/spec['cwd']
+    names={'package.json','package-lock.json','npm-shrinkwrap.json','yarn.lock','pnpm-lock.yaml',
            'pyproject.toml','poetry.lock','uv.lock','Pipfile.lock'}
-    for directory,folders,files in os.walk(work):
-        folders[:]=sorted(name for name in folders if name not in ignored)
-        for name in sorted(files):
-            if name not in locks and not (name.startswith('requirements') and name.endswith('.txt')):continue
-            path=Path(directory)/name
-            digest.update(str(path.relative_to(work)).encode()+b'\0'+path.read_bytes())
+    paths=[path for path in cwd.iterdir() if path.is_file() and
+           (path.name in names or path.name.startswith('requirements') and path.suffix=='.txt')] if cwd.is_dir() else []
+    for path in sorted(paths):digest.update(path.name.encode()+b'\0'+path.read_bytes())
     root=Path.home()/'.cache/organization-tests/packages'/digest.hexdigest()
     root.mkdir(parents=True,exist_ok=True,mode=0o700)
     for name in ('npm','pip'):(root/name).mkdir(exist_ok=True,mode=0o700)
+    (root/'.last-used').touch()
     return root
+
+def prepare_package(work,task,package,spec,run_id,env,runner,cancel=None):
+    """Cache installed trees, but extract a private writable copy for each job."""
+    import fcntl
+    import shutil
+    import tarfile
+    import tempfile
+    cwd=work/spec['cwd']
+    if not cwd.is_dir():return runner(work,task,'prepare',spec,run_id,env,cancel=cancel)
+    if package in ('chat','org-api','web','identity'):
+        lock=cwd/'package-lock.json'
+        if not lock.exists():return runner(work,task,'prepare',spec,run_id,env,cancel=cancel)
+        packages=json.loads(lock.read_text()).get('packages',{})
+        if any(item.get('link') or str(item.get('resolved','')).startswith('file:') for item in packages.values()):
+            return runner(work,task,'prepare',spec,run_id,env,cancel=cancel)
+        destination=cwd/'node_modules'
+        command=spec['prepare']
+        # Granular package installers have one install followed by fresh metadata.
+        if command[:2]!=['sh','-c'] or not command[2].startswith('npm ci '):
+            return runner(work,task,'prepare',spec,run_id,env,cancel=cancel)
+        tail=command[2].split('&&',1)[1].strip() if '&&' in command[2] else None
+    elif package in ('monitor','workspace','identity-python','usajobs'):
+        destination=work/'.test-deps'/package;tail=None
+    else:return runner(work,task,'prepare',spec,run_id,env,cancel=cancel)
+    cache=dependency_cache(work,package,spec)
+    archive=cache/'installed-v1.tar.gz'
+    with (cache.parent/(cache.name+'.lock')).open('a') as lockfile:
+        while True:
+            try:fcntl.flock(lockfile,fcntl.LOCK_EX|fcntl.LOCK_NB);break
+            except BlockingIOError:
+                if (work.parent/'STOP').exists() or cancel is not None and cancel.is_set():return 130
+                time.sleep(.2)
+        if (work.parent/'STOP').exists() or cancel is not None and cancel.is_set():return 130
+        if archive.exists() and not destination.exists():
+            try:
+                with tarfile.open(archive,'r:gz') as tar:
+                    members=tar.getmembers()
+                    if len(members)>200000 or sum(member.size for member in members)>2*1024**3:raise ValueError('Dependency archive is too large')
+                    if any(Path(member.name).parts[0]!=destination.name for member in members):raise ValueError('Invalid dependency archive root')
+                    destination.parent.mkdir(parents=True,exist_ok=True)
+                    with tempfile.TemporaryDirectory(dir=destination.parent,prefix='.dependency-restore-') as staging:
+                        tar.extractall(staging,filter='data')
+                        restored=Path(staging)/destination.name
+                        if not restored.is_dir() or restored.is_symlink():raise ValueError('Incomplete dependency archive')
+                        restored.rename(destination)
+            except (OSError,ValueError,tarfile.TarError):
+                shutil.rmtree(destination,ignore_errors=True);archive.unlink(missing_ok=True)
+            else:
+                emit('log',suite=task,phase='prepare',line='Reused installed dependencies for '+package+' in an isolated job copy')
+                setup={**spec,'prepare':['sh','-c',tail] if tail else None}
+                return runner(work,task,'prepare',setup,run_id,env,cancel=cancel)
+        code=runner(work,task,'prepare',spec,run_id,env,cancel=cancel)
+        if code==0 and destination.is_dir() and not destination.is_symlink():
+            temporary=None
+            try:
+                with tempfile.NamedTemporaryFile(dir=cache,suffix='.tmp',delete=False) as output:temporary=Path(output.name)
+                with tarfile.open(temporary,'w:gz',compresslevel=1) as tar:tar.add(destination,arcname=destination.name)
+                temporary.replace(archive)
+            except OSError as error:
+                emit('log',suite=task,phase='prepare',line='Dependency cache write skipped: '+clean(str(error)))
+            finally:
+                if temporary is not None:temporary.unlink(missing_ok=True)
+        return code
 
 
 def container_user():
