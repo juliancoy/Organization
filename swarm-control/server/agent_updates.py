@@ -68,7 +68,7 @@ class LauncherUpdates:
 
     def ensure(self,host,client,status):
         if status.get('source_revision')==self.revision and status.get('ready'):return status
-        if status.get('active_jobs') or status.get('active_image_transfers') or status.get('active_uploads'):
+        if status.get('active_jobs') or status.get('active_image_transfers') or status.get('active_uploads') or status.get('active_resource_leases'):
             raise RuntimeError('Launcher is busy; update deferred without interrupting its work')
         for ident in status.get('preparations',[]):
             client.call('job.stop',{'id':ident},timeout=40)

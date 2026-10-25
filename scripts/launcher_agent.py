@@ -480,7 +480,7 @@ class Agent:
         path=Path('/tmp/launcher-agent-busy.json');temporary=path.with_suffix('.tmp')
         with self.lock:
             temporary.write_text(json.dumps({'jobs':[key for key,job in self.jobs.items() if job['status']=='running'],
-                                             'browsers':sorted(self.browsers),'transfers':self.registry_transfers+len(self.uploads),'time':time.time()}));temporary.replace(path)
+                                             'browsers':sorted(self.browsers),'transfers':self.registry_transfers+len(self.uploads)+len(getattr(self,'resource_leases',{})),'time':time.time()}));temporary.replace(path)
 
     @staticmethod
     def image_fingerprint(image):
@@ -572,6 +572,7 @@ class Agent:
                 if op=='resource.release':
                     previous=leases.pop(ident,None)
                     if previous:previous['timer'].cancel();previous['lease'].close()
+                    self.busy()
                     return {'released':True}
                 if set(args)!={'id','group','cpus','memory_mb','container'} or args['cpus']!=1 or args['memory_mb']!=512 or not re.fullmatch(r'genomics-[a-f0-9]{32}',args['container']):
                     raise ValueError('Expected a bounded private batch resource request')
@@ -583,7 +584,7 @@ class Agent:
                     lease=ResourceLease(args.get('group'),args.get('cpus'),args.get('memory_mb'),args.get('container',''),
                                         directory=os.getenv('SWARM_RESOURCE_DIR',str(self.root/'.resources')),pids=32)
                     timer=threading.Timer(300,lambda:self.expire_resource(ident));timer.daemon=True
-                    leases[ident]={'lease':lease,'timer':timer};timer.start()
+                    leases[ident]={'lease':lease,'timer':timer};timer.start();self.busy()
                 else:
                     lease=previous['lease']
                     if any(lease.row[k]!=args[k] for k in ('group','cpus','memory_mb','container')):raise ValueError('Resource request ID already used')
@@ -668,7 +669,7 @@ class Agent:
                     'storage':self.storage_status,
                     'hardware':self.hardware(info),
                     'preparations':[key for key,j in self.jobs.items() if j['status']=='running' and j.get('prepare_only')],
-                    'active_jobs':[key for key,j in self.jobs.items() if j['status']=='running' and not j.get('prepare_only')],'active_image_transfers':self.registry_transfers,'active_uploads':len(self.uploads)}
+                    'active_jobs':[key for key,j in self.jobs.items() if j['status']=='running' and not j.get('prepare_only')],'active_image_transfers':self.registry_transfers,'active_uploads':len(self.uploads),'active_resource_leases':len(getattr(self,'resource_leases',{}))}
         if op.startswith('backup.'):
             return self.backup(op,args)
         if op.startswith('upload.'):
