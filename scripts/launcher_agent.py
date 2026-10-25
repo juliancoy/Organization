@@ -573,6 +573,9 @@ class Agent:
                 if not cache.exists():
                     cache.mkdir(mode=0o700)
                     git(cache,'init','--bare','--quiet')
+                # A stopped installer may leave an initialized cache before
+                # remote creation. Repair it while holding the writer lock.
+                if git(cache,'remote','get-url','origin',required=False) is None:
                     git(cache,'remote','add','origin',repo['url'])
                 if git(cache,'remote','get-url','origin')!=repo['url']:
                     raise ValueError('Git cache origin differs from the source manifest')

@@ -1,11 +1,31 @@
 import copy
 import unittest
-from p2p_network import direct_evidence
+import threading
+from unittest.mock import Mock
+from p2p_network import direct_evidence, NetworkP2P
 from distributed import plan
 from distributed_images import required_images
 
 
 class NetworkEvidenceTests(unittest.TestCase):
+    def test_cleanup_removes_owned_containers_concurrently_even_if_one_fails(self):
+        network=NetworkP2P([], 'run')
+        barrier=threading.Barrier(2)
+        def stop(*args,**kwargs):barrier.wait(timeout=2)
+        healthy=Mock();healthy.call.side_effect=stop
+        def offline(*args,**kwargs):
+            barrier.wait(timeout=2)
+            raise OSError('offline')
+        dead=Mock();dead.call.side_effect=offline
+        browsers=[Mock(),Mock()]
+        network.resources=[{'host':{'host':name},'client':client,'browser':browser}
+                           for name,client,browser in zip(['healthy','dead'],[healthy,dead],browsers)]
+        network.cleanup()
+        self.assertEqual(network.report['cleanup_errors'],['dead'])
+        for client,browser in zip([healthy,dead],browsers):
+            client.call.assert_called_once_with('p2p.stop',{'id':'run'},timeout=10)
+            browser.close.assert_not_called()
+
     def fixture(self):
         participants=[{'host':'a.local','machine':'machine-a','peer':'a','addresses':['10.42.0.10']},
                       {'host':'b.local','machine':'machine-b','peer':'b','addresses':['10.42.0.11']}]

@@ -1,8 +1,11 @@
 import collections
 import concurrent.futures
+import hashlib
 import json
+import os
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -16,6 +19,36 @@ from launcher_agent import Agent
 
 
 class LiveCoordinationTests(unittest.TestCase):
+    def test_interrupted_cache_remote_setup_recovers_without_network(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            source=root/'seed';source.mkdir()
+            def git(path,*args):
+                return subprocess.check_output(['git','-C',str(path),*args],stderr=subprocess.DEVNULL,text=True).strip()
+            git(source,'init','-q')
+            (source/'example.txt').write_text('pinned source')
+            git(source,'add','.')
+            git(source,'-c','user.name=Test','-c','user.email=test@example.com','commit','-qm','seed')
+            commit=git(source,'rev-parse','HEAD')
+            url='https://github.com/example/worker.git'
+            agent=Agent.__new__(Agent);agent.root=root/'jobs';agent.root.mkdir()
+            agent.lock=threading.RLock();agent.changed=threading.Condition(agent.lock);agent.jobs={}
+            agent.config=root/'peers.json';agent.config.write_text(json.dumps({'name':'worker'}))
+            cache=agent.root/'git-cache'/(hashlib.sha256(url.encode()).hexdigest()+'.git')
+            cache.parent.mkdir()
+            subprocess.run(['git','clone','--bare','-q',str(source),str(cache)],check=True)
+            git(cache,'remote','remove','origin')
+            manifest={'id':'test','hosts':[{'host':'worker','suites':['map']}],
+                      'repositories':{'.':{'url':url,'commit':commit}}}
+            work=agent.root/'test/source';work.parent.mkdir()
+            agent.checkout(work,manifest,dict(os.environ),{'sequence':0,'events':collections.deque()})
+            self.assertEqual(git(cache,'remote','get-url','origin'),url)
+            self.assertEqual((work/'example.txt').read_text(),'pinned source')
+            git(cache,'remote','set-url','origin','https://github.com/example/wrong.git')
+            other=agent.root/'other/source';other.parent.mkdir()
+            with self.assertRaisesRegex(ValueError,'origin differs'):
+                agent.checkout(other,manifest,dict(os.environ),{'sequence':0,'events':collections.deque()})
+
     def test_resume_uses_same_cursor_and_never_retries_mutations(self):
         client=Mock()
         client.call.side_effect=[ConnectionResetError(),{'cursor':8,'events':[]}]

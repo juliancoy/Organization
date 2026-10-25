@@ -210,10 +210,14 @@ class NetworkP2P:
             raise RuntimeError('Data channel counters do not account for received fixture bytes')
         return links
     def cleanup(self):
-        for resource in self.resources:
-            if resource['browser']:resource['browser'].close()
-            try:resource['client'].call('p2p.stop',{'id':self.ident},timeout=40)
-            except Exception:self.report.setdefault('cleanup_errors',[]).append(resource['host']['host'])
+        def stop(resource):
+            # Removing the owned container also closes its browser session.
+            # A dead WebDriver must not add a session timeout before removal.
+            try:resource['client'].call('p2p.stop',{'id':self.ident},timeout=10)
+            except Exception:return resource['host']['host']
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(1,len(self.resources))) as pool:
+            errors=[host for host in pool.map(stop,self.resources) if host]
+        if errors:self.report.setdefault('cleanup_errors',[]).extend(errors)
     def run(self):
         started=time.monotonic()
         try:
