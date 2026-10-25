@@ -9,8 +9,9 @@ const title = el('div'); title.append(el('span', 'SWARM · REMOTE CONTROL', 'cod
 const deviceStatus=el('p','','muted');title.append(deviceStatus);
 const lock = el('button', 'Lock'); lock.hidden = true;
 const mapLink=el('a','Swarm status ↗','codex-map-link'); mapLink.href='/swarm-status'; mapLink.target='_blank'; mapLink.rel='noopener noreferrer'; mapLink.title='Open remote swarm status';
+const taskLink=el('a','Task Manager','codex-map-link');taskLink.href='/task-manager';
 const researchLink=el('a','Research ↗','codex-map-link');researchLink.href='/research.html';
-const headerActions=el('div','','codex-header-actions'); headerActions.append(mapLink,researchLink,lock); heading.append(title,headerActions);
+const headerActions=el('div','','codex-header-actions'); headerActions.append(taskLink,mapLink,researchLink,lock); heading.append(title,headerActions);
 const unlock = el('form', '', 'codex-unlock');
 const label = el('label', 'Codex owner token '), password = el('input'); password.type = 'password'; password.autocomplete = 'off'; password.required = true; password.placeholder = 'Enter your owner token'; label.append(password);
 const connect = el('button', 'Connect'); connect.type = 'submit'; unlock.append(label, connect, el('small', secureRemote ? 'Open a one-time pairing link from CompAI, or use your owner token once. This browser stays paired for 30 days; Lock revokes it.' : 'Use localhost or an SSH tunnel. This separate owner token is never shared with test workers.'));

@@ -16,17 +16,23 @@ def request_tests():
     with urlopen(request,timeout=10) as response:return json.load(response)
 
 
-def snapshot():
-    def read(path):
-        # Fixed loopback source; callers cannot supply destinations or credentials.
-        with urlopen(Request('http://127.0.0.1:8089' + path), timeout=4) as response:
-            raw = response.read(4 * 1024 * 1024 + 1)
-        if len(raw) > 4 * 1024 * 1024:
-            raise ValueError('Coordinator snapshot exceeded the size limit')
-        return json.loads(raw)
-    network, tests = read('/api/devices'), read('/api/distributed-tests')
-    if not isinstance(network, dict) or not isinstance(tests, dict):
+def read_coordinator(path):
+    # Callers select fixed paths; never forward a browser-supplied destination.
+    with urlopen(Request('http://127.0.0.1:8089' + path), timeout=4) as response:
+        raw = response.read(4 * 1024 * 1024 + 1)
+    if len(raw) > 4 * 1024 * 1024:
+        raise ValueError('Coordinator snapshot exceeded the size limit')
+    value = json.loads(raw)
+    if not isinstance(value, dict):
         raise ValueError('Invalid coordinator snapshot')
+    return value
+
+
+def snapshot():
+    return project_status(read_coordinator('/api/devices'), read_coordinator('/api/distributed-tests'))
+
+
+def project_status(network, tests):
     run = tests.get('run') or {}
     interfaces = []
     for name, traffic in list(network.get('interface_traffic', {}).items())[:16]:
@@ -50,6 +56,40 @@ def snapshot():
                            'jobs': [{'name': job.get('name') or key, 'status': job.get('status')}
                                     for key, job in list(host.get('jobs', {}).items())[:100]]}
                           for host in run.get('hosts', [])[:64]]}}
+
+
+def task_manager():
+    """Resource measurements for the same authenticated owner on any network."""
+    network = read_coordinator('/api/devices?resolve=0')
+    metrics = read_coordinator('/api/cpu')
+    tests = read_coordinator('/api/distributed-tests')
+    def pick(value, fields):
+        return {key: value[key] for key in fields.split() if key in value}
+    data = pick(network, 'updated interface')
+    data['devices'] = [pick(row, 'hostname ip mac self') for row in network.get('devices', [])[:256]]
+    data['interface_traffic'] = {name: pick(row, 'rx_mbps tx_mbps updated')
+                               for name, row in list(network.get('interface_traffic', {}).items())[:32]}
+    capture = network.get('link_traffic') or {}
+    data['link_traffic'] = pick(capture, 'updated capture_error')
+    data['link_traffic']['peers'] = {name: pick(row, 'rx_mbps tx_mbps')
+                                   for name, row in list(capture.get('peers', {}).items())[:256]}
+    feed = network.get('docker_downloads') or {}
+    data['docker_downloads'] = pick(feed, 'status sampled_at engine_status')
+    for kind in ('active', 'recent'):
+        data['docker_downloads'][kind] = [pick(row, 'image pid observed_at evidence') for row in feed.get(kind, [])[:16]]
+    summary = pick(metrics, 'total_percent live_hosts total_hosts measured_logical_cpus activity_status test_hosts active_test_percent measured_test_hosts')
+    summary['hosts'] = []
+    for row in metrics.get('hosts', [])[:64]:
+        host = pick(row, 'host observed_hostname addresses status sampled_at sample_age_seconds window_seconds percent cpus ram_percent ram_used_bytes ram_total_bytes disk_busy_percent disk_basis network_mbps network_tx_mbps network_rx_mbps cpu_iowait_percent cpu_steal_percent cpu_pressure_some_percent running_test_jobs scheduled_cpu_slots workload_phase')
+        hardware = row.get('hardware') or {}
+        host['hardware'] = pick(hardware, 'stale')
+        host['hardware']['gpus'] = [pick(gpu, 'pci_id vendor name backend utilization_percent memory_total_mib memory_free_mib') for gpu in hardware.get('gpus', [])[:16]]
+        summary['hosts'].append(host)
+    run = project_status(network, tests)['run']
+    progress = (tests.get('run') or {}).get('image_progress')
+    if isinstance(progress, dict):
+        run['image_progress'] = pick(progress, 'image phase source destination updated transfer_phase eta_seconds bytes_total bytes_completed bytes_per_second')
+    return {'network': data, 'metrics': summary, 'run': run}
 
 
 def research_jobs(body=None):
