@@ -131,3 +131,18 @@ class ResearchProjectionTests(unittest.TestCase):
         self.assertEqual(service.run['hosts'][0]['status'],'running')
         self.assertEqual(service.run['hosts'][0]['jobs']['batch-1']['phase'],'waiting_for_capacity')
         for secret in ('private-dataset','/secret','PRIVATE','records'):self.assertNotIn(secret,json.dumps(service.run))
+
+class HardwareAdmissionTests(unittest.TestCase):
+    def test_hardware_run_does_not_block_ordinary_or_research_admission(self):
+        service=LiveDistributedTests.__new__(LiveDistributedTests)
+        service.lock=threading.RLock();service.reruns={}
+        with tempfile.TemporaryDirectory() as folder:
+            service.runner=SimpleNamespace(root=Path(folder),folder=Path(folder),running=True,
+                publication_lock=threading.Lock(),run={'id':'hardware','selection':None})
+            self.assertIsNone(service.create_run(selection={'suites':['gpu']}))
+            runner=Mock(run={'id':'ordinary'})
+            with patch('distributed.DistributedTests',return_value=runner):
+                self.assertIs(service.create_run(selection={'suites':['monitor']}),runner)
+            research=Mock(run={'id':'research'})
+            with patch('research_jobs.ResearchRun',return_value=research):
+                self.assertIs(service.create_run(selection={'research':'baseline'}),research)

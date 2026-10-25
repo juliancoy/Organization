@@ -141,7 +141,13 @@ class NetworkP2P:
         client=AgentClient(host)
         resource={'host':host,'client':client,'browser':None};self.resources.append(resource)
         upload=client.upload(source,self.stopped)
-        client.call('p2p.start',{'id':self.ident,'upload':upload,'image':self.report['browser_images'][host['host']][IMAGE]},timeout=120)
+        deadline=time.monotonic()+1800
+        while True:
+            self.check_stop()
+            result=client.call('p2p.start',{'id':self.ident,'upload':upload,'image':self.report['browser_images'][host['host']][IMAGE]},timeout=120)
+            if result.get('started'):break
+            if not result.get('waiting_capacity') or time.monotonic()>deadline:raise RuntimeError('P2P browser resource admission failed')
+            time.sleep(.5)
         def transport(path,data=None,method='POST'):
             return client.call('p2p.webdriver',{'id':self.ident,'path':path,'data':data,'method':method},timeout=180)
         until=time.monotonic()+75

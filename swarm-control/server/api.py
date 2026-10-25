@@ -21,7 +21,7 @@ ASSETS={'/':'codex.html','/codex.html':'codex.html','/codex.js':'codex.js','/cod
         '/test-deployment.css':'test-deployment.css','/swarm-control':'swarm-control.html','/swarm-control.svg':'swarm-control.svg'}
 ASSETS.update({'/swarm-status':'swarm-status.html','/swarm-status.js':'swarm-status.js','/swarm-status.css':'swarm-status.css','/swarm-machines.js':'swarm-machines.js'})
 ASSETS.update({'/research': 'research.html', '/research.html': 'research.html', '/research.js': 'research.js', '/research.css': 'research.css'})
-ASSETS.update({path: name for name in ('task-manager.html','task-manager.css','tests.css','levels.js','levels-model.js','cpu-report.js','snapshot-fetch.js','docker-downloads.js') for path in ('/'+name,)})
+ASSETS.update({'/'+name: name for name in ('task-manager.html','task-manager.js','task-manager.css','tests.css','levels.js','levels-model.js','cpu-report.js','snapshot-fetch.js','docker-downloads.js')})
 ASSETS['/task-manager']='task-manager.html'
 API='/api/v1/master/codex/'
 

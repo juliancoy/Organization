@@ -34,7 +34,15 @@ class GpuRun:
                 if self.service.run.get('stop_requested'):raise InterruptedError('Run stopped')
                 self.images.ensure(PYTHON,[host])
                 client=AgentClient(host)
-                try:result=client.call('gpu.probe',timeout=180)
+                try:
+                    deadline=time.monotonic()+1800
+                    while True:
+                        if self.service.run.get('stop_requested'):raise InterruptedError('Run stopped')
+                        result=client.call('gpu.probe',timeout=180)
+                        if not result.get('waiting_capacity'):break
+                        with self.service.lock:job.update(phase='waiting_for_capacity');self.service.save()
+                        if time.monotonic()>deadline:raise RuntimeError('GPU CPU/memory admission deadline exceeded')
+                        time.sleep(.5)
                 finally:client.close()
                 if result.get('status')!='passed' or not result.get('devices') or any(device.get('kernel_result')!=42 for device in result['devices']):raise RuntimeError('Missing GPU compute validation or incorrect kernel result')
                 with self.service.lock:

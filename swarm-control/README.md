@@ -61,7 +61,7 @@ Local QR enrollment remains available through the owner launcher.
 
 ## Interfaces and state
 
-- Public HTTPS: console, `/swarm-status`, `/swarm-control` APK receiver, and
+- Public HTTPS: console, `/task-manager`, `/swarm-status`, `/swarm-control` APK receiver, and
   authenticated `/api/v1/swarm/*` operations. `/health` exposes readiness only.
 - Loopback 8089: coordinator, native authenticated REST/MCP, local dashboard.
 - Loopback 8091: the remote API, reached through the configured tunnel.
@@ -84,6 +84,14 @@ The user must approve installation on the Galaxy.
 
 Run the global distributed suite through the coordinator or the Swarm status
 page. Queueing tests publishes reviewed source revisions before execution.
+
+## Remote Task Manager
+
+Open `https://compai.lifetech.fyi/task-manager` after signing in to Swarm Control.
+CPU, GPU, GPU memory, RAM, disk, network, and task observations use one
+same-origin authenticated HTTPS feed. The browser never contacts LAN addresses.
+Measurements refresh every three seconds while the page is visible; missing or
+stale telemetry remains unmeasured. Session expiry clears the displayed data.
 
 ## CPU reporting
 
@@ -120,8 +128,9 @@ successful validation. Browser checks use synthetic status fixtures.
 The durable request inbox admits up to eight independent runs concurrently and
 keeps up to 100 pending/running requests. Ordinary tests and configured DNA
 analyses use the same inbox. Publication is serialized; execution is not. Every
-run owns its checkout and dependency trees. Special P2P/device/GPU runs currently
-retain exclusive admission because they own coordinated hardware/network fixtures.
+run owns its checkout and dependency trees. P2P/device/GPU runs serialize against other coordinated hardware runs, while
+ordinary test and DNA jobs continue to share remaining worker capacity. P2P
+browsers and GPU kernel probes also reserve their CPU and memory in the same pool.
 
 All test/install containers and private DNA batches acquire CPU and memory from
 one process-safe pool per worker. Combined reservations cannot exceed logical

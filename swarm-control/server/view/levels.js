@@ -64,7 +64,7 @@ function update(data,metrics,record=true){
  renderDockerDownloads(document.getElementById('levels-docker'),data,mode);
  lastData=[data,metrics];latest=rowsFor(data,metrics,historyMode());const now=Date.now();
  if(record)for(const metric of ['network','disk','ram','cpu','gpu','vram','split'])for(const row of rowsFor(data,metrics,metric)){const h=histories[metric];if(!h.has(row.id))h.set(row.id,[]);const points=h.get(row.id);points.push({time:now,value:row.value});while(points.length&&points[0].time<now-300000)points.shift();}
- document.getElementById('levels-description').textContent=mode==='gpu'||mode==='vram'?'Live GPU counters by device. Missing GPU backends remain unmeasured. Compute validation and runtime readiness are shown under Devices & tools.':mode==='network'?'Every measured device on one time axis. Yellow bars show current throughput on the same scale as the line graph. Each color follows the same device across all four views.':mode==='disk'?'Physical disk activity over time. 100% means a disk was busy for the entire sampling interval.':mode==='cpu'?'Executing CPU time across all logical CPUs, averaged over full sampling intervals. Fleet and test-active averages include all host processes. I/O wait and stolen time are separate; hover over a device for details.':'Memory in use over time. Available memory, including reclaimable cache, is excluded.';
+ document.getElementById('levels-description').textContent=mode==='gpu'||mode==='vram'?'Live GPU counters by device. Missing GPU backends remain unmeasured. Compute validation and runtime readiness are shown under Devices & tools.':mode==='network'?'Every measured device on one time axis. Yellow bars show current throughput on the same scale as the line graph. Each color follows the same device across all resource views.':mode==='disk'?'Physical disk activity over time. 100% means a disk was busy for the entire sampling interval.':mode==='cpu'?'Executing CPU time across all logical CPUs, averaged over full sampling intervals. Fleet and test-active averages include all host processes. I/O wait and stolen time are separate; hover over a device for details.':'Memory in use over time. Available memory, including reclaimable cache, is excluded.';
  if(smoothing){latest=latest.map(row=>({...row,value:row.value===null?null:(displayPoints(histories[historyMode()].get(row.id)||[]).at(-1)?.value??row.value)}));document.getElementById('levels-description').textContent+=' Smoothing uses a 10-second exponential average; brief peaks are reduced.';}
  latest.sort((a,b)=>(b.value??-1)-(a.value??-1)||a.name.localeCompare(b.name));
  const legend=document.getElementById('levels-legend');legend.replaceChildren();
@@ -84,6 +84,7 @@ async function refresh(){
    update(snapshot.network,snapshot.metrics);
   }else update(...await Promise.all(['/api/devices?resolve=0','/api/cpu'].map(read)));
  }catch(error){
+  if(root.dataset.source)document.dispatchEvent(new CustomEvent('test-context',{detail:{run:null}}));
   if(error.status===401){
    lastData=null;latest=[];for(const history of Object.values(histories))history.clear();
    for(const id of ['levels-legend','levels-cpu-summary','levels-coverage','levels-docker'])document.getElementById(id).replaceChildren();

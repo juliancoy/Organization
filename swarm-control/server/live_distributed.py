@@ -71,7 +71,7 @@ class LiveDistributedTests:
             if (self.runner.folder/'DRAIN').exists():return None
             active=self.active()
             if len(active)>=8:return None
-            if active and (self.exclusive(selection) or any(self.exclusive(r.run.get('selection')) for r in active)):
+            if self.exclusive(selection) and any(self.exclusive(r.run.get('selection')) for r in active):
                 return None
             from distributed import DistributedTests
             if selection and selection.get('research'):

@@ -608,13 +608,17 @@ class Agent:
         if op == 'gpu.probe':
             if args:raise ValueError('GPU probe does not accept commands or image overrides')
             if not self.gpu_lock.acquire(blocking=False):raise RuntimeError('GPU validation already running')
+            lease=None
             try:
+                name='orgportal-test-gpu-'+secrets.token_hex(8)
+                lease=ResourceLease('gpu-probe',1,512,name,directory=os.getenv('SWARM_RESOURCE_DIR',str(self.root/'.resources')))
+                if not lease.try_acquire():return {'waiting_capacity':True}
                 import docker
                 with self.client() as client:
                     if 'nvidia' not in client.info().get('Runtimes',{}):raise RuntimeError('NVIDIA container runtime is not configured')
                     # Existing image only: readiness checks never pull from WAN.
                     image=client.images.get('python:3.12-bookworm')
-                    container=client.containers.run(image.id,['python','-c',GPU_SMOKE],detach=True,
+                    container=client.containers.run(image.id,['python','-c',GPU_SMOKE],detach=True,name=name,
                         network_mode='none',read_only=True,cap_drop=['ALL'],security_opt=['no-new-privileges'],
                         mem_limit='512m',pids_limit=64,nano_cpus=1000000000,
                         device_requests=[docker.types.DeviceRequest(count=-1,capabilities=[['gpu']])])
@@ -626,7 +630,9 @@ class Agent:
                     finally:container.remove(force=True)
                 self.gpu_validation={**result,'verified_at':time.time()}
                 return self.gpu_validation
-            finally:self.gpu_lock.release()
+            finally:
+                if lease:lease.close()
+                self.gpu_lock.release()
         if op == 'status':
             policy=worker_policy(self.config)
             config = json.loads(self.config.read_text())
@@ -727,6 +733,8 @@ class Agent:
                 timer=self.browser_timers.pop(args['id'],None)
                 if timer:timer.cancel()
                 self.browsers.discard(args['id']);self.busy()
+                lease=getattr(self,'p2p_leases',{}).pop(args['id'],None)
+                if lease:lease.close()
             return {'acknowledged':True}
         raise ValueError('Unsupported agent operation')
 
@@ -1068,6 +1076,21 @@ class Agent:
             self.cleanup_workspaces()
 
     def p2p_start(self,args):
+        ident=args['id'];self.folder(ident) # Validate before admitting a reservation.
+        with self.lock:
+            leases=getattr(self,'p2p_leases',None)
+            if leases is None:self.p2p_leases={};leases=self.p2p_leases
+            if ident not in leases:
+                leases[ident]=ResourceLease(ident,2,2048,'orgportal-test-'+ident+'-p2p',
+                    directory=os.getenv('SWARM_RESOURCE_DIR',str(self.root/'.resources')))
+            lease=leases[ident]
+            if not lease.try_acquire():return {'waiting_capacity':True}
+        try:return self.start_p2p_browser(args)
+        except Exception:
+            with self.lock:leases.pop(ident,None);lease.close()
+            raise
+
+    def start_p2p_browser(self,args):
         if Path('/tmp/launcher-agent-draining').exists():raise RuntimeError('Agent is draining for an explicit update')
         ident=args['id'];folder=self.folder(ident+'-p2p')
         if (self.folder(ident)/'STOP').exists():raise RuntimeError('Run was stopped')
@@ -1109,6 +1132,7 @@ class Agent:
         for ident in list(getattr(self,'resource_leases',{})):self.expire_resource(ident)
         for timer in self.browser_timers.values():timer.cancel()
         for ident in list(self.browsers):self.remove_containers(ident)
+        for lease in getattr(self,'p2p_leases',{}).values():lease.close()
         for ident,job in list(self.jobs.items()):
             if job['status']=='running':
                 (self.folder(ident)/'STOP').touch()

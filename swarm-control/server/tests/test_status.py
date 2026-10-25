@@ -63,7 +63,7 @@ class TaskManagerProjectionTests(unittest.TestCase):
 
 class RemoteTaskManagerBoundaryTests(RemoteStatusBoundaryTests):
     def test_task_manager_and_resources_are_available_to_paired_owner(self):
-        for path in ('/task-manager','/task-manager.html','/task-manager.css','/levels.js','/levels-model.js','/cpu-report.js','/snapshot-fetch.js','/docker-downloads.js','/tests.css'):
+        for path in ('/task-manager','/task-manager.html','/task-manager.js','/task-manager.css','/levels.js','/levels-model.js','/cpu-report.js','/snapshot-fetch.js','/docker-downloads.js','/tests.css'):
             self.assertEqual(self.request(path),200,path)
         with patch('status.task_manager',return_value={'network':{},'metrics':{},'run':{}}) as feed:
             path='/api/v1/swarm/task-manager'
