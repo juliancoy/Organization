@@ -14,7 +14,7 @@ FILES = {
     'org-api': ('OrgPortal', 'org-worker/', ('test/*.test.ts',)),
     'chat': ('OrgPortal', 'chat-worker/', ('test/*.test.ts',)),
     'web': ('OrgPortal', 'web/', ('src/**/*.test.ts', 'src/**/*.test.tsx')),
-    'identity': ('PIdP', 'serverless/', ('test/*.test.mjs', 'test/*.test.ts', 'browser/mcp-*.mjs')),
+    'identity': ('PIdP', 'serverless/', ('test/*.test.mjs', 'test/*.test.ts')),
     'identity-python': ('PIdP', '', ('tests/**/test_*.py','tests/**/*_test.py')),
 }
 CHECKS = {'org-api': ('typecheck', 'check:bundle'), 'chat': ('typecheck',),
