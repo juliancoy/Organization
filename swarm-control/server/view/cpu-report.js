@@ -4,7 +4,7 @@ export function cpuCoverage(data){
 }
 export function hostCpuDetail(host){
  const age=Number.isFinite(host.sample_age_seconds)?host.sample_age_seconds.toFixed(1)+'s ago':'age unknown';
- if(host.status!=='live'||!Number.isFinite(host.percent))return `${host.host} · ${host.status==='permission_denied'?'Permission denied':host.status==='warming'?'Warming up':host.status==='update_required'?'Agent update required':host.status} · ${age}`;
+ if(host.status!=='live'||!Number.isFinite(host.percent))return `${host.host} · ${{permission_denied:'Permission denied',authentication_denied:'Agent authentication denied',warming:'Warming up',update_required:'Agent update required',stale:'Stale',unavailable:'Unavailable'}[host.status]||host.status} · ${age}`;
  const window=Number.isFinite(host.window_seconds)?host.window_seconds.toFixed(1)+'s':'unknown interval';
  return `${host.host} · ${percent(host.percent)} CPU · ${host.cpus} logical CPUs · ${window} average · ${age}`;
 }

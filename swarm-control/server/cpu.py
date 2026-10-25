@@ -35,19 +35,24 @@ class CpuMonitor:
                 hardware=hardware_sample(disk=WORKSPACE)
                 try:
                     config=json.loads(CONFIG.read_text())
-                    detail=AgentClient({'host':config['name'],'agent_endpoint':'http://'+config['peers'][config['name']]+':8790'}).call('status',timeout=3)
+                    client=AgentClient({'host':config['name'],'agent_endpoint':'http://'+config['peers'][config['name']]+':8790'})
+                    try:detail=client.call('status',timeout=3)
+                    finally:client.close()
                     hardware={**detail.get('hardware',{}),**hardware}
                 except (OSError,ValueError,RuntimeError,KeyError):pass
                 values['hardware']=hardware
             else:
                 config=json.loads(CONFIG.read_text())
                 address=config['peers'][target['host']]
-                values=AgentClient({**target,'agent_endpoint':'http://'+address+':8790'}).call('metrics',timeout=8)
+                client=AgentClient({**target,'agent_endpoint':'http://'+address+':8790'})
+                try:values=client.call('metrics',timeout=8)
+                finally:client.close()
             if values.get('measurement_version')!=2:
                 return {'host':target['host'],'percent':None,'cpus':values.get('cpus'),'status':'update_required','sampled_at':time.time()}
             return {'host':target['host'],**values}
         except (OSError,ValueError,TypeError,RuntimeError,KeyError,subprocess.SubprocessError) as error:
-            return {'host':target['host'],'percent':None,'cpus':None,'status':'permission_denied' if isinstance(error,PermissionError) else 'unavailable','sampled_at':time.time()}
+            status='permission_denied' if isinstance(error,PermissionError) else 'authentication_denied' if str(error) in ('Agent HTTP status 401','Agent HTTP status 403') else 'unavailable'
+            return {'host':target['host'],'percent':None,'cpus':None,'status':status,'sampled_at':time.time()}
 
     def view(self):
         with self.lock:
