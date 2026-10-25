@@ -660,3 +660,25 @@ there is no TURN relay configured. Pairing alone is neither WebRTC connectivity
 nor installation proof. No remote shell, arbitrary-file, or handset-control API
 is exposed. See [the build, installation, transport tests and retention details](../swarm-control/README.md).
 Initial owner-server setup: `python3 swarm-control/server/setup-test-deployment.py`.
+
+### Worker disk retention
+
+Launchers sweep persisted job folders at startup, every five minutes, before
+admitting a job, and after its containers finish. Active jobs, running native
+processes and container-mounted folders are protected. Successful execution
+workspaces are removed after bounded PNG/JSON reports are copied beside the job
+receipt. The coordinator retains its own uploaded results.
+
+At most two failed/interrupted workspaces survive for 24 hours. One successful
+preparation stays warm for 30 minutes so a matching run can consume it. Finished
+workspaces and local artifacts share a 5 GiB budget; oldest workspaces and then
+local artifact copies are evicted under pressure. Small manifests and state
+receipts expire after 30 days. New jobs require 10 GiB free after cleanup.
+
+Installed npm/Python dependency trees are saved in compressed, runtime-,
+architecture-, install-command- and lockfile-keyed archives. Each job restores a
+private writable copy, then regenerates its source metadata. Failed installs are
+not cached; invalid archives trigger a clean install. Local-file npm dependencies
+use a fresh installation. Package/download caches have a separate 5 GiB LRU
+budget and are cleaned only when no worker is active and their locks/mounts are
+free. Git objects remain in the existing separate per-repository cache.

@@ -97,14 +97,23 @@ def parse_counts(line, counts):
 
 
 def dependency_cache(work,suite_id,spec):
-    """Keep package downloads, never installed dependencies, on the worker host."""
+    """Partition reusable package artifacts by install inputs and pinned runtime."""
     digest=hashlib.sha256(('v2\0'+suite_id+'\0'+spec['image']+'\0'+os.uname().machine+'\0'+spec['cwd']+'\0'+json.dumps(spec.get('prepare'),sort_keys=True)).encode())
     cwd=work/spec['cwd']
     names={'package.json','package-lock.json','npm-shrinkwrap.json','yarn.lock','pnpm-lock.yaml',
            'pyproject.toml','poetry.lock','uv.lock','Pipfile.lock'}
     paths=[path for path in cwd.iterdir() if path.is_file() and
            (path.name in names or path.name.startswith('requirements') and path.suffix=='.txt')] if cwd.is_dir() else []
-    for path in sorted(paths):digest.update(path.name.encode()+b'\0'+path.read_bytes())
+    paths.sort(reverse=True)
+    seen=set()
+    while paths:
+        path=paths.pop();relative=path.resolve().relative_to(work.resolve())
+        if relative in seen:continue
+        seen.add(relative);content=path.read_bytes();digest.update(str(relative).encode()+b'\0'+content)
+        if path.suffix=='.txt':
+            for line in content.decode().splitlines():
+                match=re.match(r'^\s*(?:-r\s*|-c\s*|--requirement[= ]|--constraint[= ])([^#\s]+)',line)
+                if match:paths.append(path.parent/match[1])
     root=Path.home()/'.cache/organization-tests/packages'/digest.hexdigest()
     root.mkdir(parents=True,exist_ok=True,mode=0o700)
     for name in ('npm','pip'):(root/name).mkdir(exist_ok=True,mode=0o700)

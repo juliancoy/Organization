@@ -53,13 +53,13 @@ def prune_workspaces(root,active=(),mounts=(),*,now=None,budget=WORKSPACE_BUDGET
         if folder.name in active or state.get('status') not in ('completed','failed','stopped','interrupted','consumed'):continue
         if any(str(mount)==str(folder) or str(mount).startswith(str(folder)+'/') for mount in mounts):continue
         source=folder/'source'
-        if source.is_symlink():continue
+        if source.is_symlink() or (folder/'results').is_symlink():continue
         finished=state.setdefault('finished_at',state_path.stat().st_mtime)
         size=state.get('workspace_bytes')
         if size is None:size=tree_bytes(source) if source.exists() else 0;state['workspace_bytes']=size
         records.append((finished,folder,state,size))
     records.sort(key=lambda row:row[0],reverse=True)
-    failed=[folder.name for finished,folder,state,size in records if source_exists(folder) and state['status']=='failed' and now-finished<86400][:2]
+    failed=[folder.name for finished,folder,state,size in records if source_exists(folder) and state['status'] in ('failed','interrupted') and now-finished<86400][:2]
     prepared=[folder.name for finished,folder,state,size in records if source_exists(folder) and state.get('prepare_only') and state['status']=='completed' and now-finished<1800][:1]
     keep=set(failed+prepared);retained=sum(size for _,folder,_,size in records if folder.name in keep)
     retained+=sum(tree_bytes(folder/'results') for _,folder,_,_ in records)
@@ -71,7 +71,7 @@ def prune_workspaces(root,active=(),mounts=(),*,now=None,budget=WORKSPACE_BUDGET
             results=folder/'results';before=tree_bytes(results);results.mkdir(exist_ok=True,mode=0o700)
             for relative in ('visual-artifacts','swarm-web-artifacts','.local/test-status','OrgPortal/.local/test-status'):
                 origin=source/relative
-                if origin.is_dir() and not origin.is_symlink() and tree_bytes(origin)<=64*1024**2:
+                if origin.is_dir() and not origin.is_symlink() and origin.resolve().is_relative_to(source.resolve()) and tree_bytes(origin)<=64*1024**2:
                     def ignore_links(directory,names):return [name for name in names if (Path(directory)/name).is_symlink()]
                     shutil.copytree(origin,results/relative.replace('/','-'),dirs_exist_ok=True,ignore=ignore_links)
             retained+=tree_bytes(results)-before
@@ -202,6 +202,7 @@ class Agent:
         self.jobs = {}
         self.active_workers=set()
         self.storage_status={}
+        self.storage_lock=threading.RLock()
         self.storage_stop=threading.Event()
         self.uploads = {}
         self.registry_transfers=0
@@ -215,6 +216,7 @@ class Agent:
             shutil.rmtree(path.parent)
         # A process restart must never pretend that a previous job is still running.
         for path in self.root.glob('*/state.json'):
+            if path.parent.is_symlink() or path.is_symlink():continue
             state = json.loads(path.read_text())
             if state.get('status') in ('running', 'starting'):
                 (path.parent/'STOP').touch()
@@ -227,21 +229,26 @@ class Agent:
         """Fail closed if container ownership cannot be inspected."""
         import docker
         try:
-            with contextlib.closing(docker.from_env(timeout=5)) as client:
-                mounts=[mount['Source'] for container in client.containers.list(all=True)
-                        for mount in container.attrs.get('Mounts',[]) if mount.get('Type')=='bind']
-            for proc in Path('/proc').glob('[0-9]*'):
-                try:mounts.append(str((proc/'cwd').resolve(strict=True)))
-                except OSError:pass
-            with self.lock:
-                active=set(self.active_workers)|{key for key,value in self.jobs.items() if value['status'] in ('running','starting')}
+            with self.storage_lock:
+                with contextlib.closing(docker.from_env(timeout=5)) as client:
+                    mounts=[mount['Source'] for container in client.containers.list(all=True)
+                            for mount in container.attrs.get('Mounts',[]) if mount.get('Type')=='bind']
+                for proc in Path('/proc').glob('[0-9]*'):
+                    try:mounts.append(str((proc/'cwd').resolve(strict=True)))
+                    except OSError:pass
+                with self.lock:
+                    active=set(self.active_workers)|{key for key,value in self.jobs.items() if value['status'] in ('running','starting')}
                 summary=prune_workspaces(self.root,active,mounts)
-                for ident in summary['removed']:
-                    if ident in self.jobs:self.jobs[ident]['workspace_retained']=False
-                if not self.active_workers:
-                    summary['package_cache_bytes']=prune_package_cache(self.root/'home/.cache/organization-tests/packages',mounts)
+                with self.lock:
+                    for ident in summary['removed']:
+                        if ident in self.jobs:self.jobs[ident]['workspace_retained']=False
+                    idle=not self.active_workers
+                    finished=[key for key,value in self.jobs.items() if key not in self.active_workers and value['status'] not in ('running','starting')]
+                    for key in finished[:-10]:
+                        if not (self.folder(key)/'source').exists():del self.jobs[key]
+                if idle:summary['package_cache_bytes']=prune_package_cache(self.root/'home/.cache/organization-tests/packages',mounts)
                 self.storage_status=summary
-            return summary
+                return summary
         except Exception as error:
             self.storage_status={'error':type(error).__name__+': '+str(error)[:200]}
             return self.storage_status
@@ -249,7 +256,7 @@ class Agent:
     def maintain_storage(self):
         while not self.storage_stop.is_set():
             self.cleanup_workspaces()
-            if self.storage_stop.wait(300):break
+            self.storage_stop.wait(300)
 
     def busy(self):
         path=Path('/tmp/launcher-agent-busy.json');temporary=path.with_suffix('.tmp')
@@ -368,6 +375,7 @@ class Agent:
                     'machine':hashlib.sha256(machine.read_bytes()).hexdigest(),'hostname':socket.gethostname(),
                     'addresses':addresses,'platform':info['OSType']+'/'+info['Architecture'],
                     'worker_policy':policy,'capabilities':['controller-signature','github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','file-queue','snapshot-stage','event-wait','encrypted-backup'],
+                    'storage':self.storage_status,
                     'preparations':[key for key,j in self.jobs.items() if j['status']=='running' and j.get('prepare_only')],
                     'active_jobs':[key for key,j in self.jobs.items() if j['status']=='running' and not j.get('prepare_only')],'active_image_transfers':self.registry_transfers,'active_uploads':len(self.uploads)}
         if op.startswith('backup.'):
@@ -629,7 +637,7 @@ class Agent:
             return result.stdout.strip()
 
         if not manifest.get('prepare_only'):
-            with self.lock:
+            with self.storage_lock,self.lock:
                 for key,previous in self.jobs.items():
                     if previous.get('prepare_only') and previous.get('status')=='completed':
                         source=self.folder(key)/'source'
