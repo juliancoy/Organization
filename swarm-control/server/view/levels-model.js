@@ -1,6 +1,12 @@
 export const valid=v=>typeof v==='number'&&Number.isFinite(v)&&v>=0;
 export function deviceLevels(data,metrics,mode,now=Date.now()) {
  const hosts=metrics.hosts||[],used=new Set(),rows=[];
+ if(['gpu','vram'].includes(mode))return hosts.flatMap(h=>(h.hardware?.gpus||[]).map((gpu,index)=>{
+  const fresh=h.status==='live'&&now/1000-h.sampled_at<15&&!h.hardware.stale;
+  let value=mode==='gpu'?gpu.utilization_percent:valid(gpu.memory_total_mib)&&gpu.memory_total_mib>0&&valid(gpu.memory_free_mib)?100*(1-gpu.memory_free_mib/gpu.memory_total_mib):null;
+  if(!fresh||!valid(value))value=null;
+  return {id:h.host+':gpu:'+(gpu.pci_id||index),name:h.host+' · '+gpu.name,value,basis:mode==='gpu'?'Live GPU utilization; unavailable backends remain unmeasured':'Dedicated GPU memory used; unavailable memory counters remain unmeasured'};
+ }));
  const field={network:'network_mbps',disk:'disk_busy_percent',ram:'ram_percent',cpu:'percent',send:'network_tx_mbps',receive:'network_rx_mbps'}[mode];
  const hostValue=h=>h?.status==='live'&&now/1000-h.sampled_at<15&&valid(h[field])?h[field]:null;
  const capture=data.link_traffic, fresh=capture&&!capture.capture_error&&now-Date.parse(capture.updated)<10000;

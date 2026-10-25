@@ -6,3 +6,10 @@ const data={devices:[{ip:'10.42.0.2',mac:'aa'},{ip:'10.42.0.3',mac:'bb'}],link_t
 test('SSH address identity deduplicates and passive peers cover other devices',()=>{const rows=deviceLevels(data,{hosts:[host]},'network',now);assert.equal(rows.length,2);assert.equal(rows[0].value,3);assert.equal(rows[1].value,3);});
 test('unmeasured RAM is unknown and stale hosts lose measurements',()=>{assert.deepEqual(deviceLevels(data,{hosts:[host]},'ram',now).map(r=>r.value),[54,null]);assert.equal(deviceLevels(data,{hosts:[host]},'disk',now+16000)[0].value,null);});
 test('unnamed device cannot match unavailable host with no observed hostname',()=>{const rows=deviceLevels(data,{hosts:[{host:'other.local',status:'unavailable'}]},'ram',now);assert.equal(rows.length,3);});
+
+test('GPU charts use measured counters and suppress stale or absent values',()=>{
+ const metrics={hosts:[{...host,hardware:{gpus:[{name:'RTX',utilization_percent:60,memory_total_mib:100,memory_free_mib:25},{name:'Intel'}]}}]};
+ assert.deepEqual(deviceLevels({},metrics,'gpu',now).map(r=>r.value),[60,null]);
+ assert.deepEqual(deviceLevels({},metrics,'vram',now).map(r=>r.value),[75,null]);
+ assert.equal(deviceLevels({},metrics,'gpu',now+16000)[0].value,null);
+});
