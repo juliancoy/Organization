@@ -74,7 +74,25 @@ function update(data,metrics,record=true){
  document.getElementById('levels-coverage').textContent=count+' / '+latest.length+(mode==='network'&&split?' directional series measured. ':' devices measured. ')+(mode==='network'?'Hosts with telemetry report physical-interface totals; other devices use gateway-visible traffic, which excludes switched traffic. These scopes differ; values are not additive.':'CPU, GPU, disk, and RAM require live host telemetry. Devices without telemetry remain listed as “No data”.')+' History is kept in this tab for five minutes.';
  document.getElementById('levels-status').textContent='Updated '+new Date().toLocaleTimeString();draw();
 }
-async function refresh(){if(busy||document.hidden)return;busy=true;try{const responses=await Promise.all(['/api/devices?resolve=0','/api/cpu'].map(async url=>{const r=await snapshotFetch(url,{cache:'no-store',signal:AbortSignal.timeout(6000)});if(!r.ok)throw Error();return r.json();}));update(...responses);}catch{if(lastData)update({...lastData[0],link_traffic:null,docker_downloads:{status:'unavailable'}}, {hosts:lastData[1].hosts.map(h=>({...h,status:'unavailable'}))});document.getElementById('levels-status').textContent='Disconnected · retrying';}finally{busy=false;}}
+async function refresh(){
+ if(busy||document.hidden)return;busy=true;
+ try{
+  const read=async url=>{const response=await snapshotFetch(url,{cache:'no-store',signal:AbortSignal.timeout(15000)});if(!response.ok)throw Object.assign(Error('Measurements unavailable'),{status:response.status});return response.json();};
+  if(root.dataset.source){
+   const snapshot=await read(root.dataset.source);
+   document.dispatchEvent(new CustomEvent('test-context',{detail:{run:snapshot.run}}));
+   update(snapshot.network,snapshot.metrics);
+  }else update(...await Promise.all(['/api/devices?resolve=0','/api/cpu'].map(read)));
+ }catch(error){
+  if(error.status===401){
+   lastData=null;latest=[];for(const history of Object.values(histories))history.clear();
+   for(const id of ['levels-legend','levels-cpu-summary','levels-coverage','levels-docker'])document.getElementById(id).replaceChildren();
+   draw();
+  }else if(lastData)update({...lastData[0],link_traffic:null,docker_downloads:{status:'unavailable'}}, {hosts:lastData[1].hosts.map(h=>({...h,status:'unavailable'}))});
+  document.getElementById('levels-status').textContent=error.status===401?'Sign in to Swarm Control to view your Task Manager.':'Disconnected · measurements unavailable · retrying';
+ }finally{busy=false;}
+}
+
 setInterval(refresh,3000);document.addEventListener('visibilitychange',refresh);void refresh();
 
 new ResizeObserver(()=>{if(lastData)draw();}).observe(document.getElementById("levels-plot"));

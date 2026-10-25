@@ -36,3 +36,42 @@ class SnapshotProjectionTests(unittest.TestCase):
         self.assertNotIn('private',json.dumps(result))
         self.assertTrue(result['devices'][0]['reachable'])
         self.assertEqual(result['run']['hosts'][0]['jobs'][0]['status'],'running')
+
+class TaskManagerProjectionTests(unittest.TestCase):
+    def test_remote_resources_preserve_measurements_and_exclude_credentials(self):
+        network={'devices':[{'ip':'10.0.0.2','mac':'aa','hostname':'worker.local','ports':[22]}],
+                 'link_traffic':{'updated':'now','peers':{'aa':{'rx_mbps':3,'tx_mbps':2,'secret':'private'}}},
+                 'docker_downloads':{'status':'available','active':[{'image':'node:22','pid':42,'command':'private'}]},
+                 'process_resources':{'command':'private'}}
+        metrics={'total_percent':42,'live_hosts':1,'hosts':[{'host':'worker.local','status':'live','percent':42,
+                 'sampled_at':123,'ram_percent':40,'disk_busy_percent':25,'network_mbps':5,
+                 'session':{'token':'private'},'hardware':{'storage':{'path':'private'},'gpus':[{'name':'GPU','utilization_percent':12,'memory_total_mib':100,'memory_free_mib':50,'secret':'private'}]}}]}
+        tests={'run':{'id':'fixture','status':'running','hosts':[],'credentials':'private'}}
+        with patch('status.urlopen',side_effect=[io.BytesIO(json.dumps(v).encode()) for v in [network,metrics,tests]]) as fetch:
+            result=status.task_manager()
+        self.assertEqual([call.args[0].full_url for call in fetch.call_args_list],['http://127.0.0.1:8089/api/devices?resolve=0','http://127.0.0.1:8089/api/cpu','http://127.0.0.1:8089/api/distributed-tests'])
+        host=result['metrics']['hosts'][0]
+        for key in ['percent','ram_percent','disk_busy_percent','network_mbps']:
+            self.assertEqual(host[key],metrics['hosts'][0][key])
+        self.assertEqual(host['hardware']['gpus'][0]['utilization_percent'],12)
+        self.assertEqual(result['network']['link_traffic']['peers']['aa']['rx_mbps'],3)
+        self.assertNotIn('private',json.dumps(result))
+
+    def test_resource_feed_is_bounded(self):
+        with patch('status.urlopen',return_value=io.BytesIO(b' '*(4*1024*1024+1))):
+            with self.assertRaises(ValueError):status.task_manager()
+
+class RemoteTaskManagerBoundaryTests(RemoteStatusBoundaryTests):
+    def test_task_manager_and_resources_are_available_to_paired_owner(self):
+        for path in ('/task-manager','/task-manager.html','/task-manager.css','/levels.js','/levels-model.js','/cpu-report.js','/snapshot-fetch.js','/docker-downloads.js','/tests.css'):
+            self.assertEqual(self.request(path),200,path)
+        with patch('status.task_manager',return_value={'network':{},'metrics':{},'run':{}}) as feed:
+            path='/api/v1/swarm/task-manager'
+            self.assertEqual(self.request(path),401)
+            self.assertEqual(self.request(path,origin='https://evil.example',cookie=self.cookie),403)
+            self.assertEqual(self.request(path,'POST',origin='https://compai.example',body={},cookie=self.cookie),404)
+            feed.assert_not_called()
+            self.assertEqual(self.request(path,cookie=self.cookie),200)
+            feed.assert_called_once()
+        with patch('status.task_manager',side_effect=OSError('private')):
+            self.assertEqual(self.request('/api/v1/swarm/task-manager',cookie=self.cookie),503)
