@@ -115,3 +115,19 @@ class ConcurrentInboxTests(unittest.TestCase):
                 factory.assert_called_once_with(Path(folder),Path(folder),recover=False)
             self.assertIs(runner.publication_lock,service.runner.publication_lock)
             self.assertIs(service.reruns['new'],runner)
+
+class ResearchProjectionTests(unittest.TestCase):
+    def test_private_state_exposes_only_batch_progress_and_operational_hosts(self):
+        from research_jobs import ResearchRun
+        service=ResearchRun.__new__(ResearchRun)
+        service.lock=threading.RLock();service.run={};service.save=Mock()
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)
+            (path/'state.json').write_text(json.dumps({'sources':{'qc':{'path':'/secret/sample.vcf'}},'jobs':{
+                'private-dataset-qc-1':{'host':'worker','status':'passed','records':123,'sample':'PRIVATE'},
+                'private-dataset-qc-2':{'host':'worker','status':'waiting_capacity'}}}))
+            service.read_progress(path)
+        self.assertEqual(service.run['progress'],{'total':2,'completed':1,'failed':0})
+        self.assertEqual(service.run['hosts'][0]['status'],'running')
+        self.assertEqual(service.run['hosts'][0]['jobs']['batch-1']['phase'],'waiting_for_capacity')
+        for secret in ('private-dataset','/secret','PRIVATE','records'):self.assertNotIn(secret,json.dumps(service.run))
