@@ -2,6 +2,7 @@ import {snapshotFetch} from './snapshot-fetch.js';
 import {containerWebsites} from './container-websites.js';
 import {breadcrumbNav,setBreadcrumbs} from './breadcrumbs.js';
 import {cpuColor} from './cpu-colors.js';
+import {hardwareLines} from './hardware.js';
 let host=null,report=null,cpuReport=null,busy=false;
 const panel=document.createElement('section');panel.id='host-terminal';panel.hidden=false;panel.setAttribute('role','region');panel.setAttribute('aria-label','Machine test terminal');
 const heading=document.createElement('strong'),status=document.createElement('p'),output=document.createElement('pre');
@@ -21,6 +22,7 @@ function render(){
  heading.textContent=host+' · CPU & test terminal';
  const cpu=cpuReport?.hosts?.find(item=>item.host===host);
  cpuSummary.textContent=cpu?.status==='live'?cpu.cpus+' logical CPUs · '+cpu.percent.toFixed(1)+'% total utilization':'CPU measurements '+(cpu?.status||'unavailable');
+ cpuSummary.textContent+='\n'+hardwareLines(cpu?.hardware).join('\n');cpuSummary.style.whiteSpace='pre-line';
  grid.replaceChildren();
  if(cpu?.status==='live')for(const core of cpu.logical_cpus||[]){
   const cell=document.createElement('div');cell.className='logical-cpu-cell';cell.style.backgroundColor=cpuColor(core.percent);cell.style.color=core.percent>=65?'#171009':'#fff';

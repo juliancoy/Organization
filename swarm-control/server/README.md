@@ -682,3 +682,32 @@ not cached; invalid archives trigger a clean install. Local-file npm dependencie
 use a fresh installation. Package/download caches have a separate 5 GiB LRU
 budget and are cleaned only when no worker is active and their locks/mounts are
 free. Git objects remain in the existing separate per-repository cache.
+
+## GPU and storage readiness
+
+Worker status, CPU telemetry, native REST/MCP machine details, and machine cards
+include PCI GPU inventory and free disk space. NVIDIA hosts also report VRAM and
+utilization when the native driver utility is available. Detection is separate
+from CUDA container readiness and from a successful compute test. Stale samples
+are labelled explicitly.
+
+The `gpu` suite is included in a full run and can be requested independently via
+`POST /api/v1/master/test-requests` with `{"suites":["gpu"],"force":true}`. It uses
+controller-signed `gpu.probe` to launch a fixed PTX kernel, check a value copied
+back from the GPU, and remove the isolated container. There is no arbitrary GPU
+command/image endpoint. It uses the existing Python Bookworm image and NVIDIA
+container runtime. Hosts without that runtime remain visible as excluded GPU
+coverage, not verified compute workers. CPU workers continue independently.
+
+The hardware panel also offers a user-triggered WebGPU kernel check for the
+visiting browser. WebGPU requires a supported browser and secure context
+(HTTPS or localhost). It does not make Android/Intel/AMD devices CUDA workers,
+and software adapters are labelled when the browser identifies them. Attached
+Android devices display their graphics driver and explicitly unverified compute
+capability. Browser compute is not a folding backend or a phone job scheduler.
+
+For the molecular-computing starter environment, keep the largest datasets on
+Latitude or Inspiron and stage bounded inputs/results over the LAN. Disk space
+on separate nodes is not pooled storage or pooled GPU memory. Do not start
+terabyte-scale database downloads on CompAI's nearly full system disk. Actual
+folding/chemistry models still need tool-specific VRAM and correctness checks.

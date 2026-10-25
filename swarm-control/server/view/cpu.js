@@ -31,5 +31,5 @@ void refresh();
 const browserPanel=document.createElement('div');browserPanel.className='browser-gpu';
 const browserStatus=document.createElement('span');browserStatus.textContent='This browser: '+(navigator.gpu?'WebGPU available; compute untested':'WebGPU unavailable in this context');
 const button=document.createElement('button');button.type='button';button.textContent='Test this browser’s GPU';
-button.addEventListener('click',async()=>{button.disabled=true;try{const result=await probeBrowserGPU();browserStatus.textContent=result.status+': '+result.reason;}catch(error){browserStatus.textContent='GPU check failed: '+error.message;}finally{button.disabled=false;}});
+button.addEventListener('click',async()=>{button.disabled=true;let timeout;try{const result=await Promise.race([probeBrowserGPU(),new Promise((_,reject)=>{timeout=setTimeout(()=>reject(Error('GPU check timed out')),10000);})]);browserStatus.textContent=result.status+': '+result.reason;}catch(error){browserStatus.textContent='GPU check failed: '+error.message;}finally{clearTimeout(timeout);button.disabled=false;}});
 browserPanel.append(browserStatus,button);document.getElementById('cpu-readout').append(browserPanel);

@@ -30,6 +30,8 @@ export async function probeBrowserGPU(gpu=globalThis.navigator?.gpu){
   device.queue.submit([encoder.finish()]);await read.mapAsync(GPUMapMode.READ);
   const value=new Uint32Array(read.getMappedRange())[0];read.unmap();buffer.destroy();read.destroy();
   if(value!==42)throw Error('GPU readback mismatch');
-  return {status:'passed',reason:'WebGPU compute kernel returned 42',adapter:adapter.info?.description||adapter.info?.architecture||'Browser GPU'};
+  const description=adapter.info?.description||adapter.info?.architecture||'Browser GPU';
+  const software=adapter.isFallbackAdapter===true||adapter.info?.isFallbackAdapter===true||/swiftshader|llvmpipe|software/i.test(description);
+  return {status:'passed',reason:'WebGPU compute kernel returned 42'+(software?' (software adapter)':''),adapter:description,hardware_accelerated:software?false:null};
  }finally{device.destroy();}
 }

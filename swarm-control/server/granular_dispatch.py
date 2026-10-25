@@ -44,7 +44,7 @@ def execute(service, hosts, images):
             service.save()
         return
 
-    if run.get('selection') and not include_p2p and len(hosts) > len(tasks):
+    if run.get('selection') and not include_p2p and not gpu.hosts and len(hosts) > len(tasks):
         for host in hosts[len(tasks):]:
             host.update(status='passed',not_executed=True,preparation='No additional worker needed for this focused request')
         hosts=hosts[:len(tasks)]

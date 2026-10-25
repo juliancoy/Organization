@@ -9,13 +9,14 @@ from test_scope import normalize,select
 
 class MobileTests(TestCase):
     def test_adb_discovery_reports_physical_pixel_and_browser_readiness(self):
-        with patch('mobile_worker.adb',side_effect=['List of devices attached\nabc device usb:1-2 model:Pixel_3\nother device model:Other\n','12','@chrome_devtools_remote']):
+        with patch('mobile_worker.adb',side_effect=['List of devices attached\nabc device usb:1-2 model:Pixel_3\nother device model:Other\n','12','adreno','@chrome_devtools_remote']):
             devices=discover()['devices']
         self.assertEqual(len(devices),1)
         self.assertEqual(devices[0]['serial'],'abc')
         self.assertTrue(devices[0]['connected'])
         self.assertTrue(devices[0]['browser_ready'])
         self.assertEqual(devices[0]['slots'],1)
+        self.assertFalse(devices[0]['gpu']['compute_verified'])
 
     def test_mobile_only_selection_does_not_dispatch_docker_test_jobs(self):
         selection=normalize(suites=['mobile'])

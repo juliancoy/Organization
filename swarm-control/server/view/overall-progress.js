@@ -23,4 +23,5 @@ export function renderOverallProgress(run){
  root.append(make('p',p.terminal?'Results saved.':(run.preparation||'Jobs are assigned across available machines.')+' · Last observed progress '+time(quiet)+' ago'+(quiet>=90000?' · No new progress observed; check worker output below.':''),'overall-stage'));
  root.append(make('small',p.total===null?'The job total becomes available after source and worker preparation.':'Counts cover test-file and build jobs across all machines; retry attempts are counted once.'+(run.force?' Forced run: cached passes are bypassed.':' Matching recorded passes may be reused.'),'muted'));
  const output=make('a','View live output');output.href='#live-terminal';root.append(output);
+ if(run.gpu){const coverage=run.gpu.coverage||[];root.append(make('p','CUDA kernel checks: '+run.gpu.status+' · '+coverage.filter(h=>h.eligible).length+' eligible workers'+coverage.filter(h=>h.reason==='NVIDIA runtime missing').map(h=>' · '+h.host+': NVIDIA runtime missing').join(''),'muted'));}
 }
