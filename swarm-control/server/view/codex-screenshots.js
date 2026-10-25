@@ -11,7 +11,7 @@ export function screenshotPicker(form, input, changed) {
   const notify=(dirty=false)=>{choose.disabled=disabled||processing;changed(dirty);};
   function render(dirty=false){previews.replaceChildren();for(const image of images){const li=document.createElement('li'),img=document.createElement('img'),name=document.createElement('span'),remove=document.createElement('button');img.src=image.data_url;img.alt=image.name;name.textContent=image.name;remove.type='button';remove.textContent='Remove '+image.name;remove.disabled=disabled;remove.onclick=()=>{images=images.filter(item=>item!==image);render(true);};li.append(img,name,remove);previews.append(li)}notify(dirty);}
   async function add(selected){
-    if(disabled||processing)return;processing=true;const active=epoch;status.textContent='Preparing screenshots…';notify();
+    if(disabled||processing)return;processing=true;const active=epoch,startCount=images.length;status.textContent='Preparing screenshots…';notify();
     try{for(const file of selected){
       if(active!==epoch)return;
       if(images.length>=4)throw Error('You can attach up to 4 screenshots. Remove one before adding another.');
@@ -24,7 +24,7 @@ export function screenshotPicker(form, input, changed) {
         if(active!==epoch)return;images.push({name:(file.name||'Screenshot').slice(0,120),data_url:data,bytes:blob.size});
       }finally{URL.revokeObjectURL(url)}
     }if(active===epoch)status.textContent=images.length+' screenshot'+(images.length===1?'':'s')+' ready to send.';
-    }catch(error){if(active===epoch)status.textContent=error.message||'Could not read this image.';}finally{if(active===epoch){processing=false;render(true);}}
+    }catch(error){if(active===epoch)status.textContent=error.message||'Could not read this image.';}finally{if(active===epoch){processing=false;render(images.length!==startCount);}}
   }
   choose.onclick=()=>files.click();files.onchange=()=>{void add([...files.files]);files.value='';};
   input.addEventListener('paste',event=>{const images=[...(event.clipboardData?.items||[])].filter(item=>item.type.startsWith('image/')).map(item=>item.getAsFile()).filter(Boolean);if(images.length){event.preventDefault();void add(images)}});
