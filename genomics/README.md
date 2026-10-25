@@ -92,9 +92,11 @@ Batches stop at chromosome boundaries or 50,000 records. Results include the
 compressed-input checksum, input count, worker identity, and measured runtime.
 The private state.json tracks assignment, capacity waits, completion, and failure.
 Per-batch results and merged QC/annotation summaries remain on the controller's
-data disk. Any missing or mismatched result fails the run. Failed runs retain
-completed private reports for inspection; this first runner does not yet resume
-or automatically retry failed batches.
+data disk. Any missing or mismatched result fails the run. Failed runs retain completed private reports. Add `--resume /private/run-directory`
+to reuse checksum-verified completed batches with matching source identity and
+scientific worker code. Transient readiness/capacity changes put batches back in
+the shared queue; execution failures retry on another worker, at most three
+execution attempts per batch. Unknown CPU or RAM readings wait for a fresh sample.
 
 The QC summary counts retained records, filter labels, variant/genotype classes,
 allele-level transitions/transversions, and DP/GQ histograms. It does not apply
