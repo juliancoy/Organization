@@ -1,0 +1,23 @@
+[Unit]
+Description=LifeTech laptop lid and battery policy
+After=systemd-logind.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -u /usr/local/lib/lifetech-power/laptop_power.py
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=lifetech-power
+RuntimeDirectoryMode=0755
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/run/lifetech-power
+
+[Install]
+WantedBy=multi-user.target
