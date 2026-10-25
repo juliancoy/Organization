@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {createRequire} from 'node:module';
 import assert from 'node:assert/strict';
 const require=createRequire(new URL('../../package.json',import.meta.url));
-const {chromium}=require('@playwright/test');
+const {chromium,expect}=require('@playwright/test');
 const view=fileURLToPath(new URL('../view/',import.meta.url));
 const output=process.argv[2]||'/tmp/genome-interactions';await mkdir(output,{recursive:true});
 const names=new Set(['genome-explorer.html','genome-explorer.js','genome-explorer.css','genome-data.js','swarm-control.svg']);
@@ -17,10 +17,16 @@ try{
   const context=await browser.newContext({viewport:{width,height:1000}});const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.goto(`http://127.0.0.1:${server.address().port}/genome-explorer.html`);
   await page.locator('#metrics strong').first().waitFor();
+  await page.locator('.primary-action').click();assert.equal(new URL(page.url()).hash,'#overview');
+  assert.match(await page.locator('#overview-takeaway').innerText(),/Julian/);
+  await page.locator('.journey a[href="#satellites"]').click();await expect(page.locator('.journey a[href="#satellites"]')).toHaveAttribute('aria-current','step');
+  await page.locator('#another-genome').click();assert.equal(await page.locator('#sample').evaluate(e=>document.activeElement===e),true);
+
   for(const name of ['Julian','HG001','HG002','HG005','Watson','Venter']){
    await page.selectOption('#sample',name);
    assert.match(await page.locator('#sample-note').innerText(),new RegExp(name));
-   assert.equal(await page.locator('#metrics .metric').count(),4);
+   assert.match(await page.locator('#overview-takeaway').innerText(),new RegExp(name));
+   assert.equal(await page.locator('#metrics .metric').count(),2);
    await page.locator('#chromosomes button[data-chrom="21"]').click();
    assert.match(await page.locator('#line-title').innerText(),/Chromosome 21/);
    assert.equal(await page.locator('#line svg circle').count()>0,true);
