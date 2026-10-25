@@ -59,6 +59,15 @@ class RemoteBoundaryTests(unittest.TestCase):
             broker.offer.assert_called_once()
         self.assertEqual(self.request(endpoint+'../download',token='owner'*16),404)
 
+    def test_research_status_requires_paired_owner(self):
+        with patch('research.snapshot',return_value={'run':None}) as read:
+            self.assertEqual(self.request('/api/v1/swarm/research'),401)
+            read.assert_not_called()
+            self.assertEqual(self.request('/api/v1/swarm/research',cookie=self.cookie),200)
+            read.assert_called_once()
+        for path in ('/research','/research.html','/research.js','/research.css'):
+            self.assertEqual(self.request(path),200)
+
     def test_rebinding_host_is_denied_and_public_page_has_no_credentials(self):
         self.assertEqual(self.request('/',host='evil.example'),403)
         self.assertEqual(self.request('/'),200)

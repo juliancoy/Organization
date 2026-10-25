@@ -1,0 +1,36 @@
+const stages = [
+ {name:'Raw reads',status:'Located',type:'input',files:['FASTQ / FASTQ.GZ'],icon:'≋',summary:'Sequenced fragments with a quality score for every base.',input:'Sequencing output',output:'Reads for alignment',tool:'Read quality and alignment tools',evidence:'Raw reads were inventoried on the data disk. Full read-quality analysis has not been established.'},
+ {name:'Alignments',status:'Basic checks passed',type:'input',files:['BAM','BAI'],icon:'☷',summary:'Reads placed against a reference genome. BAI indexes support regional access.',input:'FASTQ + FASTA reference',output:'Aligned BAM + index',tool:'samtools',evidence:'Two existing BAM files passed header/end-of-file checks. This does not establish whole-genome coverage. FASTA (.fa / .fasta) holds the reference; .fai indexes it.'},
+ {name:'Variant calls',status:'Prepared',type:'done',files:['gVCF','VCF.GZ','TBI / CSI'],icon:'⋮',summary:'Variant calls describe differences from the reference; gVCF can also retain reference-confidence blocks.',input:'Existing normalized GRCh38.p13 variants',output:'Indexed called-variant VCF',tool:'bcftools',evidence:'Prepared called variants, trimming unused alleles and excluding reference-only blocks. Indexes enable region lookups. No silent PASS, depth, or quality cutoff was applied.'},
+ {name:'QC + audit',status:'Verified baseline',type:'done',files:['VCF + CSQ','JSON','TXT'],icon:'✓',summary:'Summarize called variants and audit the functional annotations already present.',input:'Called VCF + existing VEP-annotated VCF',output:'QC statistics + annotation summaries',tool:'bcftools + private CPU batch runner',evidence:'214 batches across six computers matched the local baseline. Existing VEP annotations were audited; VEP was not rerun. JSON stores structured summaries; TXT stores tool statistics. Variant-only QC does not measure genome-wide callability.'},
+ {name:'Coverage + VEP',status:'Next · not verified',type:'next',files:['BAM + BAI','FASTA','VCF + CSQ'],icon:'◉',summary:'Measure coverage and callability, then produce reproducible offline functional annotation.',input:'Alignments + reference + versioned VEP cache',output:'Coverage reports + newly annotated VCF',tool:'samtools + offline Ensembl VEP',evidence:'Pending. The existing baseline uses VEP 115.2 and a release-115 GRCh38 cache. Match releases and assembly before a fresh run; keep private variants offline.'},
+ {name:'Compare',status:'Planned',type:'future',files:['VCF','BED','PGEN / PVAR / PSAM'],icon:'⇄',summary:'Harmonize reference datasets before comparing variation across genomes.',input:'Validated, assembly-matched variants + cohort metadata',output:'Descriptive research summaries',tool:'PLINK 2 + R / Bioconductor',evidence:'Public downloads have started separately. BED can describe benchmark genomic intervals; PLINK 2 uses PGEN/PVAR/PSAM for cohort data. Statistical population analysis requires an appropriate reference cohort.'}
+];
+const el=(tag,text,cls)=>{const node=document.createElement(tag);if(text)node.textContent=text;if(cls)node.className=cls;return node;};
+const list=document.querySelector('#pipeline');
+function select(index){
+ list.querySelectorAll('button').forEach((b,i)=>b.setAttribute('aria-pressed',String(i===index)));
+ const s=stages[index],detail=document.querySelector('#detail');
+ const heading=el('div',null,'detail-heading');heading.append(el('span',s.icon,'stage-icon'),el('h3',s.name),el('span',s.status,'badge'));
+ const flow=el('div',null,'file-flow');flow.append(el('p',s.input),el('span','→'),el('strong',s.tool),el('span','→'),el('p',s.output));
+ detail.replaceChildren(heading,el('p',s.summary),flow,el('p',s.evidence,'evidence'));
+}
+stages.forEach((s,i)=>{const item=el('li',null,s.type),button=el('button');button.type='button';button.setAttribute('aria-controls','detail');button.append(el('span',String(i+1).padStart(2,'0'),'number'),el('span',s.icon,'stage-icon'),el('strong',s.name),el('small',s.status));const types=el('span',null,'filetypes');s.files.forEach(f=>types.append(el('code',f)));button.append(types);button.onclick=()=>select(i);item.append(button);list.append(item);});
+select(3);
+const comparison=document.querySelector('#comparisons');
+function comparisons(rows){comparison.replaceChildren(...rows.map(r=>{const card=el('article');card.append(el('h3',r.name),el('p',r.status));return card;}));}
+comparisons(['Watson','Venter','HG001','HG002','HG005'].map(name=>({name,status:'Status requires a connected session'})));
+async function refresh(){
+ const message=document.querySelector('#live-message'),button=document.querySelector('#refresh'),metrics=document.querySelector('#metrics');button.disabled=true;
+ try{
+  const response=await fetch('/api/v1/swarm/research',{cache:'no-store'});
+  if(!response.ok)throw new Error(response.status===401?'Sign in to Swarm Control to read private execution progress.':'Execution status unavailable. Historical milestone above remains dated Oct 25.');
+  const data=await response.json();comparisons(data.public_downloads);const run=data.run;
+  metrics.hidden=!run;
+  if(run){metrics.replaceChildren(...[[`${run.completed} / ${run.total}`,'batches completed'],[String(run.workers),'workers with completed batches'],[run.verified?'Matched':'Unconfirmed','baseline verification']].map(([value,label])=>{const card=el('div');card.append(el('strong',value),el('span',label));return card;}));message.textContent=`Latest recorded run: ${run.status} · ${run.failed} failed batches · report updated ${new Date(run.updated_at).toLocaleString()}. Checked ${new Date(data.observed_at).toLocaleTimeString()}.`;}
+  else message.textContent='No readable run state on this controller. The dated milestone above is historical evidence.';
+ }catch(error){metrics.hidden=true;message.replaceChildren(document.createTextNode(error.message+' '));comparisons(['Watson','Venter','HG001','HG002','HG005'].map(name=>({name,status:'Live status unavailable'})));const link=el('a','Open Swarm Control');link.href='/';message.append(link);}
+ finally{button.disabled=false;}
+}
+document.querySelector('#refresh').onclick=refresh;refresh();
+setInterval(()=>{if(!document.hidden)refresh();},30000);

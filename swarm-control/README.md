@@ -100,3 +100,17 @@ The UI shows coverage, interval, age and execution phase. I/O wait and stolen CP
 time are reported separately from executing CPU time. CPU pressure is the kernel's
 10-second average of time tasks wait for CPU. Container CPU quotas still constrain
 execution; they do not change the whole-machine utilization denominator.
+
+## DNA research workflow
+
+`/research` on the authenticated remote service (`/research.html` on the local
+coordinator) maps the documented DNA analysis stages, file formats, completed QC
+and existing-annotation audit, and pending coverage/annotation/comparison work.
+Research links are available in the console, LAN dashboard, and swarm status.
+The dated milestone is historical; the session-protected
+`/api/v1/swarm/research` endpoint refreshes batch counts and public download
+presence every 30 seconds while visible. It reads only operational state and an
+allowlist of public dataset folders on PILEDRIVE; it never serves genomic records,
+sample identifiers, report contents, or arbitrary filesystem paths. Missing state
+is shown as unavailable. Partial downloads do not imply active transfer or
+successful validation. Browser checks use synthetic status fixtures.

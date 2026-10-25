@@ -17,7 +17,9 @@ export async function reviewCodexUi(output){
  const server=createServer(async(req,res)=>{
   try{
    const url=new URL(req.url,'http://localhost')
+   if(url.pathname==='/api/v1/swarm/research'){res.setHeader('Content-Type','application/json');res.statusCode=statusUnauthorized?401:200;res.end(JSON.stringify({observed_at:'2026-10-25T19:00:00Z',run:{status:'passed',completed:214,total:214,failed:0,workers:6,verified:true,updated_at:'2026-10-25T18:30:00Z'},public_downloads:[{name:'Watson',status:'partial download; completion unconfirmed'}]}));return}
    if(url.pathname==='/api/v1/swarm/status'){res.setHeader('Content-Type','application/json');res.statusCode=statusUnauthorized?401:200;res.end(JSON.stringify(lanFixture));return}
+   if(url.pathname==='/research.html'){res.setHeader('Content-Type','text/html');res.end(await readFile(join(view,'research.html')));return}
    if(url.pathname==='/swarm-status'){res.setHeader('Content-Type','text/html');res.end(await readFile(join(view,'swarm-status.html')));return}
    if(url.pathname.startsWith('/api/')){
     res.setHeader('Content-Type','application/json')
@@ -26,7 +28,7 @@ export async function reviewCodexUi(output){
     res.end(JSON.stringify(item?{...item,model:'Codex',owner_connected:ownerConnected,messages:[{role:'user',text:'Make the remote workspace easier to scan and use on a phone.'},{role:'assistant',text:'I’ll organize the conversation list, clarify connection status and keep the instruction composer stable while updates arrive.\n\nThe active conversation will stay visible, and your draft will be preserved.'}]}:{threads,next_offset:null,machine:'Fixture workstation',connected:true}));return
    }
    if(url.pathname==='/'){res.setHeader('Content-Type','text/html');res.end('<!doctype html><html lang="en"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Codex UI review</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/codex.css"><body><main><section id="codex-context"></section></main><script type="module" src="/codex.js"></script></body></html>');return}
-   if(!['/style.css','/codex.css','/codex.js','/swarm-status.css','/swarm-status.js','/swarm-machines.js'].includes(url.pathname)){res.writeHead(404).end();return}
+   if(!['/research.css','/research.js','/style.css','/codex.css','/codex.js','/swarm-status.css','/swarm-status.js','/swarm-machines.js'].includes(url.pathname)){res.writeHead(404).end();return}
    res.setHeader('Content-Type',url.pathname.endsWith('.js')?'text/javascript':'text/css');res.end(await readFile(join(view,url.pathname.slice(1))))
   }catch(error){res.writeHead(500).end(error.message)}
  })
@@ -35,6 +37,15 @@ export async function reviewCodexUi(output){
  try{for(const width of [390,1440]){
   const context=await browser.newContext({viewport:{width,height:1000},reducedMotion:'reduce'}),page=await context.newPage(),errors=[]
   page.on('pageerror',e=>errors.push(e.message))
+  await page.goto(base+'/research.html');await page.getByText('214 / 214',{exact:true}).waitFor()
+  assert.equal(await page.locator('.pipeline button').count(),6)
+  await page.getByRole('button',{name:/02.*Alignments/}).click()
+  assert.match(await page.locator('#detail').textContent(),/whole-genome coverage/)
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false)
+  await page.screenshot({path:join(output,`research-${width}.png`),fullPage:true})
+  statusUnauthorized=true;await page.getByRole('button',{name:'Refresh status',exact:true}).click()
+  await page.getByText(/Sign in to Swarm Control to read private execution progress/).waitFor()
+  assert.equal(await page.locator('#metrics').isVisible(),false);statusUnauthorized=false
   await page.goto(base);await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
   const mapLink=page.getByRole('link',{name:'Swarm status ↗',exact:true});assert.equal(await mapLink.getAttribute('href'),'/swarm-status');assert.equal(await mapLink.getAttribute('target'),'_blank');assert.equal(await mapLink.isVisible(),true)
   await page.screenshot({path:join(output,`codex-locked-${width}.png`),fullPage:false})

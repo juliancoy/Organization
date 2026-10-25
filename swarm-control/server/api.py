@@ -20,6 +20,7 @@ VIEW=Path(__file__).with_name('view')
 ASSETS={'/':'codex.html','/codex.html':'codex.html','/codex.js':'codex.js','/codex.css':'codex.css','/style.css':'style.css','/test-deployment.js':'test-deployment.js',
         '/test-deployment.css':'test-deployment.css','/swarm-control':'swarm-control.html','/swarm-control.svg':'swarm-control.svg'}
 ASSETS.update({'/swarm-status':'swarm-status.html','/swarm-status.js':'swarm-status.js','/swarm-status.css':'swarm-status.css','/swarm-machines.js':'swarm-machines.js'})
+ASSETS.update({'/research': 'research.html', '/research.html': 'research.html', '/research.js': 'research.js', '/research.css': 'research.css'})
 API='/api/v1/master/codex/'
 
 def audit_auth_failure(error,phase):
@@ -105,7 +106,7 @@ class Handler(BaseHTTPRequestHandler):
             name=ASSETS[path];return self.reply(200,(VIEW/name).read_bytes(),mimetypes.guess_type(name)[0] or 'application/octet-stream')
         pairing=self.command=='POST' and path in ('/pair','/logout')
         deployment=path in ('/api/v1/test-app/status','/api/v1/test-app/offer','/api/v1/test-app/download')
-        valid_read=self.command=='GET' and (path in ('/api/v1/swarm/status','/api/v1/swarm/session') or path==API+'threads' or path.startswith(API+'threads/') or path in ('/api/v1/test-app/status','/api/v1/test-app/download'))
+        valid_read=self.command=='GET' and (path in ('/api/v1/swarm/status','/api/v1/swarm/session','/api/v1/swarm/research') or path==API+'threads' or path.startswith(API+'threads/') or path in ('/api/v1/test-app/status','/api/v1/test-app/download'))
         valid_write=self.command=='POST' and path in (API+'commands','/api/v1/test-app/offer','/api/v1/swarm/tests/request')
         if not (valid_read or valid_write or pairing):return self.reply(404,{'error':{'message':'Not found'}})
         if path not in ('/pair','/logout') and not devices.valid(self.device()):return self.reply(401,{'error':{'message':'Sign in with PIdP to reconnect to CompAI'}})
@@ -132,6 +133,10 @@ class Handler(BaseHTTPRequestHandler):
                 from status import snapshot
                 try:return self.reply(200,snapshot())
                 except (OSError,ValueError):return self.reply(503,{'error':{'message':'Local swarm coordinator unavailable'}})
+            if path=='/api/v1/swarm/research':
+                from research import snapshot
+                try:return self.reply(200,snapshot())
+                except (OSError,ValueError):return self.reply(503,{'error':{'message':'Research status unavailable'}})
             if path=='/api/v1/swarm/session':return self.reply(200,devices.describe(self.device()))
             if path=='/api/v1/swarm/tests/request':
                 if body!={}:raise ValueError('No command parameters accepted')
