@@ -18,6 +18,13 @@ def adb(*args,serial=None):
     return subprocess.check_output(['adb',*(['-s',serial] if serial else []),*args],text=True,stderr=subprocess.STDOUT,timeout=10).strip()
 
 
+def gpu_history(serial):
+    try:
+        record=json.loads(STATE.with_name('mobile-gpu.json').read_text())
+        return record if record.get('serial')==serial else {}
+    except (OSError,ValueError):return {}
+
+
 def discover():
     devices=[]
     try:
@@ -33,6 +40,8 @@ def discover():
                 device['android']=adb('shell','getprop','ro.build.version.release',serial=serial)
                 device['gpu']={'driver':adb('shell','getprop','ro.hardware.egl',serial=serial),
                                'backend':'Browser WebGPU / WebGL; CUDA unavailable','compute_verified':False}
+                previous=gpu_history(serial)
+                if previous:device['gpu'].update(compute_verified=previous.get('status')=='passed',validation=previous)
                 device['browser_ready']='chrome_devtools_remote' in adb('shell','cat','/proc/net/unix',serial=serial)
             devices.append(device)
         return {'devices':devices}
@@ -90,6 +99,8 @@ class MobileRun:
             try:subprocess.run(['tar','-x','-C',str(work)],stdin=archive.stdout,check=True,timeout=60)
             finally:archive.stdout.close()
             if archive.wait(timeout=10):raise RuntimeError('Pinned source export failed')
+            shutil.copyfile(Path(__file__).with_name('mobile_gpu.mjs'),work/'web/scripts/swarm-gpu-probe.mjs')
+            shutil.copyfile(Path(__file__).with_name('view')/'hardware.js',work/'web/scripts/swarm-gpu-hardware.mjs')
             host['source_sync']={'OrgPortal':{'commit':repo['commit'],'status':'verified'}}
             # USB debugging remains local; the phone only sees the synthetic server.
             forward=adb('forward','tcp:0','localabstract:chrome_devtools_remote',serial=serial)
@@ -108,7 +119,7 @@ class MobileRun:
                      '--user',str(os.getuid())+':'+str(os.getgid()),'--cap-drop','ALL','--security-opt','no-new-privileges',
                      '-v',str(work)+':/work','-v',str(cache)+':/cache','-w','/work/web','-e','HOME=/tmp',
                      '-e','PLAYWRIGHT_CDP_URL=http://127.0.0.1:'+forward,'-e','MOBILE_SERVER_PORT='+str(port),
-                     image,'timeout','900','sh','-c','npm ci --cache /cache --no-audit --no-fund && node scripts/test-android.mjs']
+                     image,'timeout','900','sh','-c','npm ci --cache /cache --no-audit --no-fund && node scripts/test-android.mjs && node scripts/swarm-gpu-probe.mjs']
             job['phase']='dependencies and real-device checks';self.save()
             process=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
             done=threading.Event()
@@ -131,7 +142,13 @@ class MobileRun:
             from visual_artifacts import publish
             publish(work/'mobile-artifacts','mobile',lambda kind,**fields:service.update(host,{'kind':kind,**fields}))
             report=work/'mobile-artifacts/mobile-report.json'
-            if report.exists():job['checks']=json.loads(report.read_text())['checks']
+            if report.exists():
+                result=json.loads(report.read_text());job['checks']=result['checks']
+                if result.get('gpu'):
+                    record={**result['gpu'],'serial':serial,'checked_at':now(),'run_id':service.run['id']}
+                    job['gpu']=record
+                    target=STATE.with_name('mobile-gpu.json');temporary=target.with_suffix('.tmp')
+                    temporary.write_text(json.dumps(record));temporary.replace(target)
             if job.get('artifact_error'):raise RuntimeError('Mobile screenshot transfer failed')
             if code:raise RuntimeError('Android browser checks failed; see device report and screenshots')
             if not job['checks'] or any(c['status']!='passed' for c in job['checks']):raise RuntimeError('No complete passing Android result')

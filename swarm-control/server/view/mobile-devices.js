@@ -19,7 +19,7 @@ async function refresh(){
   const title=node('div','','mobile-title');title.append(node('h2',device?.name||'Pixel 3'),node('span',running?'Testing now':connected?'USB connected':'Disconnected','mobile-badge'));body.append(title);
   body.append(node('p',connected?`Android ${device.android} · USB to compai · 1 browser slot`:'Connect and authorize the Pixel over USB to run real-device checks.','mobile-meta'));
   body.append(node('p','Real screen · Touch input · Screenshots','mobile-capabilities'));
-  if(device?.gpu)body.append(node('p',device.gpu.driver+' GPU · '+device.gpu.backend,'mobile-meta'));
+  if(device?.gpu)body.append(node('p',device.gpu.driver+' GPU · '+device.gpu.backend+(device.gpu.compute_verified?' · WebGPU compute verified '+device.gpu.validation.checked_at:' · compute untested'),'mobile-meta'));
   const result=node('div','','mobile-result');
   if(job){
    const state=job.status==='passed'?'Passed':job.status==='failed'?'Failed':job.status==='stopped'?'Stopped':job.phase||job.status;
