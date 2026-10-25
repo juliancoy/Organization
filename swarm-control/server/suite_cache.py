@@ -17,7 +17,7 @@ INPUTS={
  'chat':{'OrgPortal':('chat-worker/','shared/','package.json','package-lock.json','tsconfig.json')},
  'web':{'OrgPortal':('web/','shared/','docs/','scripts/','package.json','package-lock.json','tsconfig.json')},
  'visual':{'OrgPortal':('web/','shared/')},
- 'identity':{'PIdP':('serverless/','frontend/','scripts/','shared/','package.json','package-lock.json','tsconfig.json')},
+ 'identity':{'PIdP':('serverless/','frontend/','scripts/','shared/','package.json','package-lock.json','tsconfig.json'), 'OrgPortal':('web/scripts/user-model/model.json','web/scripts/user-model/review.mjs')},
  'identity-python':{'PIdP':('*.py','tests/','scripts/','requirements*.txt','pyproject.toml','Dockerfile')},
  'p2p':{'.':('swarm-control/server/early_p2p.py','swarm-control/server/p2p_network.py','swarm-control/server/p2p_remote.py','peer-worker/','scripts/launcher_peers.py','scripts/launcher_discovery.py','scripts/peer_archive.py')},
 }
