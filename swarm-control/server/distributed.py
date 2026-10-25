@@ -75,7 +75,7 @@ class DistributedTests:
         if files and recover:
             try:
                 self.run = json.loads(files[-1].read_text())
-                if self.run.get('status') in ('running', 'preparing', 'stopping'):
+                if self.run.get('status') in ('queued','running', 'preparing', 'stopping'):
                     self.run.update(status='interrupted', finished=now())
                     for host in self.run['hosts']:
                         if host['status'] not in FINAL:

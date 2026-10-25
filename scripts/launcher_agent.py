@@ -545,7 +545,8 @@ class Agent:
                 previous=leases.get(ident)
                 if not previous:
                     if len(leases)>=128:raise RuntimeError('Resource request queue full')
-                    lease=ResourceLease(args.get('group'),args.get('cpus'),args.get('memory_mb'),args.get('container',''))
+                    lease=ResourceLease(args.get('group'),args.get('cpus'),args.get('memory_mb'),args.get('container',''),
+                                        directory=os.getenv('SWARM_RESOURCE_DIR',str(self.root/'.resources')))
                     timer=threading.Timer(300,lambda:self.dispatch('resource.release',{'id':ident}));timer.daemon=True
                     leases[ident]={'lease':lease,'timer':timer};timer.start()
                 else:lease=previous['lease']
@@ -997,7 +998,7 @@ class Agent:
         try:
             home=self.root/'home';home.mkdir(exist_ok=True,mode=0o700)
             env=worker_environment(home)
-            env['SWARM_RESOURCE_DIR']=str(Path(os.getenv('SWARM_RESOURCE_DIR',str(Path.home()/'.local/state/swarm-control/resources'))))
+            env['SWARM_RESOURCE_DIR']=str(Path(os.getenv('SWARM_RESOURCE_DIR',str(self.root/'.resources'))))
             manifest=json.loads((folder/'manifest.json').read_text())
             self.checkout(work,manifest,env,job)
             if (folder/'STOP').exists():raise InterruptedError('Run stopped during GitHub synchronization')

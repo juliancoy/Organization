@@ -59,6 +59,16 @@ class RemoteBoundaryTests(unittest.TestCase):
             broker.offer.assert_called_once()
         self.assertEqual(self.request(endpoint+'../download',token='owner'*16),404)
 
+    def test_research_actions_require_owner_and_same_origin(self):
+        path='/api/v1/swarm/research/jobs'
+        with patch('status.research_jobs',return_value={'profiles':[],'jobs':[]}) as jobs:
+            self.assertEqual(self.request(path),401)
+            self.assertEqual(self.request(path,'POST',body={}),401)
+            self.assertEqual(self.request(path,'POST',body={},cookie=self.cookie),403)
+            jobs.assert_not_called()
+            self.assertEqual(self.request(path,cookie=self.cookie),200)
+            self.assertEqual(self.request(path,'POST',body={'profile':'baseline','request_id':'fixture'},origin='https://compai.example',cookie=self.cookie),202)
+
     def test_research_status_requires_paired_owner(self):
         with patch('research.snapshot',return_value={'run':None}) as read:
             self.assertEqual(self.request('/api/v1/swarm/research'),401)

@@ -9,7 +9,7 @@ const {chromium}=createRequire(join(web,'package.json'))('@playwright/test')
 const view=fileURLToPath(new URL('../view/',import.meta.url))
 export async function reviewCodexUi(output){
  await mkdir(output,{recursive:true})
- const commands=[],results=[];let ownerConnected=true,statusUnauthorized=false
+ const commands=[],results=[],researchRequests=[];let researchJobs=[];let ownerConnected=true,statusUnauthorized=false
  const threads=[{id:'design',name:'Improve the remote control workspace',cwd:'/workspace/Organization',updated_at:1792880000,activity:'running'},{id:'release',name:'Review the release checks',cwd:'/workspace/OrgPortal',updated_at:1792876000,activity:'idle'}]
  threads.push(...Array.from({length:18},(_,index)=>({id:'history-'+index,name:'Earlier workspace task '+(index+1),cwd:'/workspace/Organization',updated_at:1792800000-index*300,activity:'idle'})))
  for(const thread of threads){thread.display_title=thread.name;thread.name='Raw database name';thread.title='Initial prompt text'}
@@ -17,6 +17,12 @@ export async function reviewCodexUi(output){
  const server=createServer(async(req,res)=>{
   try{
    const url=new URL(req.url,'http://localhost')
+   if(url.pathname==='/api/v1/swarm/research/jobs'){
+    res.setHeader('Content-Type','application/json');if(statusUnauthorized){res.statusCode=401;res.end('{}');return}
+    if(req.method==='POST'){let body='';for await(const chunk of req)body+=chunk;const value=JSON.parse(body);researchRequests.push(value);
+      researchJobs=value.cancel?researchJobs.map(j=>({...j,status:'stopped'})):[{id:value.request_id,kind:'research',status:'queued',submitted_at:'2026-10-25T19:00:00Z'}];res.end(JSON.stringify({accepted:true}));return}
+    res.end(JSON.stringify({profiles:['baseline'],jobs:researchJobs}));return
+   }
    if(url.pathname==='/api/v1/swarm/research'){res.setHeader('Content-Type','application/json');res.statusCode=statusUnauthorized?401:200;res.end(JSON.stringify({observed_at:'2026-10-25T19:00:00Z',run:{status:'passed',completed:214,total:214,failed:0,workers:6,verified:true,updated_at:'2026-10-25T18:30:00Z'},public_downloads:[{name:'Watson',status:'partial download; completion unconfirmed'}]}));return}
    if(url.pathname==='/api/v1/swarm/status'){res.setHeader('Content-Type','application/json');res.statusCode=statusUnauthorized?401:200;res.end(JSON.stringify(lanFixture));return}
    if(url.pathname==='/research.html'){res.setHeader('Content-Type','text/html');res.end(await readFile(join(view,'research.html')));return}
@@ -39,6 +45,13 @@ export async function reviewCodexUi(output){
   page.on('pageerror',e=>errors.push(e.message))
   await page.goto(base+'/research.html');await page.getByText('214 / 214',{exact:true}).waitFor()
   assert.equal(await page.locator('.pipeline button').count(),6)
+  await page.getByRole('button',{name:'Queue analysis',exact:true}).click()
+  await page.getByText('Analysis queued.',{exact:false}).waitFor()
+  assert.equal(researchRequests.at(-1).profile,'baseline')
+  await page.locator('#job-list').getByRole('button',{name:'Cancel',exact:true}).click()
+  await page.locator('#job-list').getByText(/stopped/).waitFor()
+  assert.ok(researchRequests.at(-1).cancel)
+
   await page.getByRole('button',{name:/02.*Alignments/}).click()
   assert.match(await page.locator('#detail').textContent(),/whole-genome coverage/)
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false)

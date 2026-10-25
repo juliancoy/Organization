@@ -11,6 +11,15 @@ class LiveDistributedTests:
         self.lock = threading.RLock()
         self.runner = self.load()
         self.reruns={}
+        # No in-memory runner survives restart: do not silently repeat private jobs.
+        import json
+        for path in self.runner.folder.glob('*.json'):
+            try:
+                record=json.loads(path.read_text())
+                if not record.get('finished') and record.get('status') in ('queued','running','preparing','stopping'):
+                    record.update(status='interrupted',finished=__import__('distributed').now())
+                    pending=path.with_suffix('.tmp');pending.write_text(json.dumps(record));pending.chmod(0o600);pending.replace(path)
+            except (OSError,ValueError):continue
         from test_requests import TestRequests
         self.requests=TestRequests(self)
         from snapshot_staging import SnapshotStaging
@@ -25,6 +34,7 @@ class LiveDistributedTests:
             selected=self.reruns.get(ident,self.runner)
             result=selected.view(ident)
             result['snapshot_staging']=self.staging.view()
+            result['draining']=(self.runner.folder/'DRAIN').exists()
             result['active_runs']=[{'id':r.run['id'],'status':r.run['status'],'kind':r.run.get('kind','tests')} for r in self.active()]
             result['active_reruns']=[r.run['id'] for r in self.reruns.values() if r.running]
             return result
@@ -58,6 +68,7 @@ class LiveDistributedTests:
 
     def create_run(self,force=False,selection=None):
         with self.lock:
+            if (self.runner.folder/'DRAIN').exists():return None
             active=self.active()
             if len(active)>=8:return None
             if active and (self.exclusive(selection) or any(self.exclusive(r.run.get('selection')) for r in active)):
