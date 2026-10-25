@@ -12,6 +12,7 @@ from pathlib import Path
 import queue
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import threading
@@ -20,6 +21,9 @@ import uuid
 
 from scripts.genomics import private_run,write_json
 from scripts.genomics_compute import compute,MAX_PAYLOAD
+
+STOP=threading.Event()
+GROUP='genomics-'+uuid.uuid4().hex[:16]
 
 ROOT=Path(__file__).resolve().parents[1]
 WORKER=(ROOT/'scripts/genomics_compute.py').read_text()
@@ -70,7 +74,8 @@ def discover():
             if fingerprint!=expected or not image.startswith('sha256:'):raise RuntimeError('Worker does not have the approved Python image contents')
             host['image_fingerprint']=fingerprint
             host['image']=image
-            host['eligible']=True;host['machine']=status['machine']
+            host['eligible']=True;host['machine']=status['machine'];host['cpus']=status.get('cpus') or status.get('hardware',{}).get('cpus') or 2
+            if 'shared-resources' not in status.get('capabilities',[]):raise RuntimeError('Worker needs the shared resource scheduler update')
         except Exception as error:host.update(eligible=False,reason=type(error).__name__+': '+str(error)[:240])
         finally:
             if client:client.close()
@@ -97,14 +102,39 @@ def batches(path,kind,limit=50000):
 
 
 def execute(host,batch):
+    from agent_client import AgentClient
     name='genomics-'+uuid.uuid4().hex
+    client=AgentClient(host);lease_id=uuid.uuid4().hex
+    deadline=time.monotonic()+120
+    try:
+        while not client.call('resource.acquire',{'id':lease_id,'group':GROUP,'cpus':1,'memory_mb':512,'container':name})['acquired']:
+            if STOP.wait(.5) or time.monotonic()>deadline:raise InterruptedError('Resource wait cancelled or expired')
+        return execute_reserved(host,batch,name)
+    finally:
+        try:client.call('resource.release',{'id':lease_id})
+        finally:client.close()
+
+
+def execute_reserved(host,batch,name):
     command=shell_command(host,['docker','run','--name',name,'--label','org.lifetech.genomics=true','--rm','--pull=never','-i','--network','none','--read-only',
         '--log-driver','none','--memory','512m','--memory-swap','512m','--cpus','1','--pids-limit','32',
         '--cap-drop','ALL','--security-opt','no-new-privileges','--ulimit','core=0:0',
         host['image'],'python','-c',WORKER,batch['kind']])
     started=time.monotonic()
     try:
-        result=subprocess.run(command,input=batch['payload'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=180)
+        process=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        def cancel():
+            if process.poll() is None:
+                subprocess.run(shell_command(host,['docker','rm','-f',name]),stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=20)
+        def watch():
+            while process.poll() is None:
+                if STOP.wait(.2):
+                    cancel();return
+        threading.Thread(target=watch,daemon=True).start()
+        try:stdout,stderr=process.communicate(batch['payload'],timeout=180)
+        finally:
+            if process.poll() is None:cancel();process.kill();process.wait()
+        result=subprocess.CompletedProcess(command,process.returncode,stdout,stderr)
         if result.returncode:raise RuntimeError('Worker failed ('+str(result.returncode)+'): '+result.stderr.decode(errors='replace')[:400])
     except Exception:
         try:subprocess.run(shell_command(host,['docker','rm','-f',name]),stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=20)
@@ -130,7 +160,7 @@ def merge(results,kind,dataset=None):
 class Run:
     def __init__(self,hosts,folder,slots=2,resume=False):
         self.hosts=[h for h in hosts if h['eligible']];self.folder=folder;self.lock=threading.RLock();self.slots=slots
-        self.queue=queue.Queue();self.credits=threading.Semaphore(max(2,len(self.hosts)*slots*2));self.results=[]
+        self.queue=queue.Queue();self.credits=threading.Semaphore(max(2,sum((slots or min(32,h.get('cpus',2))) for h in self.hosts)*2));self.results=[]
         if not self.hosts:raise RuntimeError('No authenticated, accepting workers with pinned SSH access')
         digest=hashlib.sha256(WORKER.encode()).hexdigest()
         previous=json.loads((folder/'state.json').read_text()) if resume else {}
@@ -173,6 +203,9 @@ class Run:
             item=self.queue.get();finished=False
             try:
                 if item is None:return
+                if STOP.is_set():
+                    with self.lock:self.state['jobs'][item['id']].update(status='stopped');self.save()
+                    finished=True;continue
                 if time.monotonic()>item['deadline']:
                     with self.lock:self.state['jobs'][item['id']].update(status='failed',reason='No accepting worker before deadline');self.save()
                     finished=True;continue
@@ -195,16 +228,18 @@ class Run:
                 self.queue.task_done()
 
     def run(self,sources,limit):
-        threads=[threading.Thread(target=self.worker,args=(host,),daemon=True) for host in self.hosts for _ in range(self.slots)]
+        threads=[threading.Thread(target=self.worker,args=(host,),daemon=True) for host in self.hosts for _ in range(self.slots or min(32,host.get('cpus',2)))]
         for thread in threads:thread.start()
         try:
             for label,path in sources.items():
+                if STOP.is_set():raise InterruptedError('Research run stopped')
                 if not re.fullmatch(r'(?:[A-Za-z0-9_-]+\.)?(?:qc|annotation)',label):raise ValueError('Invalid dataset analysis label')
                 dataset,kind=label.rsplit('.',1) if '.'in label else (None,label)
                 stat=path.stat();identity={'path':str(path),'bytes':stat.st_size,'mtime_ns':stat.st_mtime_ns}
                 if label in self.previous_sources and identity!=self.previous_sources[label]:raise ValueError('Input identity changed since original run')
                 self.state['sources'][label]=identity
                 for batch in batches(path,kind,limit):
+                    if STOP.is_set():raise InterruptedError('Research run stopped')
                     batch['id']=label+'-'+batch['id'].rsplit('-',1)[1];batch['dataset']=dataset
                     cached=self.cached(batch)
                     with self.lock:
@@ -220,9 +255,10 @@ class Run:
             for label in sources:
                 dataset,kind=label.rsplit('.',1) if '.'in label else (None,label)
                 write_json(self.folder/(label+'-summary.json'),merge(self.results,kind,dataset))
+            if STOP.is_set():raise InterruptedError('Research run stopped')
             self.state['status']='passed'
         except Exception:
-            self.queue.join();self.state['status']='failed';raise
+            self.queue.join();self.state['status']='stopped' if STOP.is_set() else 'failed';raise
         finally:
             for thread in threads:self.queue.put(None)
             for thread in threads:thread.join()
@@ -230,16 +266,25 @@ class Run:
 
 
 def main():
+    global GROUP
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--qc',type=Path,required=True);parser.add_argument('--annotations',type=Path,required=True)
     parser.add_argument('--resume',type=Path,help='Resume a private run with matching input and scientific code')
-    parser.add_argument('--slots',type=int,choices=[1,2],default=2)
+    parser.add_argument('--slots',type=int,choices=range(0,33),default=0)
     parser.add_argument('--output',type=Path,required=True);parser.add_argument('--batch-records',type=int,default=50000)
+    parser.add_argument('--run-directory',type=Path)
+    parser.add_argument('--group',default=GROUP)
     args=parser.parse_args();os.umask(0o077)
+    GROUP=args.group
+    signal.signal(signal.SIGTERM,lambda *_:STOP.set())
+    signal.signal(signal.SIGINT,lambda *_:STOP.set())
     if args.resume:
         folder=args.resume.absolute()
         if folder.is_symlink() or folder.parent.resolve()!=args.output.resolve() or folder.stat().st_uid!=os.getuid() or folder.stat().st_mode&0o077:raise ValueError('Resume requires an owner-only run under the output directory')
         if any((parent/'.git').exists() for parent in [folder,*folder.parents]):raise ValueError('Private runs cannot be inside Git')
+    elif args.run_directory:
+        folder=args.run_directory.absolute()
+        if folder.parent.resolve()!=args.output.resolve() or folder.is_symlink() or folder.stat().st_mode&0o077 or any(p.name!='supervisor.log' for p in folder.iterdir()):raise ValueError('Expected empty private run directory')
     else:folder=private_run(args.output)
     print('Private distributed run: '+str(folder),flush=True)
     run=Run(discover(),folder,args.slots,resume=bool(args.resume));run.save()

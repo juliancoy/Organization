@@ -105,3 +105,48 @@ existing VEP CSQ consequences; they do not execute VEP or transfer its cache.
 This is a separate explicit private batch runner, not a general private-data
 extension of the public test scheduler. Its native integration tests use invented
 variants, and can run through the ordinary distributed test master.
+
+## Public comparison datasets
+
+A bounded initial public collection contains the UCSC hg19 `pgWatson` and
+`pgVenter` archives, plus GIAB HG001, HG002 and HG005 v4.2.1 GRCh38 autosomal
+benchmark calls. These are published variant datasets, not raw whole-genome
+sequencing reads and not a representative population cohort. Source URLs,
+assembly, local SHA-256 receipts, sizes and preparation logs stay with each file.
+The five datasets plus two Ensembl GFF resources total about 560 MiB to download.
+
+```bash
+python3 -m scripts.public_genomes_download --output "$PUBLIC_GENOMES_DIR"
+python3 -m scripts.public_genomes prepare --root "$PUBLIC_GENOMES_DIR" \
+  --reference37 "$GRCH37_FASTA" --reference38 "$GRCH38_FASTA"
+~/.local/share/swarm-control/venv/bin/python -m scripts.public_genomes analyse \
+  --root "$PUBLIC_GENOMES_DIR" --output "$GENOMICS_REPORT_DIR"
+```
+
+The GRCh37 reference helper aliases the existing primary CM000663.1--CM000686.1
+FASTA index to chromosomes 1--22, X and Y without modifying or copying sequence.
+Legacy pgSnp records use 0-based intervals and observed allele strings. The importer
+fetches reference bases, anchors supported insertions/deletions, and retains unknown
+GT/DP/GQ values as missing. It does not infer diploid genotypes or read depth from
+allele counts/frequencies. Ambiguous, unavailable-contig, >10kb and unanchorable
+records are explicitly counted as exclusions. Watson's published masking is not
+filled in or imputed. Retained records are not a complete inventory of his genome.
+
+Modern benchmark variants retain available genotype metadata and are checked and
+left-normalized against GRCh38. Their benchmark scope is high-confidence autosomal
+regions; absent variants do not establish a reference genotype or genome coverage.
+
+Fresh annotation uses offline `bcftools csq --local-csq --samples -` with matching
+Ensembl GRCh37.87 or GRCh38.115 gene models. This produces BCSQ coding consequences,
+not VEP CSQ results; both annotation tags are understood by the summary worker.
+These predictions are site-local and independent of sample genotype/phase. They
+are not comprehensive VEP noncoding/regulatory annotation, and missing coding
+consequences are not evidence that a variant is benign. Transcript/CDS warnings
+from the supplied gene models remain in each processing.log. No GRCh37/GRCh38
+coordinate mixing or direct allele-burden ranking is performed.
+
+All five people share one bounded distributed work queue, with dataset labels in
+job IDs and results to keep each summary separate. Each dataset gets QC and coding
+consequence summaries; native bcftools statistics provide independent record-count
+checks. The sources, discarded records, annotation engine and tool/reference
+versions must accompany any later scientific comparison.
