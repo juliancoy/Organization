@@ -8,7 +8,7 @@ import subprocess
 COMMON=('docker_utils/','lan-monitor/distributed_worker.py','lan-monitor/suite_cache.py','lan-monitor/work_queue.py','lan-monitor/granular_worker.py','lan-monitor/worker_preparation.py','lan-monitor/granular_dispatch.py','lan-monitor/agent_updates.py','lan-monitor/snapshot_staging.py','lan-monitor/visual_artifacts.py',
         'scripts/launcher_agent.py','scripts/launcher_registry.py','requirements.txt','pyproject.toml')
 INPUTS={
- 'monitor':{'.':('lan-monitor/*.py','lan-monitor/tests/')},
+ 'monitor':{'.':('lan-monitor/*.py','lan-monitor/requirements*.txt','lan-monitor/tests/')},
  'map':{'.':('lan-monitor/*.js','lan-monitor/view/','lan-monitor/package.json','lan-monitor/package-lock.json','lan-monitor/tests/*.js')},
  'workspace':{'.':('*.py','tests/','scripts/','vm/','Dockerfile.launcher')},
  'usajobs':{'CodeCollective':('usa/','css/','js/reusableComponents.js','run.py','tests/usajobs-mobile.test.cjs')},

@@ -21,6 +21,7 @@ SUITES = {
     'mobile': {'name':'Pixel 3 · real Android browser','coordinated':True,'image':NODE},
     'p2p': {'name': 'Cross-device WebRTC P2P', 'coordinated': True, 'image': 'selenium/standalone-chrome:latest'},
     'monitor': {'name': 'LAN monitor Python', 'cwd': 'lan-monitor', 'image': PYTHON,
+                'prepare': ['python', '-m', 'pip', 'install', '--target', '/work/.test-deps/monitor', '-r', 'requirements-codex.txt'],
                 'test': ['python3', '-m', 'unittest', 'discover', '-s', 'tests', '-v']},
     'map': {'name': 'LAN map model', 'cwd': 'lan-monitor', 'image': NODE,
             'test': ['npm', 'test']},

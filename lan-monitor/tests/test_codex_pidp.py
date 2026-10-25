@@ -1,0 +1,110 @@
+import base64
+import hashlib
+import json
+from pathlib import Path
+import tempfile
+import time
+import unittest
+from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import ec, utils
+from cryptography.exceptions import InvalidSignature
+import codex_devices as devices
+import codex_pidp as auth
+
+ORIGIN = 'https://compai.example'
+
+
+def encoded(value):
+    return base64.urlsafe_b64encode(value).decode().rstrip('=')
+
+
+class PIdPRecoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        self.path = Path(self.temp.name)
+        self.cfg = {'issuer': 'https://identity.example', 'resource': 'https://portal.example/api/org/mcp',
+                    'authorization_endpoint': 'https://identity.example/authorize',
+                    'token_endpoint': 'https://identity.example/token', 'jwks_uri': 'https://identity.example/keys',
+                    'redirect_uri': ORIGIN + '/auth/callback', 'owner_subject': 'website:app:owner',
+                    'client_id': 'test-client', 'client_secret': 'test-client-secret'}
+        config = self.path / 'config.json'; config.write_text(json.dumps(self.cfg)); config.chmod(0o600)
+        for item in [patch.object(auth, 'CONFIG', config), patch.object(devices, 'FILE', self.path / 'devices.json'),
+                     patch.dict(auth.PENDING, {}, clear=True)]:
+            item.start(); self.addCleanup(item.stop)
+        self.private = ec.generate_private_key(ec.SECP256R1())
+        numbers = self.private.public_key().public_numbers()
+        self.jwk = {'kid': 'test-key', 'kty': 'EC', 'crv': 'P-256',
+                    'x': encoded(numbers.x.to_bytes(32, 'big')), 'y': encoded(numbers.y.to_bytes(32, 'big'))}
+
+    def token(self, **changes):
+        claims = {'iss': self.cfg['issuer'], 'aud': self.cfg['resource'], 'sub': self.cfg['owner_subject'],
+                  'client_id': self.cfg['client_id'], 'scope': 'org:portal.read', 'iat': time.time(), 'exp': time.time() + 300}
+        claims.update(changes)
+        content = encoded(json.dumps({'alg': 'ES256', 'kid': 'test-key'}).encode()) + '.' + encoded(json.dumps(claims).encode())
+        r, s = utils.decode_dss_signature(self.private.sign(content.encode(), ec.ECDSA(hashes.SHA256())))
+        return content + '.' + encoded(r.to_bytes(32, 'big') + s.to_bytes(32, 'big'))
+
+    def login(self):
+        url, cookie = auth.start(ORIGIN)
+        query = parse_qs(urlsplit(url).query)
+        return {'state': query['state'], 'code': ['one-use-code']}, cookie.split('=', 1)[1].split(';', 1)[0], query
+
+    def test_pkce_and_owner_private_configuration(self):
+        query, browser, request = self.login()
+        pending = auth.PENDING[query['state'][0]]
+        self.assertEqual(request['code_challenge'], [encoded(hashlib.sha256(pending['verifier'].encode()).digest())])
+        self.assertEqual(request['code_challenge_method'], ['S256'])
+        self.assertNotEqual(browser, pending['verifier'])
+        self.assertEqual(request['scope'], ['org:portal.read'])
+        auth.CONFIG.chmod(0o644)
+        with self.assertRaises(auth.Denied):auth.start(ORIGIN)
+
+    def test_verified_owner_replaces_old_session_and_invalidates_outstanding_qr(self):
+        old = devices.session(devices.issue()); unused = devices.issue()
+        query, browser, _ = self.login()
+        token = self.token()
+        with patch.object(auth, 'fetch', side_effect=[{'access_token': token}, {'keys': [self.jwk]}]) as fetch:
+            session = auth.complete(ORIGIN, query, browser)
+            exchange = parse_qs(fetch.call_args_list[0].args[1].decode())
+            self.assertEqual(exchange['resource'], [self.cfg['resource']])
+            self.assertIn('code_verifier', exchange)
+        self.assertTrue(devices.valid(session)); self.assertFalse(devices.valid(old))
+        with self.assertRaises(ValueError):devices.session(unused)
+        stored = devices.FILE.read_text()
+        self.assertNotIn(token, stored); self.assertNotIn(session, stored)
+        self.assertEqual(len(json.loads(stored)['sessions']), 1)
+
+    def test_other_account_cannot_disconnect_owner(self):
+        old = devices.session(devices.issue()); query, browser, _ = self.login()
+        with patch.object(auth, 'fetch', side_effect=[{'access_token': self.token(sub='website:app:attacker')}, {'keys': [self.jwk]}]):
+            with self.assertRaises(auth.Denied):auth.complete(ORIGIN, query, browser)
+        self.assertTrue(devices.valid(old))
+
+    def test_state_is_browser_bound_single_use_and_exchange_is_not_retried(self):
+        query, browser, _ = self.login()
+        with patch.object(auth, 'fetch', side_effect=OSError('network failure')) as fetch:
+            with self.assertRaises(auth.Denied):auth.complete(ORIGIN, query, 'wrong-browser-cookie-value')
+            fetch.assert_not_called()
+            with self.assertRaises(OSError):auth.complete(ORIGIN, query, browser)
+            with self.assertRaises(auth.Denied):auth.complete(ORIGIN, query, browser)
+            self.assertEqual(fetch.call_count, 1)
+
+    def test_rejects_signed_tokens_with_wrong_claims_and_invalid_signature(self):
+        for changes in [{'iss': 'https://evil.example'}, {'aud': 'https://elsewhere.example'},
+                        {'scope': ''}, {'client_id': 'another-client'}, {'exp': time.time() - 1}, {'iat': time.time() + 120},
+                        {'exp': float('nan')}, {'exp': True}]:
+            with self.subTest(changes=changes), patch.object(auth, 'fetch', return_value={'keys': [self.jwk]}):
+                with self.assertRaises(auth.Denied):auth.verify(self.token(**changes), self.cfg)
+        token = self.token(); parts = token.split('.'); signature = bytearray(auth.decode(parts[2])); signature[0] ^= 1
+        with patch.object(auth, 'fetch', return_value={'keys': [self.jwk]}):
+            with self.assertRaises(InvalidSignature):auth.verify('.'.join(parts[:2] + [encoded(signature)]), self.cfg)
+
+    def test_duplicate_or_expired_callback_never_exchanges_code(self):
+        query, browser, _ = self.login()
+        with patch.object(auth, 'fetch') as fetch:
+            with self.assertRaises(auth.Denied):auth.complete(ORIGIN, {**query, 'code': ['a', 'b']}, browser)
+            with patch.object(auth.time, 'time', return_value=time.time() + 601):
+                with self.assertRaises(auth.Denied):auth.complete(ORIGIN, query, browser)
+            fetch.assert_not_called()

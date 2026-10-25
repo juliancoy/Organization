@@ -108,6 +108,19 @@ class RemoteBoundaryTests(unittest.TestCase):
             self.assertEqual(self.request('/api/v1/master/codex/threads',cookie=self.cookie),401)
             self.assertEqual(self.request('/api/v1/master/codex/threads',cookie=replacement),200)
 
+    def test_pidp_login_and_callback_use_secure_browser_cookies(self):
+        import codex_pidp
+        with patch('codex_pidp.start',return_value=('https://identity.example/authorize?state=fixture','__Host-compai_login=browser; Path=/; Secure; HttpOnly; SameSite=Lax')):
+            self.assertEqual(self.request('/auth/login'),303)
+            self.assertIn('Secure; HttpOnly; SameSite=Lax',self.last_cookie)
+        with patch('codex_pidp.complete',return_value='fixture-device-session') as complete:
+            self.assertEqual(self.request('/auth/callback?state=fixture&code=fixture',cookie='__Host-compai_login=browser'),303)
+            self.assertIn('__Host-compai_device=fixture-device-session',self.last_cookie)
+            self.assertIn('Secure; HttpOnly; SameSite=Strict',self.last_cookie)
+            self.assertEqual(complete.call_args.args[2],'browser')
+        with patch('codex_pidp.complete',side_effect=ValueError('private token details')):
+            self.assertEqual(self.request('/auth/callback?state=bad&code=bad'),403)
+
 class CommandDeliveryTests(unittest.TestCase):
     def test_new_message_carries_target_thread_id(self):
         ident='11111111-1111-1111-1111-111111111111'

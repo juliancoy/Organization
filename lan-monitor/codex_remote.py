@@ -26,14 +26,16 @@ class Handler(BaseHTTPRequestHandler):
         try:
             cookie=SimpleCookie(self.headers.get('Cookie',''));return cookie['__Host-compai_device'].value if '__Host-compai_device' in cookie else None
         except Exception:return None
-    def reply(self,status,value,kind='application/json',cookie=None):
+    def reply(self,status,value,kind='application/json',cookie=None,location=None):
         raw=value if isinstance(value,bytes) else json.dumps(value).encode()
         self.send_response(status)
         for k,v in {'Content-Type':kind,'Content-Length':str(len(raw)),'Cache-Control':'no-store',
                     'X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','X-Frame-Options':'DENY',
                     'Content-Security-Policy':"default-src 'self'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'",'Strict-Transport-Security':'max-age=31536000'}.items():self.send_header(k,v)
         if kind=='application/vnd.android.package-archive':self.send_header('Content-Disposition','attachment; filename="swarm-control-test.apk"')
-        if cookie is not None:self.send_header("Set-Cookie",cookie)
+        if cookie is not None:
+            for item in cookie if isinstance(cookie,list) else [cookie]:self.send_header('Set-Cookie',item)
+        if location is not None:self.send_header('Location',location)
         self.end_headers()
         try:self.wfile.write(raw)
         except (BrokenPipeError,ConnectionResetError):pass
@@ -43,6 +45,20 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(403,{'error':{'message':'Host denied'}})
         if self.headers.get('Origin') not in (None,origin):return self.reply(403,{'error':{'message':'Origin denied'}})
         path=urlsplit(self.path).path
+        if self.command=='GET' and path in ('/auth/login','/auth/callback'):
+            try:
+                import codex_pidp
+                if path=='/auth/login':
+                    target,cookie=codex_pidp.start(origin)
+                    return self.reply(303,{},cookie=cookie,location=target)
+                cookies=SimpleCookie(self.headers.get('Cookie',''))
+                browser=cookies[codex_pidp.LOGIN_COOKIE].value if codex_pidp.LOGIN_COOKIE in cookies else None
+                token=codex_pidp.complete(origin,parse_qs(urlsplit(self.path).query,keep_blank_values=True),browser)
+                return self.reply(303,{},cookie=[
+                    '__Host-compai_device='+token+'; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age='+str(codex_devices.LIFETIME),
+                    codex_pidp.LOGIN_COOKIE+'=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0'],location='/')
+            except Exception:
+                return self.reply(403,{'error':{'message':'PIdP sign-in failed. Use the CompAI owner account and restart at /auth/login.'}})
         if self.command=='GET' and path in ASSETS:
             name=ASSETS[path];return self.reply(200,(VIEW/name).read_bytes(),mimetypes.guess_type(name)[0] or 'application/octet-stream')
         pairing=self.command=='POST' and path in ('/pair','/logout')
@@ -50,7 +66,7 @@ class Handler(BaseHTTPRequestHandler):
         valid_read=self.command=='GET' and (path=='/api/v1/swarm/status' or path==API+'threads' or path.startswith(API+'threads/') or path in ('/api/v1/test-app/status','/api/v1/test-app/download'))
         valid_write=self.command=='POST' and path in (API+'commands','/api/v1/test-app/offer')
         if not (valid_read or valid_write or pairing):return self.reply(404,{'error':{'message':'Not found'}})
-        if path not in ('/pair','/logout') and not codex_devices.valid(self.device()):return self.reply(401,{'error':{'message':'Pair the Galaxy using the QR code on CompAI'}})
+        if path not in ('/pair','/logout') and not codex_devices.valid(self.device()):return self.reply(401,{'error':{'message':'Sign in with PIdP to reconnect to CompAI'}})
         body=None
         try:
             if valid_write or pairing:

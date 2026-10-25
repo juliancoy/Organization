@@ -282,14 +282,23 @@ The HTTPS tunnel routes only to the loopback service `codex_remote.py` on port
 8091. It does not publish the distributed test master or Docker. The existing
 LAN Codex route stays blocked.
 
-Pair only the Galaxy using a ten-minute, one-use QR invitation issued locally
-on CompAI. Remote owner-token login is disabled. Each successful pairing
-atomically replaces all previous device sessions; only one session is authorized.
-The paired browser receives a revocable, 30-day Secure, HttpOnly, SameSite=Strict
-cookie. The invitation fragment is removed immediately, and the owner token is
-never sent to the device. Reloads restore the paired session; Lock revokes it.
-Replacing or revoking a session also invalidates its active transfer authorization.
-No owner credential is placed in a URL or browser storage. Read history, choose a thread, then Send a new
+Open `https://compai.lifetech.fyi/` on the Galaxy and choose **Sign in with
+PIdP**, or visit `/auth/login` directly. Recovery uses authorization-code OAuth,
+S256 PKCE, a browser-bound single-use state, and PIdP ES256 signature verification.
+The issuer, resource audience, client ID, token lifetime, read scope, and exact
+configured owner subject must match. Another PIdP account cannot acquire a
+session or revoke the owner's current session. There is no email-based owner
+inference and no remote owner-token login.
+
+Run `python3 lan-monitor/setup-codex-pidp.py` once on CompAI to register its exact
+HTTPS callback. It pins the existing authenticated working-copy account and saves
+client credentials only in owner-private `~/.config/map-master/codex-pidp.json`.
+No PIdP access or refresh token is sent to the remote browser or retained.
+A local ten-minute, one-use QR invitation remains available as an alternative.
+Each successful owner sign-in or pairing atomically replaces previous device
+sessions. The browser receives a 30-day Secure, HttpOnly, SameSite=Strict cookie;
+Lock revokes it. Recovery also invalidates outstanding QR invitations and old
+transfer authorization. Read history, choose a thread, then Send a new
 message or Steer a running turn. Existing VS Code thread permissions apply.
 
 The public service requires its configured HTTPS Host, validates browser Origin
