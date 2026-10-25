@@ -31,6 +31,8 @@ def discover():
                     'status':status,'connected':status=='device','slots':1,'capabilities':['android-chrome','touch','screenshots']}
             if status=='device':
                 device['android']=adb('shell','getprop','ro.build.version.release',serial=serial)
+                device['gpu']={'driver':adb('shell','getprop','ro.hardware.egl',serial=serial),
+                               'backend':'Browser WebGPU / WebGL; CUDA unavailable','compute_verified':False}
                 device['browser_ready']='chrome_devtools_remote' in adb('shell','cat','/proc/net/unix',serial=serial)
             devices.append(device)
         return {'devices':devices}

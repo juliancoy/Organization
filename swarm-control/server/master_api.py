@@ -139,7 +139,7 @@ class MasterAPI:
 
     @staticmethod
     def machine(host):
-        return {key:copy.deepcopy(host[key]) for key in ('host','local','status','cpus','capacity','active_tasks','session','error','excluded') if key in host}
+        return {key:copy.deepcopy(host[key]) for key in ('host','local','status','cpus','capacity','active_tasks','session','error','excluded','hardware') if key in host}
 
     def status(self):
         view=self.tests.view();run=view.get('run')

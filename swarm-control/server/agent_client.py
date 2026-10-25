@@ -181,6 +181,7 @@ class AgentSessions:
                 if host.get('transport')!='webrtc' and host['lan_address'] not in value['addresses']:raise RuntimeError('Agent address is not on an attested physical interface')
                 host['session']={'status':'ready','verified':True,'verified_at':time.time(),'transport':PROTOCOL,'machine':value['machine'],'capabilities':value['capabilities']}
                 host['agent_status']=value
+                host['hardware']=value.get('hardware',{})
                 self.progress(host,'ready',host['session'])
                 return host
             except InterruptedError:raise

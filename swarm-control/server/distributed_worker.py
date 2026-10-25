@@ -19,6 +19,7 @@ BROWSER = 'mcr.microsoft.com/playwright:v1.59.1-noble'
 PYTHON = 'python:3.12-bookworm'
 # Commands are application-owned, never accepted from dashboard requests.
 SUITES = {
+    'gpu': {'name':'CUDA container kernel validation','coordinated':True,'image':PYTHON},
     'mobile': {'name':'Pixel 3 · real Android browser','coordinated':True,'image':NODE},
     'p2p': {'name': 'Cross-device WebRTC P2P', 'coordinated': True, 'image': 'selenium/standalone-chrome:latest'},
     'monitor': {'name': 'LAN monitor Python', 'cwd': 'swarm-control/server', 'image': PYTHON,

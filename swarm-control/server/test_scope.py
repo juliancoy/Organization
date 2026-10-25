@@ -2,7 +2,7 @@
 from pathlib import PurePosixPath
 from work_queue import FILES
 
-BASES = set(FILES) | {'visual', 'p2p', 'mobile','swarm-web'}
+BASES = set(FILES) | {'visual', 'p2p', 'mobile','swarm-web','gpu'}
 
 
 def normalize(paths=None, suites=None):
@@ -59,7 +59,7 @@ def select(tasks, specs, selection):
         if not bases:
             raise ValueError('No test component matches ' + path)
         chosen.update(task for task in tasks if specs[task].get('base', task) in bases)
-    if not chosen and selection['suites'] in (['p2p'], ['mobile']) and not selection['paths']:
+    if not chosen and selection['suites'] in (['p2p'], ['mobile'], ['gpu']) and not selection['paths']:
         return []
     if not chosen:
         raise ValueError('Selection matched no tracked test jobs')

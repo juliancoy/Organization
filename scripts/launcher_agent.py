@@ -922,8 +922,9 @@ class Agent:
         if self.hardware_cache is None or time.time()-self.hardware_sampled>15:
             self.hardware_cache=hardware_sample(disk=self.root)
             self.hardware_sampled=time.time()
-        value={**self.hardware_cache,'gpu_validation':self.gpu_validation}
-        if info is not None:value['cuda_container_runtime']='nvidia' in info.get('Runtimes',{})
+        if info is not None:self.cuda_runtime='nvidia' in info.get('Runtimes',{})
+        value={**self.hardware_cache,'gpu_validation':self.gpu_validation,
+               'cuda_container_runtime':getattr(self,'cuda_runtime',None)}
         return value
 
     def close(self):

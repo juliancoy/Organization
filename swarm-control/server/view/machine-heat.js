@@ -1,4 +1,5 @@
 import {cpuColor} from './cpu-colors.js';
+import {hardwareLines} from './hardware.js';
 let hosts=[];
 function decorate(){
  for(const node of document.querySelectorAll('#topology [data-terminal-host]')){
@@ -10,6 +11,9 @@ function decorate(){
   grid.replaceChildren();
   if(host?.status==='live')for(const core of host.logical_cpus||[]){const tile=document.createElement('span');tile.style.backgroundColor=cpuColor(core.percent);tile.title='CPU '+core.id+': '+(core.percent??'unknown')+'%';grid.append(tile);}
   caption.textContent=host?.status==='live'?host.percent.toFixed(1)+'% CPU · '+host.cpus+' logical CPUs':'CPU '+(host?.status||'measuring…');
+  let hardware=node.querySelector('.machine-hardware');
+  if(!hardware){hardware=document.createElement('small');hardware.className='machine-hardware';node.append(hardware);}
+  hardware.textContent=hardwareLines(host?.hardware).join('\n');
  }
 }
 document.addEventListener('cpu-sample',event=>{hosts=event.detail.hosts;decorate();});

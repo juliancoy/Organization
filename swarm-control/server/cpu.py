@@ -6,6 +6,10 @@ import os
 import subprocess
 import threading
 import time
+import sys
+from paths import WORKSPACE
+sys.path.insert(0,str(WORKSPACE/'scripts'))
+from launcher_agent import hardware_sample
 from distributed import targets
 from agent_client import AgentClient, CONFIG
 
@@ -75,6 +79,13 @@ class CpuMonitor:
             if local:
                 result=subprocess.run(['python3','-c',SAMPLE],capture_output=True,text=True,timeout=8,check=True)
                 values=json.loads(result.stdout)
+                hardware=hardware_sample(disk=WORKSPACE)
+                try:
+                    config=json.loads(CONFIG.read_text())
+                    detail=AgentClient({'host':config['name'],'agent_endpoint':'http://'+config['peers'][config['name']]+':8790'}).call('status',timeout=3)
+                    hardware={**detail.get('hardware',{}),**hardware}
+                except (OSError,ValueError,RuntimeError,KeyError):pass
+                values['hardware']=hardware
             else:
                 config=json.loads(CONFIG.read_text())
                 address=config['peers'][target['host']]
@@ -89,6 +100,7 @@ class CpuMonitor:
         for host in hosts:
             if time.time()-host['sampled_at']>15:
                 host.update(status='stale',percent=None,logical_cpus=[],ram_percent=None,disk_busy_percent=None,network_mbps=None)
+                if host.get('hardware'):host['hardware']={**host['hardware'],'stale':True}
         return {'hosts':hosts,'total_percent':aggregate(hosts),'live_hosts':sum(h['status']=='live' for h in hosts),
                 'total_hosts':len(hosts),'sample_interval_seconds':5,
                 'scope':'Whole-machine CPU utilization across compai and saved SSH hosts, weighted by logical CPU count. Includes all processes, not just tests. Unavailable hosts are excluded from the measured total.'}

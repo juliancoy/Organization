@@ -84,6 +84,7 @@ main{max-width:1440px;margin:auto;padding:28px}a{color:#b7e4cf}.intro,.panel-hea
 #levels-scale{line-height:1.5}
 #cpu-readout{margin:12px 24px;padding:12px 20px}
 #cpu-hosts{gap:12px}
+.machine-hardware{display:block;white-space:pre-line;overflow-wrap:anywhere;font-size:12px;line-height:1.5;color:#b9d4dc;margin-top:8px}.browser-gpu{display:flex;align-items:center;flex-wrap:wrap;gap:12px;border-top:1px solid #34434d;padding-top:12px}.cpu-host{max-width:100%;overflow-wrap:anywhere}
 @media(max-width:1000px){.levels-workspace{grid-template-columns:minmax(0,1fr)}.levels-devices{border-left:0;border-top:1px solid #ffffff15;padding:16px 0 0}#levels-legend{grid-template-columns:repeat(2,minmax(0,1fr));max-height:270px}}
 @media(max-width:560px){main{padding:12px}#device-levels{padding:16px}.levels-controls{width:100%;justify-content:space-between;gap:12px}#device-levels .panel-heading>div:first-child{min-width:0}#levels-plot{height:230px}.levels-key{flex-wrap:wrap;gap:4px}.levels-time{margin-left:36px}#levels-legend{grid-template-columns:minmax(0,1fr)}#cpu-readout{margin:10px 12px}.header-actions{flex-wrap:wrap}}
 
