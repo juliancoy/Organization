@@ -29,7 +29,7 @@ class CheckoutTests(unittest.TestCase):
             config=root/'peers.json';config.write_text(json.dumps({'name':'fixture.local'}))
             agent=Agent.__new__(Agent);agent.root=jobs;agent.config=config;agent.lock=threading.RLock();agent.jobs={};agent.changed=threading.Condition(agent.lock)
             work=jobs/'run'/'source';work.mkdir(parents=True)
-            manifest={'repositories':{'.':{'url':url,'commit':commit}},'hosts':[{'host':'fixture.local','suites':['monitor'],'jobs':{}}]}
+            manifest={'repositories':{'.':{'url':url,'commit':commit}},'hosts':[{'host':'fixture.local','suites':['monitor','swarm-web'],'jobs':{}}]}
             job={'sequence':0,'events':[]}
             agent.checkout(work,manifest,{},job)
             self.assertEqual((work/'fixture.txt').read_text(),'pinned content\n')

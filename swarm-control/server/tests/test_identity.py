@@ -28,7 +28,9 @@ class PIdPRecoveryTests(unittest.TestCase):
                     'authorization_endpoint': 'https://identity.example/authorize',
                     'token_endpoint': 'https://identity.example/token', 'jwks_uri': 'https://identity.example/keys',
                     'redirect_uri': ORIGIN + '/auth/callback', 'owner_subject': 'website:app:owner',
-                    'client_id': 'test-client', 'client_secret': 'test-client-secret'}
+                    'client_id': 'test-client', 'client_secret': 'test-client-secret',
+                    'introspection_endpoint':'https://identity.example/introspect','resource_secret':'test-resource-'*4,
+                    'owner_canonical_user_id':'owner-person'}
         config = self.path / 'config.json'; config.write_text(json.dumps(self.cfg)); config.chmod(0o600)
         for item in [patch.object(auth, 'CONFIG', config), patch.object(devices, 'FILE', self.path / 'devices.json'),
                      patch.dict(auth.PENDING, {}, clear=True), patch.dict(auth.RECOVERIES, {}, clear=True)]:
@@ -45,6 +47,9 @@ class PIdPRecoveryTests(unittest.TestCase):
         content = encoded(json.dumps({'alg': 'ES256', 'kid': 'test-key'}).encode()) + '.' + encoded(json.dumps(claims).encode())
         r, s = utils.decode_dss_signature(self.private.sign(content.encode(), ec.ECDSA(hashes.SHA256())))
         return content + '.' + encoded(r.to_bytes(32, 'big') + s.to_bytes(32, 'big'))
+
+    def introspection(self,subject=None,canonical='owner-person',active=True):
+        return {'active':active,'sub':subject or self.cfg['owner_subject'],'iss':self.cfg['issuer'],'aud':self.cfg['resource'],'scope':self.cfg['scope'],'canonical_user_id':canonical}
 
     def login(self):
         url, cookie = auth.start(ORIGIN)
@@ -65,7 +70,7 @@ class PIdPRecoveryTests(unittest.TestCase):
         old = devices.session(devices.issue()); unused = devices.issue()
         query, browser, _ = self.login()
         token = self.token()
-        with patch.object(auth, 'fetch', side_effect=[{'access_token': token}, {'keys': [self.jwk]}]) as fetch:
+        with patch.object(auth, 'fetch', side_effect=[{'access_token': token}, {'keys': [self.jwk]},self.introspection()]) as fetch:
             with self.assertRaises(auth.ReplacementRequired) as confirmation:
                 auth.complete(ORIGIN, query, browser)
             self.assertTrue(devices.valid(old))
@@ -81,7 +86,7 @@ class PIdPRecoveryTests(unittest.TestCase):
 
     def test_other_account_cannot_disconnect_owner(self):
         old = devices.session(devices.issue()); query, browser, _ = self.login()
-        with patch.object(auth, 'fetch', side_effect=[{'access_token': self.token(sub='website:app:attacker')}, {'keys': [self.jwk]}]):
+        with patch.object(auth, 'fetch', side_effect=[{'access_token': self.token(sub='website:app:attacker')}, {'keys': [self.jwk]},self.introspection('website:app:attacker','attacker-person')]):
             with self.assertRaises(auth.Denied):auth.complete(ORIGIN, query, browser)
         self.assertTrue(devices.valid(old))
 
@@ -126,10 +131,17 @@ class PIdPRecoveryTests(unittest.TestCase):
     def test_replacement_receipt_expires_and_is_single_use(self):
         old=devices.session(devices.issue())
         receipt='r'*43
-        auth.RECOVERIES[devices.digest(receipt)]=time.time()+120
+        auth.RECOVERIES[devices.digest(receipt)]={'expires':time.time()+120,'label':'Galaxy'}
         replacement=auth.replace_controller(receipt)
         self.assertFalse(devices.valid(old));self.assertTrue(devices.valid(replacement))
         with self.assertRaises(auth.Denied):auth.replace_controller(receipt)
-        auth.RECOVERIES[devices.digest(receipt)]=time.time()-1
+        auth.RECOVERIES[devices.digest(receipt)]={'expires':time.time()-1,'label':'Galaxy'}
         with self.assertRaises(auth.Denied):auth.replace_controller(receipt)
         self.assertTrue(devices.valid(replacement))
+
+    def test_only_pidp_verified_linked_identity_can_use_the_owner_account(self):
+        subject='owner:owner-person'
+        with patch.object(auth,'fetch',side_effect=[{'keys':[self.jwk]},self.introspection(subject)]):
+            auth.verify(self.token(sub=subject),self.cfg)
+        with patch.object(auth,'fetch',side_effect=[{'keys':[self.jwk]},self.introspection(subject,active=False)]):
+            with self.assertRaises(auth.Denied):auth.verify(self.token(sub=subject),self.cfg)

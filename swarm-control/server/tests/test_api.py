@@ -126,7 +126,7 @@ class RemoteBoundaryTests(unittest.TestCase):
         receipt='r'*43
         cookie='__Host-swarm_recovery='+receipt
         self.assertEqual(self.request('/auth/replace','POST',origin='https://compai.example',cookie=cookie),403)
-        with patch.dict(identity.RECOVERIES,{devices.digest(receipt):time.time()+120},clear=True):
+        with patch.dict(identity.RECOVERIES,{devices.digest(receipt):{'expires':time.time()+120,'label':'Galaxy'}},clear=True):
             self.assertEqual(self.request('/auth/replace','POST',origin='https://evil.example',cookie=cookie),403)
             self.assertTrue(devices.valid(self.cookie.split('=',1)[1]))
             self.assertEqual(self.request('/auth/replace','POST',origin='https://compai.example',cookie=cookie),303)

@@ -282,23 +282,22 @@ The HTTPS tunnel routes only to the loopback service `api.py` on port
 8091. It does not publish the distributed test master or Docker. The existing
 LAN Codex route stays blocked.
 
-Open `https://compai.lifetech.fyi/` on the Galaxy and choose **Sign in with
-PIdP**, or visit `/auth/login` directly. Recovery uses authorization-code OAuth,
-S256 PKCE, a browser-bound single-use state, and PIdP ES256 signature verification.
-The issuer, resource audience, client ID, token lifetime, read scope, and exact
-configured owner subject must match. Another PIdP account cannot acquire a
-session or revoke the owner's current session. There is no email-based owner
-inference and no remote owner-token login.
+Open `https://compai.lifetech.fyi/` on the Galaxy and choose **Sign in with PIdP**,
+or visit `/auth/login` directly. Swarm Control uses its own OAuth client,
+`https://compai.lifetech.fyi/api/swarm` audience, and `swarm:control` permission.
+S256 PKCE and single-use browser state protect the code exchange. The callback
+validates PIdP's `iss` parameter. ES256 verification and authenticated resource
+introspection verify the issuer, audience, client, scope, active grant, and the
+explicitly configured canonical owner. PIdP's verified identity links allow the
+same person to use linked credentials; emails never assign controller ownership.
 
-Run `python3 swarm-control/server/setup-identity.py` once on CompAI to register its exact
-HTTPS callback. It pins the existing authenticated working-copy account and saves
-client credentials only in owner-private `~/.config/map-master/codex-pidp.json`.
-No PIdP access or refresh token is sent to the remote browser or retained.
-A local ten-minute, one-use QR invitation remains available as an alternative.
-Each successful owner sign-in or pairing atomically replaces previous device
-sessions. The browser receives a 30-day Secure, HttpOnly, SameSite=Strict cookie;
-Lock revokes it. Recovery also invalidates outstanding QR invitations and old
-transfer authorization. Read history, choose a thread, then Send a new
+See `swarm-control/README.md` for initial owner registration. Private identity
+configuration and device records live under `~/.config/swarm-control/`. No PIdP
+access or refresh token is given to the remote browser. Sign-in preserves an
+existing controller until the owner explicitly confirms replacement. Device
+records retain a label and creation, expiry, and last-seen times. Local QR pairing
+remains an OS-owner-authorized alternative. Revocation invalidates transfer
+permissions. Read history, choose a thread, then Send a new
 message or Steer a running turn. Existing VS Code thread permissions apply.
 
 The public service requires its configured HTTPS Host, validates browser Origin

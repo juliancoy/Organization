@@ -14,7 +14,8 @@ const unlock = el('form', '', 'codex-unlock');
 const label = el('label', 'Codex owner token '), password = el('input'); password.type = 'password'; password.autocomplete = 'off'; password.required = true; password.placeholder = 'Enter your owner token'; label.append(password);
 const connect = el('button', 'Connect'); connect.type = 'submit'; unlock.append(label, connect, el('small', secureRemote ? 'Open a one-time pairing link from CompAI, or use your owner token once. This browser stays paired for 30 days; Lock revokes it.' : 'Use localhost or an SSH tunnel. This separate owner token is never shared with test workers.'));
 if(!allowedBrowser){password.disabled=true;connect.disabled=true;}
-if(secureRemote){const signIn=el('a','Sign in with PIdP','codex-map-link');signIn.href='/auth/login';unlock.replaceChildren(signIn,el('p','Use your authorized PIdP account. One controller can be active; replacing an existing controller requires confirmation.'));}
+const deviceLabel=el('input');deviceLabel.value='Galaxy';deviceLabel.maxLength=64;deviceLabel.required=true;
+if(secureRemote){const deviceName=el('label','Device name ');deviceName.append(deviceLabel);const signIn=el('button','Sign in with PIdP');signIn.type='submit';unlock.replaceChildren(deviceName,signIn,el('p','Use your authorized PIdP account. Replacing an active controller requires confirmation.'));}
 const status = el('p', 'Connect to view your conversations.', 'codex-status'); status.setAttribute('role', 'status');
 const workspace = el('div', '', 'codex-workspace'); workspace.hidden = true;
 const sidebar = el('div', '', 'codex-sidebar'), list = el('div', '', 'codex-list'), controls = el('div', '', 'codex-pagination');
@@ -101,7 +102,7 @@ async function readThread() {
   open.disabled=busy;
 }
 unlock.onsubmit = async event => {
-  event.preventDefault(); if(secureRemote)return; token = password.value.trim(); connect.disabled = true;
+  event.preventDefault(); if(secureRemote){location.assign('/auth/login?device_label='+encodeURIComponent(deviceLabel.value.trim()));return;} token = password.value.trim(); connect.disabled = true;
   try {
     await load(); password.value = ''; unlock.hidden = true; workspace.hidden = false; lock.hidden = false; form.hidden = !selected; }
   catch (error) { token = ''; failure(error); } finally { connect.disabled = false; }

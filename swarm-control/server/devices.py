@@ -38,7 +38,7 @@ def issue():
         value['pairs']={digest(token):time.time()+600};save(value)
     return token
 
-def new_session(value,label='Galaxy'):
+def new_session(value,label='QR-paired browser'):
     token=secrets.token_urlsafe(32)
     now=time.time()
     value['sessions']={digest(token):{'label':label,'created':now,'last_seen':now,'expires':now+LIFETIME}};save(value)

@@ -537,7 +537,7 @@ class Agent:
         # selected by the actual shard, not by the whole fleet's manifest.
         application={'org-api':'OrgPortal','chat':'OrgPortal','web':'OrgPortal',
                      'visual':'OrgPortal','identity':'PIdP','identity-python':'PIdP','usajobs':'CodeCollective'}
-        known=set(application)|{'monitor','map','workspace','p2p'}
+        known=set(application)|{'monitor','map','workspace','p2p','swarm-web'}
         needed={'.'}
         for suite in target['suites']:
             suite=suite.split('--',1)[0]

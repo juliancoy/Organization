@@ -86,7 +86,9 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 import identity
                 if path=='/auth/login':
-                    target,cookie=identity.start(origin,self.device())
+                    query=parse_qs(urlsplit(self.path).query,keep_blank_values=True)
+                    if set(query)-{'device_label'} or any(len(v)!=1 for v in query.values()):raise ValueError('Invalid sign-in parameters')
+                    target,cookie=identity.start(origin,self.device(),query.get('device_label',['Galaxy'])[0])
                     return self.reply(303,{},cookie=cookie,location=target)
                 cookies=SimpleCookie(self.headers.get('Cookie',''))
                 browser=cookies[identity.LOGIN_COOKIE].value if identity.LOGIN_COOKIE in cookies else None

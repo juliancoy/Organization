@@ -7,6 +7,7 @@ import fcntl
 import shutil
 import tarfile
 import tempfile
+from urllib.request import urlopen
 from pathlib import Path
 import subprocess
 import sys
@@ -30,6 +31,11 @@ def main():
     if args.action in ('install','deploy'):
         source=APP
         state=Path.home()/'.local/state/swarm-control'
+        config=Path.home()/'.config/swarm-control'
+        if args.action=='deploy':
+            sys.path.insert(0,str(APP/'server'))
+            import identity
+            identity.config('https://compai.lifetech.fyi')
         if args.action=='deploy':
             revision=subprocess.check_output(['git','-C',str(ROOT),'rev-parse',args.revision or 'HEAD'],text=True).strip()
             release=Path.home()/'.local/share/swarm-control/releases'/revision
@@ -49,7 +55,12 @@ def main():
             venv.EnvBuilder(with_pip=True).create(RUNTIME)
         run(RUNTIME / 'bin/python', '-m', 'pip', 'install', '-r', APP / 'requirements.txt', cwd=ROOT)
         # One-time data migration preserves credentials and expiry, without an old API.
-        config=Path.home()/'.config/swarm-control';config.mkdir(parents=True,exist_ok=True,mode=0o700)
+        config.mkdir(parents=True,exist_ok=True,mode=0o700)
+        integration=Path.home()/'.config/lan-monitor/orgportal.json'
+        if integration.is_file() and not (config/'integrations/orgportal.json').exists():
+            (config/'integrations').mkdir(exist_ok=True,mode=0o700)
+            fd=os.open(config/'integrations/orgportal.json',os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+            with os.fdopen(fd,'wb') as stream:stream.write(integration.read_bytes())
         old=Path.home()/'.config/map-master/codex-devices.json'
         if old.exists() and not (config/'devices.json').exists():
             with old.with_suffix('.lock').open('a+') as lock:
@@ -62,6 +73,11 @@ def main():
                 with os.fdopen(fd,'w') as stream:json.dump(value,stream)
         UNITS.mkdir(parents=True, exist_ok=True)
         if args.action=='deploy':
+            try:
+                with urlopen('http://127.0.0.1:8089/api/distributed-tests',timeout=3) as response:active=json.load(response)
+            except OSError:active={}
+            if active.get('running') or active.get('active_reruns'):
+                raise RuntimeError('Wait for active distributed jobs before deploying Swarm Control.')
             run('systemctl','--user','stop','swarm-control.target')
             previous=APP/'server/.runtime'
             if not state.exists() and previous.exists():
@@ -74,7 +90,6 @@ def main():
         run('systemctl', '--user', 'daemon-reload')
         run('systemctl', '--user', 'enable', 'swarm-control.target')
         if args.action=='deploy':
-            if not (config/'identity.json').is_file():raise RuntimeError('Configure the Swarm Control PIdP client before deployment.')
             run('systemctl','--user','restart','swarm-control.target')
     elif args.action == 'test':
         run(sys.executable, '-m', 'unittest', 'discover', '-s', 'tests', '-q', cwd=APP / 'server')

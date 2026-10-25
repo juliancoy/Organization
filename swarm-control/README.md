@@ -41,11 +41,15 @@ The existing CompAI URL remains the access address during this extraction.
 Open `https://compai.lifetech.fyi/auth/login`. Swarm Control has a separate PIdP
 client, audience `https://compai.lifetech.fyi/api/swarm`, and `swarm:control`
 permission. LifeTech portal credentials are not requested. The configured owner
-is an explicit verified PIdP subject; email and application working copies never
+is an explicit PIdP-verified canonical person; linked credentials are checked
+through authenticated introspection. Email and application working copies never
 assign ownership. Initial registration is an operator action:
 
 ```sh
-python3 swarm-control/server/setup-identity.py --owner-subject YOUR_VERIFIED_PIDP_SUBJECT
+python3 swarm-control/server/setup-identity.py \
+  --owner-subject YOUR_VERIFIED_PIDP_SUBJECT \
+  --owner-canonical-id YOUR_VERIFIED_PIDP_PERSON_ID \
+  --resource-secret-file /private/path/to/swarm-resource-secret
 ```
 
 Client credentials and controller records are owner-private under

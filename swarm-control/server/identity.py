@@ -53,7 +53,7 @@ def config(origin):
     parsed = urlsplit(issuer)
     if parsed.scheme != 'https' or parsed.netloc != parsed.hostname or parsed.path or parsed.query or parsed.fragment:
         raise Denied('Invalid PIdP issuer.')
-    for key in ('authorization_endpoint', 'token_endpoint', 'jwks_uri'):
+    for key in ('authorization_endpoint', 'token_endpoint', 'jwks_uri','introspection_endpoint'):
         endpoint = urlsplit(value[key])
         if endpoint.scheme != 'https' or endpoint.netloc != parsed.netloc or endpoint.fragment or endpoint.query:
             raise Denied('PIdP endpoints must belong to the configured issuer.')
@@ -61,11 +61,16 @@ def config(origin):
         raise Denied('PIdP owner or callback is not configured.')
     if value['resource'] != origin + '/api/swarm' or value.get('scope') != 'swarm:control':
         raise Denied('Swarm Control requires its own resource and permission.')
+    if not value.get('owner_canonical_user_id') or len(value.get('resource_secret',''))<32:
+        raise Denied('Configure the verified PIdP owner and resource credential.')
     return value
 
 
-def start(origin,current_device=None):
+def start(origin,current_device=None,label='Galaxy'):
     cfg = config(origin)
+    if not isinstance(label,str) or not 1<=len(label.strip())<=64 or any(ord(c)<32 for c in label):
+        raise Denied('Enter a device name of 1–64 characters.')
+    label=label.strip()
     state, browser, verifier = (secrets.token_urlsafe(32) for _ in range(3))
     with LOCK:
         for key in list(PENDING):
@@ -75,6 +80,7 @@ def start(origin,current_device=None):
             raise Denied('Too many pending sign-ins. Try again shortly.')
         PENDING[state] = {'browser': hashlib.sha256(browser.encode()).digest(), 'verifier': verifier,
                           'expires': time.time() + 600,
+                          'label':label,
                           'device':devices.digest(current_device) if devices.valid(current_device) else None}
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip('=')
     url = cfg['authorization_endpoint'] + '?' + urlencode({
@@ -113,7 +119,12 @@ def verify(token, cfg):
         raise Denied('PIdP token expired or is not yet valid.')
     if claims.get('iss') != cfg['issuer'] or claims.get('aud') != cfg['resource'] or claims.get('client_id') != cfg['client_id'] or str(claims.get('scope', '')).split() != [cfg['scope']]:
         raise Denied('PIdP token is for a different resource.')
-    if not isinstance(claims.get('sub'), str) or not hmac.compare_digest(claims['sub'], cfg['owner_subject']):
+    identity=fetch(cfg['introspection_endpoint'],urlencode({'token':token,'resource':cfg['resource']}).encode(),
+                   {'Content-Type':'application/x-www-form-urlencoded','Authorization':'Bearer '+cfg['resource_secret']})
+    if identity.get('active') is not True or identity.get('sub')!=claims.get('sub') or identity.get('iss')!=cfg['issuer'] or identity.get('aud')!=cfg['resource'] or identity.get('scope')!=cfg['scope']:
+        raise Denied('PIdP did not confirm an active Swarm Control grant.')
+    canonical=identity.get('canonical_user_id')
+    if not isinstance(canonical,str) or not hmac.compare_digest(canonical,cfg['owner_canonical_user_id']):
         raise Denied('This PIdP account is not the CompAI owner.')
 
 
@@ -142,20 +153,20 @@ def complete(origin, query, browser):
             receipt=secrets.token_urlsafe(32)
             with LOCK:
                 for key in list(RECOVERIES):
-                    if RECOVERIES[key]<=time.time():del RECOVERIES[key]
+                    if RECOVERIES[key]['expires']<=time.time():del RECOVERIES[key]
                 if len(RECOVERIES)>=128:raise Denied('Too many pending replacements.')
-                RECOVERIES[devices.digest(receipt)]=time.time()+120
+                RECOVERIES[devices.digest(receipt)]={'expires':time.time()+120,'label':pending['label']}
             raise ReplacementRequired(receipt)
         value['pairs'] = {}
-        return devices.new_session(value)
+        return devices.new_session(value,pending['label'])
 
 
 def replace_controller(receipt):
     if not isinstance(receipt,str) or not 20<=len(receipt)<=128:
         raise Denied('Replacement requires a fresh owner sign-in.')
     with LOCK:
-        expiry=RECOVERIES.pop(devices.digest(receipt),0)
-    if expiry<=time.time():raise Denied('Replacement expired. Sign in again.')
+        record=RECOVERIES.pop(devices.digest(receipt),None)
+    if not record or record['expires']<=time.time():raise Denied('Replacement expired. Sign in again.')
     with devices.state() as value:
         value['pairs']={}
-        return devices.new_session(value)
+        return devices.new_session(value,record['label'])
