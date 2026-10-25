@@ -49,7 +49,7 @@ class PIdPRecoveryTests(unittest.TestCase):
     def login(self):
         url, cookie = auth.start(ORIGIN)
         query = parse_qs(urlsplit(url).query)
-        return {'state': query['state'], 'code': ['one-use-code']}, cookie.split('=', 1)[1].split(';', 1)[0], query
+        return {'state': query['state'], 'code': ['one-use-code'], 'iss': [self.cfg['issuer']]}, cookie.split('=', 1)[1].split(';', 1)[0], query
 
     def test_pkce_and_owner_private_configuration(self):
         query, browser, request = self.login()
@@ -108,3 +108,14 @@ class PIdPRecoveryTests(unittest.TestCase):
             with patch.object(auth.time, 'time', return_value=time.time() + 601):
                 with self.assertRaises(auth.Denied):auth.complete(ORIGIN, query, browser)
             fetch.assert_not_called()
+
+    def test_actual_pidp_issuer_parameter_is_required_and_validated_before_exchange(self):
+        query, browser, _ = self.login()
+        with patch.object(auth, 'fetch') as fetch:
+            for issuer in [[], ['https://evil.example'], [self.cfg['issuer'], self.cfg['issuer']]]:
+                with self.subTest(issuer=issuer), self.assertRaises(auth.Denied):
+                    auth.complete(ORIGIN, {**query, 'iss': issuer}, browser)
+            without = {k: v for k, v in query.items() if k != 'iss'}
+            with self.assertRaises(auth.Denied):auth.complete(ORIGIN, without, browser)
+            fetch.assert_not_called()
+        self.assertIn(query['state'][0], auth.PENDING)

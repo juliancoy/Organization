@@ -109,8 +109,11 @@ def verify(token, cfg):
 
 
 def complete(origin, query, browser):
-    if set(query) != {'state', 'code'} or any(len(v) != 1 or not 1 <= len(v[0]) <= 4096 for v in query.values()):
+    cfg = config(origin)
+    if set(query) != {'state', 'code', 'iss'} or any(len(v) != 1 or not 1 <= len(v[0]) <= 4096 for v in query.values()):
         raise Denied('Invalid PIdP callback.')
+    if query['iss'][0] != cfg['issuer']:
+        raise Denied('PIdP callback issuer does not match.')
     if not isinstance(browser, str) or not 20 <= len(browser) <= 128:
         raise Denied('Restart sign-in in this browser.')
     with LOCK:
@@ -118,7 +121,6 @@ def complete(origin, query, browser):
         if not pending or pending['expires'] <= time.time() or not hmac.compare_digest(pending['browser'], hashlib.sha256(browser.encode()).digest()):
             raise Denied('Sign-in expired or belongs to another browser.')
         del PENDING[query['state'][0]]  # Never replay an ambiguous token exchange.
-    cfg = config(origin)
     basic = base64.b64encode((cfg['client_id'] + ':' + cfg['client_secret']).encode()).decode()
     tokens = fetch(cfg['token_endpoint'], urlencode({
         'grant_type': 'authorization_code', 'code': query['code'][0], 'redirect_uri': cfg['redirect_uri'],

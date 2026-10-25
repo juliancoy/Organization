@@ -4,6 +4,7 @@ Bind only to loopback. The tunnel publishes this service, never the test master.
 A fixed test APK can be delivered; no shell, proxy, or arbitrary-file endpoints are exposed.
 """
 import json
+import logging
 from http.cookies import SimpleCookie
 import codex_devices
 import mimetypes
@@ -19,6 +20,22 @@ ASSETS={'/':'codex.html','/codex.html':'codex.html','/codex.js':'codex.js','/cod
         '/test-deployment.css':'test-deployment.css','/swarm-control':'swarm-control.html','/swarm-control.svg':'swarm-control.svg'}
 ASSETS.update({'/swarm-status':'swarm-status.html','/swarm-status.js':'swarm-status.js','/swarm-status.css':'swarm-status.css','/swarm-machines.js':'swarm-machines.js'})
 API='/api/v1/master/codex/'
+
+def audit_auth_failure(error,phase):
+    reasons={
+        'Invalid PIdP callback.':'invalid_callback_parameters',
+        'PIdP callback issuer does not match.':'issuer_mismatch',
+        'Restart sign-in in this browser.':'missing_browser_cookie',
+        'Sign-in expired or belongs to another browser.':'expired_or_wrong_browser',
+        'This PIdP account is not the CompAI owner.':'owner_mismatch',
+        'PIdP token is for a different resource.':'token_binding_mismatch',
+        'PIdP token expired or is not yet valid.':'token_lifetime_invalid',
+    }
+    # Fixed diagnostic labels only; never exception text, URLs, identities or credentials.
+    reason=reasons.get(str(error),'authentication_error')
+    status=getattr(error,'code',None)
+    logging.warning('swarm_auth_failed phase=%s reason=%s exception=%s http_status=%s',
+                    phase,reason,type(error).__name__,status if type(status) is int else 'none')
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self,*args):pass  # Never retain credentials, URLs, or conversation text.
@@ -57,7 +74,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(303,{},cookie=[
                     '__Host-compai_device='+token+'; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age='+str(codex_devices.LIFETIME),
                     codex_pidp.LOGIN_COOKIE+'=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0'],location='/')
-            except Exception:
+            except Exception as error:
+                audit_auth_failure(error,'login' if path=='/auth/login' else 'callback')
                 return self.reply(403,{'error':{'message':'PIdP sign-in failed. Use the CompAI owner account and restart at /auth/login.'}})
         if self.command=='GET' and path in ASSETS:
             name=ASSETS[path];return self.reply(200,(VIEW/name).read_bytes(),mimetypes.guess_type(name)[0] or 'application/octet-stream')

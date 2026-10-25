@@ -114,7 +114,7 @@ class RemoteBoundaryTests(unittest.TestCase):
             self.assertEqual(self.request('/auth/login'),303)
             self.assertIn('Secure; HttpOnly; SameSite=Lax',self.last_cookie)
         with patch('codex_pidp.complete',return_value='fixture-device-session') as complete:
-            self.assertEqual(self.request('/auth/callback?state=fixture&code=fixture',cookie='__Host-compai_login=browser'),303)
+            self.assertEqual(self.request('/auth/callback?state=fixture&code=fixture&iss=https%3A%2F%2Fidentity.example',cookie='__Host-compai_login=browser'),303)
             self.assertIn('__Host-compai_device=fixture-device-session',self.last_cookie)
             self.assertIn('Secure; HttpOnly; SameSite=Strict',self.last_cookie)
             self.assertEqual(complete.call_args.args[2],'browser')
@@ -122,6 +122,12 @@ class RemoteBoundaryTests(unittest.TestCase):
             self.assertEqual(self.request('/auth/callback?state=bad&code=bad'),403)
 
 class CommandDeliveryTests(unittest.TestCase):
+    def test_auth_diagnostics_never_log_exception_contents(self):
+        from codex_remote import audit_auth_failure
+        with patch('codex_remote.logging.warning') as log:
+            audit_auth_failure(ValueError('secret-code=private-browser-token'),'callback')
+            self.assertNotIn('private-browser-token',str(log.call_args))
+            self.assertIn('authentication_error',str(log.call_args))
     def test_new_message_carries_target_thread_id(self):
         ident='11111111-1111-1111-1111-111111111111'
         client=Mock();client.request.return_value={'result':{}}
