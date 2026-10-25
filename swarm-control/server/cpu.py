@@ -66,7 +66,7 @@ class CpuMonitor:
                     if not report.get('running'):continue
                     for host in (report.get('run') or {}).get('hosts',[]):
                         jobs=list(host.get('jobs',{}).values())
-                        executing=[j for j in jobs if j.get('status')=='running' and j.get('phase') not in ('prepare','waiting_for_dependencies')]
+                        executing=[j for j in jobs if j.get('status')=='running' and j.get('phase') not in ('prepare','waiting_for_dependencies','waiting_for_capacity')]
                         entry=activity.setdefault(host['host'],{'running_test_jobs':0,'scheduled_cpu_slots':0,'workload_phase':'idle'})
                         entry['running_test_jobs']+=len(executing)
                         entry['scheduled_cpu_slots']+=sum(j.get('cpus') or 0 for j in jobs if j.get('status') in ('queued','running'))

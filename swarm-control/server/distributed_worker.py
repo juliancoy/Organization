@@ -205,6 +205,24 @@ def container_user():
 
 
 def run(work, suite_id, phase, spec, run_id, env, cancel=None):
+    if spec.get('native') or not spec.get(phase):return _run(work,suite_id,phase,spec,run_id,env,cancel)
+    import sys
+    sys.path.insert(0,str(WORKSPACE))
+    from scripts.launcher_agent import ResourceLease
+    lease=ResourceLease(run_id,int(spec.get('cpus',2)),int(spec.get('memory_mb',3072)),
+                        'orgportal-test-'+run_id+'-'+suite_id,directory=env.get('SWARM_RESOURCE_DIR'))
+    try:
+        emit('phase',suite=suite_id,phase='waiting_for_capacity')
+        deadline=time.monotonic()+7200
+        while not lease.try_acquire():
+            if (work.parent/'STOP').exists() or (cancel is not None and cancel.is_set()):return 130
+            if time.monotonic()>deadline:raise TimeoutError('Resource admission deadline exceeded')
+            time.sleep(.1)
+        return _run(work,suite_id,phase,spec,run_id,env,cancel)
+    finally:lease.close()
+
+
+def _run(work, suite_id, phase, spec, run_id, env, cancel=None):
     if (work.parent / 'STOP').exists() or (cancel is not None and cancel.is_set()):
         return 130
     command = spec.get(phase)

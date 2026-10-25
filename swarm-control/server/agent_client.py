@@ -166,9 +166,8 @@ class AgentSessions:
                 if value.get('worker_policy',{}).get('accepting_jobs') is False:
                     host['worker_policy']=value['worker_policy']
                     raise RuntimeError(value['worker_policy']['reason'])
-                if value.get('active_jobs'):raise RuntimeError('Agent is busy with an existing job')
                 value=self.updater.ensure(host,client,value)
-                required={'controller-signature','github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','file-queue','snapshot-stage','event-wait'}
+                required={'controller-signature','github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','file-queue','snapshot-stage','event-wait','shared-resources'}
                 if value.get('protocol')!=PROTOCOL:raise RuntimeError('Agent protocol mismatch after launcher update')
                 if not value.get('ready'):raise RuntimeError('Agent is not ready or is draining for an update')
                 missing=required-set(value.get('capabilities',[]))
@@ -177,7 +176,6 @@ class AgentSessions:
                 if value.get('worker_policy',{}).get('accepting_jobs') is False:
                     host['worker_policy']=value['worker_policy']
                     raise RuntimeError(value['worker_policy']['reason'])
-                if value.get('active_jobs'):raise RuntimeError('Agent is busy with an existing job')
                 if host.get('transport')!='webrtc' and host['lan_address'] not in value['addresses']:raise RuntimeError('Agent address is not on an attested physical interface')
                 host['session']={'status':'ready','verified':True,'verified_at':time.time(),'transport':PROTOCOL,'machine':value['machine'],'capabilities':value['capabilities']}
                 host['agent_status']=value

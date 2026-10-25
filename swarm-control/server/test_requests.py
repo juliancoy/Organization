@@ -59,6 +59,30 @@ class TestRequests:
         self.wake.set()
         return record
 
+    def submit_research(self,profile,request_id):
+        from research_jobs import profiles
+        if profile not in profiles():raise ValueError('Unknown configured research profile')
+        if str(uuid.UUID(request_id))!=request_id:raise ValueError('Invalid request ID')
+        with self.lock:
+            path=self.folder/(request_id+'.json')
+            if path.exists():
+                existing=json.loads(path.read_text())
+                if existing.get('selection')!={'research':profile}:raise ValueError('Request ID already used')
+                return existing
+            if sum(r['status'] in ('queued','running') for r in self.records())>=100:raise ValueError('Job queue full')
+            record={'id':request_id,'kind':'research','submitted_at':now(),'status':'queued',
+                    'selection':{'research':profile},'run_id':None,'finished_at':None}
+            self.save(record)
+        self.start();self.wake.set();return record
+
+    def cancel(self,ident):
+        with self.tests.lock,self.lock:
+            record=self.view(ident)
+            if record['status']=='queued':
+                record.update(status='stopped',finished_at=now());self.save(record);return True
+            if record['status']=='running':return self.tests.stop_run(record['run_id'])
+            return False
+
     def view(self, ident=None):
         with self.lock:
             if ident:
@@ -84,7 +108,7 @@ class TestRequests:
                         record.update(status='interrupted', finished_at=now(), error='Associated run record is unavailable')
                         self.save(record)
                         continue
-                    if not run.get('finished'): return
+                    if not run.get('finished'): continue
                     record.update(status=run['status'], finished_at=run['finished'],
                                   duration_seconds=max(0, datetime.fromisoformat(run['finished']).timestamp() - datetime.fromisoformat(run['started']).timestamp()))
                     from runtime_stats import seconds
@@ -92,15 +116,12 @@ class TestRequests:
                     record['total_seconds']=seconds(record['submitted_at'],record['finished_at'])
                     self.save(record)
                 if record['status'] != 'queued': continue
-                if self.tests.runner.running or any(r.running for r in self.tests.reruns.values()): return
+                runner=self.tests.create_run(force=record.get('force',False),selection=record['selection'])
+                if runner is None:continue
                 # Persist the run ID before dispatch so restart cannot duplicate it.
-                self.tests.runner = self.tests.load()
-                runner = self.tests.runner
-                runner.start(force=record.get('force',False), launch=False, selection=record['selection'])
                 record.update(status='running', run_id=runner.run['id'], started_at=now())
                 self.save(record)
                 threading.Thread(target=runner.execute, daemon=True).start()
-                return
 
     def listen(self):
         import logging

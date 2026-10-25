@@ -12,6 +12,7 @@ from early_p2p import EarlyP2P
 
 
 def execute(service, hosts, images):
+    SUITES = __import__('copy').deepcopy(__import__('distributed_worker').SUITES)
     run = service.run
     tasks = catalog(service.root, SUITES, run['repositories'])
     from test_scope import select

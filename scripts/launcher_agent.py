@@ -20,6 +20,86 @@ import time
 import urllib.request
 import urllib.error
 
+class ResourceLease:
+    """Cross-process CPU/RAM admission; locks release on process death.
+
+    Every run shares one node-local pool. Waiting groups with the smallest
+    dominant resource share get the next fitting slot. After 30 seconds the
+    oldest waiter reserves headroom, preventing large jobs from starving.
+    """
+    def __init__(self, group, cpus, memory_mb, container='', directory=None, limits=None):
+        if not isinstance(group,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}',group):raise ValueError('Invalid resource group')
+        if type(cpus) is not int or type(memory_mb) is not int or cpus<1 or memory_mb<1:raise ValueError('Invalid resources')
+        if container and not re.fullmatch(r'[a-zA-Z0-9_.-]{1,160}',container):raise ValueError('Invalid container')
+        self.directory=Path(directory or os.getenv('SWARM_RESOURCE_DIR',str(Path.home()/'.local/state/swarm-control/resources')))
+        self.directory.mkdir(parents=True,exist_ok=True,mode=0o700)
+        self.limits=limits
+        self.key=secrets.token_hex(16)
+        self.path=self.directory/(self.key+'.json')
+        self.row={'id':self.key,'group':group,'cpus':cpus,'memory_mb':memory_mb,'container':container,'created':time.time(),'active':False}
+        with self.guard():
+            self.file=self.path.open('x+');self.path.chmod(0o600)
+            fcntl.flock(self.file,fcntl.LOCK_EX);self.write()
+
+    def guard(self):
+        @contextlib.contextmanager
+        def locked():
+            with (self.directory/'pool.lock').open('a') as lock:
+                fcntl.flock(lock,fcntl.LOCK_EX)
+                yield
+        return locked()
+
+    def write(self):
+        self.file.seek(0);self.file.truncate();json.dump(self.row,self.file);self.file.flush()
+
+    def capacity(self):
+        if self.limits is not None:return self.limits
+        memory={line.split(':',1)[0]:int(line.split()[1])//1024 for line in Path('/proc/meminfo').read_text().splitlines() if len(line.split())>=2 and line.split()[1].isdigit()}
+        return {'cpus':max(1,len(os.sched_getaffinity(0))), 'memory_mb':max(0,memory['MemTotal']-1024),
+                'available_mb':max(0,memory['MemAvailable']-1024)}
+
+    def rows(self):
+        rows=[]
+        for path in self.directory.glob('*.json'):
+            if path==self.path:rows.append(dict(self.row));continue
+            try:
+                with path.open('r+') as file:
+                    row=json.load(file)
+                    try:fcntl.flock(file,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                    except BlockingIOError:rows.append(row);continue
+                    # Keep an orphan's reservation until its container is gone.
+                    if row.get('active') and row.get('container'):
+                        check=subprocess.run(['docker','inspect','-f','{{.State.Running}}',row['container']],capture_output=True,text=True,timeout=5)
+                        if check.returncode==0 and check.stdout.strip()=='true':rows.append(row);continue
+                    path.unlink(missing_ok=True)
+            except FileNotFoundError:continue
+        return rows
+
+    def try_acquire(self):
+        with self.guard():
+            if self.row['active']:return True
+            limits=self.capacity();rows=self.rows();active=[r for r in rows if r['active']]
+            free={k:limits[k]-sum(r[k] for r in active) for k in ('cpus','memory_mb')}
+            free['memory_mb']=min(free['memory_mb'],limits.get('available_mb',limits['memory_mb']))
+            if any(self.row[k]>limits[k] for k in ('cpus','memory_mb')):raise ValueError('Task exceeds node resource capacity')
+            waiting=sorted((r for r in rows if not r['active']),key=lambda r:(r['created'],r['id']))
+            oldest=waiting[0]
+            def fits(row):return all(row[k]<=free[k] for k in free)
+            if time.time()-oldest['created']>=30:
+                chosen=oldest if fits(oldest) else None
+            else:
+                def share(row):
+                    used={k:sum(r[k] for r in active if r['group']==row['group']) for k in free}
+                    return max(used[k]/max(1,limits[k]) for k in free),row['created'],row['id']
+                chosen=next(iter(sorted((r for r in waiting if fits(r)),key=share)),None)
+            if not chosen or chosen['id']!=self.key:return False
+            self.row['active']=True;self.write();return True
+
+    def close(self):
+        if self.file.closed:return
+        with self.guard():self.path.unlink(missing_ok=True);self.file.close()
+
+
 VERSION = 'lifetech-agent.v1'
 LIMIT = 1024 * 1024
 UNPRIVILEGED_OPS={'status','metrics','worker.policy','image.inspect','registry.read','tests.request','tests.status'}
@@ -450,8 +530,28 @@ class Agent:
         return self.root/ident
 
     def dispatch(self, op, args):
+        if op in ('resource.acquire','resource.release'):
+            with self.lock:
+                leases=getattr(self,'resource_leases',None)
+                if leases is None:self.resource_leases={};leases=self.resource_leases
+                ident=args.get('id')
+                if not isinstance(ident,str) or not re.fullmatch(r'[a-f0-9]{32}',ident):raise ValueError('Invalid resource lease')
+                if op=='resource.release':
+                    previous=leases.pop(ident,None)
+                    if previous:previous['timer'].cancel();previous['lease'].close()
+                    return {'released':True}
+                policy=worker_policy(self.config)
+                if not policy['accepting_jobs']:raise RuntimeError(policy['reason'])
+                previous=leases.get(ident)
+                if not previous:
+                    if len(leases)>=128:raise RuntimeError('Resource request queue full')
+                    lease=ResourceLease(args.get('group'),args.get('cpus'),args.get('memory_mb'),args.get('container',''))
+                    timer=threading.Timer(300,lambda:self.dispatch('resource.release',{'id':ident}));timer.daemon=True
+                    leases[ident]={'lease':lease,'timer':timer};timer.start()
+                else:lease=previous['lease']
+                return {'acquired':lease.try_acquire()}
         if op=='worker.policy':return worker_policy(self.config)
-        if op in ('job.start','source.stage','p2p.start','image.pull') or (op=='job.feed' and args.get('tasks')):
+        if op in ('job.start','source.stage','p2p.start','image.pull','resource.acquire') or (op=='job.feed' and args.get('tasks')):
             policy=worker_policy(self.config)
             if not policy['accepting_jobs']:raise RuntimeError(policy['reason'])
         if op in ('tests.request','tests.status'):
@@ -515,7 +615,7 @@ class Agent:
             return {'protocol':VERSION,'source_revision':self.source_revision,'node':config['name'],'ready':bool(shutil.which('docker')) and not Path('/tmp/launcher-agent-draining').exists(),'time':time.time(),
                     'machine':hashlib.sha256(machine.read_bytes()).hexdigest(),'hostname':socket.gethostname(),
                     'addresses':addresses,'platform':info['OSType']+'/'+info['Architecture'],
-                    'worker_policy':policy,'capabilities':['controller-signature','github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','file-queue','snapshot-stage','event-wait','encrypted-backup','gpu-kernel'],
+                    'worker_policy':policy,'capabilities':['controller-signature','github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','file-queue','snapshot-stage','event-wait','shared-resources','encrypted-backup','gpu-kernel'],
                     'storage':self.storage_status,
                     'hardware':self.hardware(info),
                     'preparations':[key for key,j in self.jobs.items() if j['status']=='running' and j.get('prepare_only')],
@@ -730,8 +830,8 @@ class Agent:
             if shutil.disk_usage(self.root).free<MIN_FREE_BYTES:raise RuntimeError('Worker needs at least 10 GiB free disk space after cleanup')
             if folder.exists():raise ValueError('Run ID already exists; use a new run')
             preparing=args['manifest'].get('prepare_only') is True
-            if any(j['status']=='running' and bool(j.get('prepare_only'))==preparing for j in self.jobs.values()):
-                raise RuntimeError('Agent already has an active '+('preparation' if preparing else 'test session'))
+            count=sum(j['status']=='running' and bool(j.get('prepare_only'))==preparing for j in self.jobs.values())
+            if count >= (1 if preparing else 8):raise RuntimeError('Worker session limit reached')
             work=folder/'source'
             manifest=args['manifest']
             repositories=manifest.get('repositories',{})
@@ -897,6 +997,7 @@ class Agent:
         try:
             home=self.root/'home';home.mkdir(exist_ok=True,mode=0o700)
             env=worker_environment(home)
+            env['SWARM_RESOURCE_DIR']=str(Path(os.getenv('SWARM_RESOURCE_DIR',str(Path.home()/'.local/state/swarm-control/resources'))))
             manifest=json.loads((folder/'manifest.json').read_text())
             self.checkout(work,manifest,env,job)
             if (folder/'STOP').exists():raise InterruptedError('Run stopped during GitHub synchronization')

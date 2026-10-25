@@ -18,9 +18,6 @@ class LiveDistributedTests:
 
     @staticmethod
     def load():
-        importlib.invalidate_caches()
-        for name in ('distributed','run_activity','post_deployment','distributed_worker','suite_cache','work_queue','granular_dispatch','granular_worker','worker_preparation','early_p2p','mobile_worker','github_sources','distributed_images','visual_artifacts','image_registry','agent_client','agent_updates','p2p_network','docker_utils','docker_utils.images','docker_utils.policy','docker_utils.sdk'):
-            sys.modules.pop(name,None)
         return importlib.import_module('distributed').DistributedTests()
 
     def view(self, ident=None):
@@ -28,6 +25,7 @@ class LiveDistributedTests:
             selected=self.reruns.get(ident,self.runner)
             result=selected.view(ident)
             result['snapshot_staging']=self.staging.view()
+            result['active_runs']=[{'id':r.run['id'],'status':r.run['status'],'kind':r.run.get('kind','tests')} for r in self.active()]
             result['active_reruns']=[r.run['id'] for r in self.reruns.values() if r.running]
             return result
 
@@ -51,12 +49,36 @@ class LiveDistributedTests:
         with self.lock:
             return self.runner.artifact(run, host, suite, name)
 
-    def start(self,force=False):
+    def active(self):
+        return [r for r in [self.runner,*self.reruns.values()] if r.running]
+
+    @staticmethod
+    def exclusive(selection):
+        return not selection or bool(set(selection.get('suites',[])) & {'p2p','mobile','gpu'})
+
+    def create_run(self,force=False,selection=None):
         with self.lock:
-            if self.runner.running or any(r.running for r in self.reruns.values()):
-                return False
-            self.runner = self.load()
-            return self.runner.start(force=force)
+            active=self.active()
+            if len(active)>=8:return None
+            if active and (self.exclusive(selection) or any(self.exclusive(r.run.get('selection')) for r in active)):
+                return None
+            from distributed import DistributedTests
+            if selection and selection.get('research'):
+                from research_jobs import ResearchRun
+                runner=ResearchRun(self.runner.root,self.runner.folder,selection['research'])
+            else:runner=DistributedTests(self.runner.root,self.runner.folder,recover=False)
+            runner.publication_lock=self.runner.publication_lock
+            runner.start(force=force,launch=False,selection=selection)
+            self.reruns={key:r for key,r in self.reruns.items() if r.running}
+            if self.runner.running:self.reruns[runner.run['id']]=runner
+            else:self.runner=runner
+            return runner
+
+    def start(self,force=False):
+        runner=self.create_run(force=force)
+        if runner is None:return False
+        threading.Thread(target=runner.execute,daemon=True).start()
+        return True
 
     def stop(self):
         with self.lock:
@@ -78,23 +100,24 @@ class LiveDistributedTests:
                 worker.update(status='queued',suites=list(jobs),jobs={key:{'name':job['name'],'status':'queued','phase':None,'logs':[]} for key,job in jobs.items()})
                 selected.append(worker)
             if not selected:raise ValueError('No matching suites to rerun')
-            from distributed import DistributedTests
-            runner=DistributedTests(self.runner.root,self.runner.folder,recover=False)
-            runner.publication_lock=self.runner.publication_lock
-            runner.start(selected,parent_run_id,launch=False)
-            self.reruns[runner.run['id']]=runner
-            def dispatch():
-                while True:
-                    with self.lock:
-                        if runner.run.get('stop_requested'):
-                            runner.run.update(status='stopped',finished=__import__('distributed').now());runner.running=False;runner.save();return
-                        required={h['host'] for h in selected}
-                        active=[r for r in [self.runner,*self.reruns.values()] if r is not runner and r.running and r.run.get('status')!='queued']
-                        if not any(required.intersection(h['host'] for h in r.run['hosts']) for r in active):
-                            runner.run['status']='preparing';runner.save();break
-                    time.sleep(1)
-                runner.execute()
-            threading.Thread(target=dispatch,daemon=True).start()
+            paths=[];suites=[]
+            for worker in selected:
+                for task in worker['jobs']:
+                    original=next(h for h in parent['hosts'] if h['host']==worker['host'])['jobs'][task]
+                    base=original.get('suite') or task.split('--',1)[0]
+                    file=original.get('file')
+                    if file:
+                        from work_queue import FILES
+                        repo,prefix,_=FILES[base]
+                        from pathlib import PurePosixPath
+                        paths.append(str(PurePosixPath(repo)/prefix/file))
+                    else:suites.append(base)
+            selection={'paths':sorted(set(paths)),'suites':sorted(set(suites))}
+            # The durable inbox handles admission, fairness, and run-ID visibility.
+            runner=self.create_run(force=True,selection=selection)
+            if runner is None:raise ValueError('Concurrent run limit reached or an exclusive hardware job is active')
+            runner.run['parent_run_id']=parent_run_id;runner.save()
+            threading.Thread(target=runner.execute,daemon=True).start()
             return runner.run['id']
 
     def stop_run(self,ident):
