@@ -34,6 +34,20 @@ def snapshot():
 
 def project_status(network, tests):
     run = tests.get('run') or {}
+    active=tests.get('active_runs',[])
+    if active:
+        runs=[]
+        for item in active[:8]:
+            runs.append((tests if item['id']==run.get('id') else read('/api/distributed-tests?id='+item['id'])).get('run') or {})
+        merged={}
+        for current in runs:
+            for host in current.get('hosts',[]):
+                name=host['host'];entry=merged.setdefault(name,{**host,'jobs':{}})
+                if host.get('status') in ('running','preparing','queued'):entry['status']=host['status']
+                for key,job in host.get('jobs',{}).items():
+                    entry['jobs'][current['id']+'-'+key]={**job,'name':job.get('name',key)+' · '+current['id'][-8:]}
+        run={**run,'status':'running','hosts':list(merged.values())}
+
     interfaces = []
     for name, traffic in list(network.get('interface_traffic', {}).items())[:16]:
         link = network.get('links', {}).get(name, {})
@@ -43,6 +57,7 @@ def project_status(network, tests):
     return {
         'network': {'interface': network.get('interface'), 'subnet': network.get('subnet'),
                     'gateway': network.get('gateway'), 'interfaces': interfaces},
+        'active_runs':active,
         'updated': network.get('updated'), 'scanning': bool(network.get('scanning')),
         'devices': [{'hostname': device.get('hostname') or device.get('ip'),
                      'address': device.get('ip'), 'reachable': device.get('ping') is True,

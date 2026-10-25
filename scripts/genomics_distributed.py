@@ -113,6 +113,7 @@ def execute(host,batch):
         while not client.call('resource.acquire',{'id':lease_id,'group':GROUP,'cpus':1,'memory_mb':512,'container':name})['acquired']:
             if STOP.wait(.5):raise InterruptedError('Resource wait cancelled')
             if time.monotonic()>deadline:raise CapacityWait('Waiting for shared worker resources')
+        if batch.get('_on_start'):batch['_on_start']()
         return execute_reserved(host,batch,name)
     finally:
         try:client.call('resource.release',{'id':lease_id})
@@ -217,7 +218,10 @@ class Run:
                 if not self.capacity(host) or (host['host'] in item.get('failed_hosts',[]) and len(set(item['failed_hosts']))<len(self.hosts)):
                     with self.lock:self.state['jobs'][item['id']].update(status='waiting_capacity');self.save()
                     self.queue.put(item);time.sleep(2);continue
-                with self.lock:self.state['jobs'][item['id']].update(status='running',host=host['host']);self.save()
+                with self.lock:self.state['jobs'][item['id']].update(status='waiting_capacity',host=host['host']);self.save()
+                def accepted():
+                    with self.lock:self.state['jobs'][item['id']].update(status='running',phase='test');self.save()
+                item['_on_start']=accepted
                 result=execute(host,item);write_json(self.folder/(item['id']+'.json'),result)
                 with self.lock:
                     self.results.append(result);self.state['jobs'][item['id']].update(status='passed',elapsed_seconds=result['elapsed_seconds'],input_bytes=result['input_bytes']);self.save()
