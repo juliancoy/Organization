@@ -13,7 +13,7 @@ from interpretation, and choose a useful next step independently.
 | Why should I trust it? | Read-depth explanation, unavailable data states, annotation limits, expandable source methods | Separate evidence from conclusions |
 | What can I do now? | Three clear choices: another dataset, research workflow, or methods | Follow personal curiosity without a forced funnel |
 
-The sticky navigation reflects scroll position, not comprehension or completion.
+The vertical navigation reflects scroll position, not comprehension or completion.
 Visitors can skip sections, move backward, or inspect sources at any point. No
 behavioral tracking or persuasion scores are collected. Genome switching updates
 both charts and their introductory takeaway. Numerical differences between datasets
@@ -24,3 +24,7 @@ Validate the journey using `node server/scripts/review-genome-ui.mjs` from
 on the next-dataset action, all six datasets, missing-data states and phone/desktop
 layouts. These checks establish functionality, not user comprehension; observing
 first-time demo visitors remains the next usability research step.
+
+The page uses one vertical column at all viewport widths. Cards, metrics, actions,
+labels and values each occupy their own row. Chromosome selection uses one dropdown;
+read-depth bins use stacked bar rows. Chart geometry remains inside a single chart.

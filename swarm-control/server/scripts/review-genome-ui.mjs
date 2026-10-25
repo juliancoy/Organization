@@ -28,19 +28,23 @@ try{
    assert.match(await page.locator('#sample-note').innerText(),new RegExp(name));
    assert.match(await page.locator('#overview-takeaway').innerText(),new RegExp(name));
    assert.equal(await page.locator('#metrics .metric').count(),2);
-   await page.locator('#chromosomes button[data-chrom="21"]').click();
+   await page.selectOption('#chromosome','21');
    assert.match(await page.locator('#line-title').innerText(),/Chromosome 21/);
    assert.equal(await page.locator('#line svg circle').count()>0,true);
    if(['Watson','Venter'].includes(name)){assert.match(await page.locator('#satellite-stat').innerText(),/unavailable/);assert.match(await page.locator('#depth').innerText(),/not supplied/);}
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,`${name} overflow at ${width}`);
   }
-  await page.selectOption('#sample','Julian');await page.locator('#chromosomes button[data-chrom="MT"]').click();
+  await page.selectOption('#sample','Julian');await page.selectOption('#chromosome','MT');
   assert.equal(await page.locator('#line svg circle').count(),1,'Single mitochondrial bin must not invent a second zero bin');
+  const collisions=await page.evaluate(()=>{
+   const selectors=['main>nav','header','.tour-actions','.hero-tags','.explore-bar','.explore-bar>div','.section-heading','.orientation','.letter-example>div','.metrics','.grid','.card-heading','.donut-layout','.legend-row','.bar-label','.plot-heading','.repeat-ribbon','.histogram','.hist-column','.next-options','footer'];
+   return selectors.flatMap(selector=>[...document.querySelectorAll(selector)].flatMap(parent=>{const boxes=[...parent.children].filter(e=>getComputedStyle(e).display!=='none').map(e=>e.getBoundingClientRect()).filter(r=>r.width&&r.height);return boxes.slice(1).some((r,i)=>r.top<boxes[i].bottom-1)?[selector]:[]}));
+  });assert.deepEqual(collisions,[],`Side-by-side elements at ${width}px`);
   await page.locator('#methods summary').click();assert.equal(await page.locator('#methods').getAttribute('open'),'');
   await page.locator('#present').click();assert.equal(await page.locator('body').getAttribute('class'),'presentation');
   if(await page.evaluate(()=>!!document.fullscreenElement))await page.evaluate(()=>document.exitFullscreen());
   await page.evaluate(()=>document.body.classList.remove('presentation'));
-  await page.locator('#chromosomes button[data-chrom="1"]').click();
+  await page.selectOption('#chromosome','1');
   await page.screenshot({path:join(output,`genome-${width}.png`),fullPage:true});
   assert.deepEqual(errors,[]);await context.close();
  }
