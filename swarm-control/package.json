@@ -6,9 +6,12 @@
   "scripts": {
     "build": "python3 build-test.py",
     "test:transport": "node test-console.mjs",
-    "test:transport:live": "SWARM_LIVE_CONSOLE_TEST=1 node test-console.mjs"
+    "start": "python3 run.py start",
+    "stop": "python3 run.py stop",
+    "status": "python3 run.py status",
+    "test": "python3 run.py test"
   },
   "devDependencies": {
-    "@playwright/test": "1.63.0"
+    "@playwright/test": "^1.59.1"
   }
 }

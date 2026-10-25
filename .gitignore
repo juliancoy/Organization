@@ -8,10 +8,10 @@
 !/Dockerfile.launcher
 !/vm_runner.py
 !/vm/
-!/lan-monitor/
-/lan-monitor/__pycache__/
-/lan-monitor/**/__pycache__/
-/lan-monitor/.runtime/
+!/swarm-control/server/
+/swarm-control/server/__pycache__/
+/swarm-control/server/**/__pycache__/
+/swarm-control/server/.runtime/
 /vm/__pycache__/
 !/setup-rea
 !/rea-tool
@@ -58,9 +58,9 @@
 !/scripts/enroll_launcher_peers.py
 
 !/scripts/launcher_registration.py
-!/lan-monitor/agent_client.py
+!/swarm-control/server/agent_client.py
 
-!/lan-monitor/tests/test_agent_sessions.py
+!/swarm-control/server/tests/test_agent_sessions.py
 
 !/scripts/launcher_peer_supervisor.py
 
@@ -90,3 +90,6 @@
 /swarm-control/node_modules/
 /swarm-control/android/.gradle/
 /swarm-control/android/**/build/
+
+/swarm-control/server/node_modules
+/swarm-control/.venv/

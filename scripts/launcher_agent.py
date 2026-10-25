@@ -635,7 +635,7 @@ class Agent:
             if manifest.get('prepare_only'):
                 # Older pinned runners may not implement preparation-only mode.
                 # Cache their Git objects, but never accidentally execute tests.
-                if manifest.get('sources_only') or 'PREPARATION_PROTOCOL = 1' not in (work/'lan-monitor/distributed_worker.py').read_text():
+                if manifest.get('sources_only') or 'PREPARATION_PROTOCOL = 1' not in (work/'swarm-control/server/distributed_worker.py').read_text():
                     job.update(status='completed',preparation='sources_only');return
                 while True:
                     if (folder/'STOP').exists() or Path('/tmp/launcher-agent-draining').exists():raise InterruptedError('Preparation superseded or launcher updating')
@@ -643,7 +643,7 @@ class Agent:
                         busy=any(j is not job and j['status']=='running' and not j.get('prepare_only') for j in self.jobs.values()) or bool(self.browsers)
                     if not busy:break
                     time.sleep(.5)
-            process=subprocess.Popen([sys.executable,str(work/'lan-monitor/distributed_worker.py'),str(index)],
+            process=subprocess.Popen([sys.executable,str(work/'swarm-control/server/distributed_worker.py'),str(index)],
                 stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,errors='replace',env=env,start_new_session=True)
             def expire():
                 (folder/'STOP').touch()

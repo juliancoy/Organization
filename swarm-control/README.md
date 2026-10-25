@@ -1,80 +1,82 @@
-# Swarm Control on Android
+# Swarm Control
 
-This is a separate debug test launcher (`app.swarmcontrol.test`), not the
-OrgPortal APK. It opens the CompAI console using Android Custom Tabs and the normal browser
-session. Its browser menu includes **Swarm Control P2P connection**, which returns
-to `https://compai.lifetech.fyi/swarm-control`. It uses a connected-node swarm icon. No isolated WebView login or device administrator is introduced.
+Swarm Control is the independently operated application for machine inventory,
+distributed jobs, remote Codex conversations, controller enrollment, and Android
+access. Its implementation and runtime live here; LifeTech and OrgPortal are not
+application dependencies. PIdP remains the shared identity provider.
 
-The CompAI console delivers the APK to a paired phone over an authenticated,
-short-lived WebRTC data channel. HTTPS carries the offer/answer; APK bytes travel
-through the channel. The browser verifies SHA-256 before creating the download.
-A separately labeled HTTPS download is available if direct connectivity fails.
-There is no TURN relay configured. Android installation requires the user's
-approval on the phone; a download receipt does not prove installation.
+## Ownership
 
-## Build and publish
+- `server/`: coordinator, REST/MCP operator API, network collectors, remote API,
+  web console, controller sessions, and fixed-APK WebRTC delivery.
+- `android/`: browser-based Android launcher; it shares the browser's authenticated
+  session instead of maintaining a second WebView identity.
+- Root `scripts/launcher_*.py`: machine-local agent transport and enrollment.
+- Application repositories: their own test suites, release and backup operations.
 
-From `swarm-control`, run `npm run build`. This builds and verifies the
-APK signature, then atomically publishes `.runtime/mobile/swarm-control-test.apk` in
-the parent Organization workspace. SDK API/build-tools 36 and JDK 21 are required.
-Set `ANDROID_HOME` and `SWARM_JAVA_HOME` if they are installed outside the
-existing compai toolchain caches. Gradle uses its cached distribution/dependencies
-in offline mode. An uncached machine must provision those dependencies first.
+Swarm Control schedules application-owned operations. It does not copy application
+business data or replace application permissions. The packet collector has its
+own restricted container; the public tunnel does not expose Docker or the native
+operator API.
 
-For initial owner-server setup, run from Organization:
+## Operate
+
+From Organization:
 
 ```sh
-python3 lan-monitor/setup-test-deployment.py
+python3 swarm-control/run.py install
+python3 swarm-control/run.py start
+python3 swarm-control/run.py status
+python3 swarm-control/run.py stop
 ```
 
-It installs the pinned optional P2P runtime in an isolated user venv and sets a
-user-service override for the existing `compai-codex.service`. Pairing and tunnel
-credentials remain where they already live. Existing paired browsers stay valid.
+`swarm-control.target` owns the coordinator, authenticated remote API, HTTPS
+tunnel, and collector containers. `deploy --revision SHA` extracts immutable application code and installs the reviewed implementation
+and restarts this target. The configured all-repository release invokes it after
+the distributed test gate. No second coordinator or old service API is retained.
+The existing CompAI URL remains the access address during this extraction.
 
-## Receive on the phone
+## Identity and recovery
 
-1. Open `https://compai.lifetech.fyi/swarm-control` in the paired console browser.
-2. Tap **Connect P2P**, then **Receive test APK**.
-3. Open the downloaded APK and approve Android's installation prompt. If requested,
-   permit this browser to install the test APK using Android's normal settings.
-4. Launch **Swarm Control**. Its browser menu opens the CompAI P2P test panel.
+Open `https://compai.lifetech.fyi/auth/login`. Swarm Control has a separate PIdP
+client, audience `https://compai.lifetech.fyi/api/swarm`, and `swarm:control`
+permission. LifeTech portal credentials are not requested. The configured owner
+is an explicit verified PIdP subject; email and application working copies never
+assign ownership. Initial registration is an operator action:
 
-The console home also includes the deployment panel after a page refresh. Merely
-having a paired console session does not establish a WebRTC channel or permit
-silent app installation. This connection cannot enable ADB, control the handset,
-execute shell commands, or perform a background installation.
+```sh
+python3 swarm-control/server/setup-identity.py --owner-subject YOUR_VERIFIED_PIDP_SUBJECT
+```
 
-## Verification
+Client credentials and controller records are owner-private under
+`~/.config/swarm-control/`. A successful owner sign-in creates a controller only
+when none is active. Replacing another active controller requires an explicit,
+short-lived confirmation. Revocation also invalidates transfer authorization.
+Controller records retain their label, creation, expiry, and last-seen times.
+Local QR enrollment remains available through the owner launcher.
 
-`node test-console.mjs` runs a real browser-to-aiortc channel through an
-isolated local owner-console fixture. It transfers the published APK, compares
-all bytes, validates the browser checksum and server receipt, checks the narrow
-layout and disconnects. No existing browser cookies or phone state are used.
+## Interfaces and state
 
-`SWARM_LIVE_CONSOLE_TEST=1 node test-console.mjs` repeats the transport
-check through the live `compai.lifetech.fyi` server using the local owner's
-credential, injected only into the fixed test-app API requests. It does not read
-Codex conversations, issue Codex commands, or claim physical-device installation.
-Reports/screenshots are saved in `artifacts/swarm-control-deployment` in the
-parent workspace. The report explicitly identifies that it is a desktop browser
-transport test, not an S22 result.
+- Public HTTPS: console, `/swarm-status`, `/swarm-control` APK receiver, and
+  authenticated `/api/v1/swarm/*` operations. `/health` exposes readiness only.
+- Loopback 8089: coordinator, native authenticated REST/MCP, local dashboard.
+- Loopback 8091: the remote API, reached through the configured tunnel.
+- Loopback 8092: separately authenticated local QR issuer.
+- `~/.local/state/swarm-control/`: coordinator history, queues, metrics and captures.
+- Workspace `.runtime/mobile/`: signed test APK; signing material stays private.
 
-Python boundary tests live in `lan-monitor/tests/test_lifetech_deployment.py` and
-`test_codex_remote.py`. Run them with `PYTHONPATH=lan-monitor` and the P2P venv.
+## Validate
 
-## Retention and permissions
+```sh
+python3 swarm-control/run.py test
+node swarm-control/test-console.mjs
+```
 
-The server exposes a fixed APK, never an arbitrary file or URL. Owner credentials
-or an existing paired console cookie are required; offers require the same
-origin. The channel supports only ping, manifest, bounded chunk requests, and a
-checksum receipt. Sessions are limited to four connections, ten minutes, a
-16 MiB APK, 16 KiB chunks, and bounded request rates. The device's authorization
-is checked on each message. Revoked cookies cannot continue downloading.
-Connection/receipt state is held only in memory and removed on close, failure,
-expiry, or server restart; it is not included in backups. No phone identity,
-conversation content, or credentials are logged by the deployment channel.
-The fixed APK remains until replaced/deleted by the owner; test artifacts contain
-only the public app bytes and synthetic/browser transport results. The phone's
-Downloads file and installed app remain until the user deletes/uninstalls them.
-Rebuild/re-receive for a new native launcher; live website content follows the
-website's normal update cycle.
+The transport check uses an isolated HTTPS fixture and a real browser-to-aiortc
+channel. It validates authorization, APK bytes, SHA-256, receipt, narrow layout,
+and disconnect; it never borrows a production session or claims handset
+installation. Build the Android launcher with `npm --prefix swarm-control run build`.
+The user must approve installation on the Galaxy.
+
+Run the global distributed suite through the coordinator or the Swarm status
+page. Queueing tests publishes reviewed source revisions before execution.

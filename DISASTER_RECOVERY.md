@@ -263,7 +263,7 @@ serves traffic. If the deletion ledger is unavailable, keep a restored service i
 ## Copies on the distributed test devices
 
 The test master's authenticated `POST /api/v1/master/backups` replicates the latest
-complete DR generation to every enrolled device, keeping current public dataset versions. Historical public dataset versions remain in the full PILEDRIVE snapshot; private records, media, credentials and source code are retained in every encrypted replica. See `lan-monitor/MASTER_API.md`
+complete DR generation to every enrolled device, keeping current public dataset versions. Historical public dataset versions remain in the full PILEDRIVE snapshot; private records, media, credentials and source code are retained in every encrypted replica. See `swarm-control/server/MASTER_API.md`
 for status, retries and restoration. These are encrypted recovery replicas, not
 working copies or test fixtures. Keep the recovery RSA private key independently
 protected offline; it is deliberately excluded from the remote copies.

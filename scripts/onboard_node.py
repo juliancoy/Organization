@@ -128,7 +128,7 @@ elif changed:raise RuntimeError('Agent service configuration changed; restart ex
     inventory = json.loads(inventory_path.read_text()) if inventory_path.exists() else {}
     inventory.setdefault('accounts', {})[node] = user
     save(inventory_path, inventory)
-    sys.path.insert(0, str(ROOT / 'lan-monitor'))
+    sys.path.insert(0, str(ROOT / 'swarm-control/server'))
     from agent_client import AgentClient
     client = AgentClient(dict(host=node, agent_endpoint='http://' + address + ':8790'))
     expected = hashlib.sha256(''.join(payload['files'][name] for name in FILES[:5]).encode()).hexdigest()

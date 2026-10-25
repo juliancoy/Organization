@@ -12,7 +12,7 @@ import ipaddress
 
 
 def enroll(root):
-    sys.path.insert(0, str(root / 'lan-monitor'))
+    sys.path.insert(0, str(root / 'swarm-control/server'))
     sys.path.insert(0, str(root / 'scripts'))
     from launcher_peers import CONFIG
     inventory=Path.home()/'.local/state/orgportal/lan-ssh-devices.json'
