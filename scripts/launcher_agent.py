@@ -307,7 +307,7 @@ class Agent:
                     return {**state,'events':[],'cursor':0,'events_lost':True}
                 cursor=int(args.get('cursor',0))
                 wait=min(20,max(0,float(args.get('wait_seconds',0))))
-                self.changed.wait_for(lambda:job['sequence']>cursor or job['status']!='running' or (folder/'STOP').exists(),timeout=wait)
+                self.changed.wait_for(lambda:job['sequence']>cursor or job['status']!='running',timeout=wait)
                 events=[{'sequence':n,'event':event} for n,event in job['events'] if n>cursor][:200]
                 return {'status':job['status'],'exit_code':job.get('exit_code'),'error':job.get('error'),'preparation':job.get('preparation'),
                         'events':events,'cursor':events[-1]['sequence'] if events else cursor,

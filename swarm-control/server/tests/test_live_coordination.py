@@ -8,6 +8,7 @@ import sys
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import Mock,patch
 
@@ -19,6 +20,18 @@ from launcher_agent import Agent
 
 
 class LiveCoordinationTests(unittest.TestCase):
+    def test_cancelling_worker_does_not_busy_poll_before_terminal_event(self):
+        with tempfile.TemporaryDirectory() as folder:
+            agent=Agent.__new__(Agent);agent.root=Path(folder)
+            agent.lock=threading.RLock();agent.changed=threading.Condition(agent.lock)
+            ident='20261024T000000Z-1234abcd'
+            agent.folder(ident).mkdir();(agent.folder(ident)/'STOP').touch()
+            agent.jobs={ident:{'status':'running','sequence':0,'events':collections.deque()}}
+            started=time.monotonic()
+            result=agent.dispatch('job.poll',{'id':ident,'cursor':0,'wait_seconds':.05})
+            self.assertGreaterEqual(time.monotonic()-started,.04)
+            self.assertEqual(result['events'],[])
+
     def test_interrupted_cache_remote_setup_recovers_without_network(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder)
