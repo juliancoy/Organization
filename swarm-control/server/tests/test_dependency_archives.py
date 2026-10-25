@@ -15,7 +15,8 @@ class DependencyArchiveTests(unittest.TestCase):
             env={'PIDP_BUILD_COMMIT':'a','ORGPORTAL_BUILD_COMMIT':'b'}
             with patch('distributed_worker.Path.home',return_value=root/'home'), \
                  patch('distributed_worker.subprocess.Popen',return_value=process) as launch, \
-                 patch('distributed_worker.subprocess.run'),patch('distributed_worker.emit'):
+                 patch('distributed_worker.subprocess.run'),patch('distributed_worker.emit'), \
+                 patch('scripts.launcher_agent.ResourceLease',return_value=Mock(try_acquire=Mock(return_value=True))):
                 run(work,'web','prepare',spec,'one',env)
                 run(work,'identity','prepare',{**spec,'image':'sha256:b'},'two',env)
             mounts=[[arg for arg in call.args[0] if arg.endswith(',dst=/cache')] for call in launch.call_args_list]
