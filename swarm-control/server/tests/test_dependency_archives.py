@@ -2,11 +2,26 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock,patch
 
-from distributed_worker import prepare_package,dependency_cache
+from distributed_worker import prepare_package,dependency_cache,run
 
 class DependencyArchiveTests(unittest.TestCase):
+    def test_changed_install_inputs_keep_the_shared_download_mount(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);work=self.setup_work(root,'one')
+            spec={'cwd':'OrgPortal/web','image':'sha256:a','prepare':['npm','ci']}
+            process=Mock();process.stdout=[];process.poll.return_value=0;process.wait.return_value=0
+            env={'PIDP_BUILD_COMMIT':'a','ORGPORTAL_BUILD_COMMIT':'b'}
+            with patch('distributed_worker.Path.home',return_value=root/'home'), \
+                 patch('distributed_worker.subprocess.Popen',return_value=process) as launch, \
+                 patch('distributed_worker.subprocess.run'),patch('distributed_worker.emit'):
+                run(work,'web','prepare',spec,'one',env)
+                run(work,'identity','prepare',{**spec,'image':'sha256:b'},'two',env)
+            mounts=[[arg for arg in call.args[0] if arg.endswith(',dst=/cache')] for call in launch.call_args_list]
+            self.assertEqual(mounts[0],mounts[1])
+            self.assertIn('packages/downloads',mounts[0][0])
+
     def setup_work(self,root,name,lock='one'):
         work=root/name/'source';cwd=work/'OrgPortal/web';cwd.mkdir(parents=True)
         (cwd/'package-lock.json').write_text(json.dumps({'packages':{},'fixture':lock}))

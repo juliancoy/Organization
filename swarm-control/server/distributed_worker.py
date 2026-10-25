@@ -120,6 +120,16 @@ def dependency_cache(work,suite_id,spec):
     (root/'.last-used').touch()
     return root
 
+def download_cache():
+    # npm and pip verify content-addressed downloads themselves. Source/runtime
+    # changes invalidate installed trees, not already downloaded package bytes.
+    root=Path.home()/'.cache/organization-tests/packages/downloads'
+    root.mkdir(parents=True,exist_ok=True,mode=0o700)
+    for name in ('npm','pip'):(root/name).mkdir(exist_ok=True,mode=0o700)
+    (root/'.last-used').touch()
+    return root
+
+
 def prepare_package(work,task,package,spec,run_id,env,runner,cancel=None):
     """Cache installed trees, but extract a private writable copy for each job."""
     import fcntl
@@ -203,7 +213,7 @@ def run(work, suite_id, phase, spec, run_id, env, cancel=None):
     cwd = work / spec['cwd']
     native = spec.get('native')
     if not native:
-        cache=dependency_cache(work,spec.get('base',suite_id),spec)
+        cache=download_cache()
         command = ['docker', 'run', '--pull=never', '--rm', '--name', name, '--user', env.get('ORGANIZATION_CONTAINER_USER', str(os.getuid()) + ':' + str(os.getgid())), '-e', 'HOME=/tmp', '--cpus', str(spec.get('cpus',2)), '--memory', str(spec.get('memory_mb',3072))+'m',
                    '--pids-limit', '512', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
                    '--shm-size', '256m', '--network', 'host' if phase == 'prepare' else 'none',
