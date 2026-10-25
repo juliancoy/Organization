@@ -10,6 +10,7 @@ import math
 import os
 from pathlib import Path
 import queue
+import re
 import shlex
 import subprocess
 import sys
@@ -112,11 +113,11 @@ def execute(host,batch):
     if len(result.stdout)>1024*1024:raise RuntimeError('Summary exceeds 1 MiB')
     data=json.loads(result.stdout)
     if data.get('sha256')!=batch['sha256'] or data.get('records')!=batch['records'] or data.get('kind')!=batch['kind']:raise RuntimeError('Worker result does not match its batch')
-    return {**data,'host':host['host'],'elapsed_seconds':round(time.monotonic()-started,3),'input_bytes':len(batch['payload'])}
+    return {**data,'dataset':batch.get('dataset'),'host':host['host'],'elapsed_seconds':round(time.monotonic()-started,3),'input_bytes':len(batch['payload'])}
 
 
-def merge(results,kind):
-    chosen=[r for r in results if r['kind']==kind];merged={'kind':kind,'batches':len(chosen)}
+def merge(results,kind,dataset=None):
+    chosen=[r for r in results if r['kind']==kind and r.get('dataset')==dataset];merged={'kind':kind,'batches':len(chosen)}
     for key in ['records','records_with_csq','depth_sum','depth_count','quality_sum','quality_count','transitions','transversions']:
         merged[key]=sum(r.get(key,0) for r in chosen)
     for key in ['consequences','filters','variant_types','genotypes','depth_bins','quality_bins']:
@@ -138,7 +139,7 @@ class Run:
         self.state={'started':datetime.datetime.now(datetime.timezone.utc).isoformat(),'status':'running',
                     'previous_started':previous.get('started'),'worker_source_sha256':digest,
                     'workers':[{k:v for k,v in h.items() if k not in ('ssh','agent_endpoint')} for h in hosts],
-                    'jobs':{},'sources':{},'scope':'Private streamed QC and existing-annotation audit; no fresh VEP run. Remote inputs remain in process memory only.'}
+                    'jobs':{},'sources':{},'scope':'Private streamed QC and consequence summaries; annotation engine recorded in source headers. Remote inputs remain in process memory only.'}
         for host in self.hosts:host['_capacity_lock']=threading.Lock();host['_checked']=0;host['_cooldown']=0
 
     def save(self):
@@ -197,11 +198,14 @@ class Run:
         threads=[threading.Thread(target=self.worker,args=(host,),daemon=True) for host in self.hosts for _ in range(self.slots)]
         for thread in threads:thread.start()
         try:
-            for kind,path in sources.items():
+            for label,path in sources.items():
+                if not re.fullmatch(r'(?:[A-Za-z0-9_-]+\.)?(?:qc|annotation)',label):raise ValueError('Invalid dataset analysis label')
+                dataset,kind=label.rsplit('.',1) if '.'in label else (None,label)
                 stat=path.stat();identity={'path':str(path),'bytes':stat.st_size,'mtime_ns':stat.st_mtime_ns}
-                if kind in self.previous_sources and identity!=self.previous_sources[kind]:raise ValueError('Input identity changed since original run')
-                self.state['sources'][kind]=identity
+                if label in self.previous_sources and identity!=self.previous_sources[label]:raise ValueError('Input identity changed since original run')
+                self.state['sources'][label]=identity
                 for batch in batches(path,kind,limit):
+                    batch['id']=label+'-'+batch['id'].rsplit('-',1)[1];batch['dataset']=dataset
                     cached=self.cached(batch)
                     with self.lock:
                         self.state['jobs'][batch['id']]={'kind':kind,'status':'passed' if cached else 'queued','records':batch['records']}
@@ -213,7 +217,9 @@ class Run:
                 if path.stat().st_mtime_ns!=stat.st_mtime_ns or path.stat().st_size!=stat.st_size:raise RuntimeError('Input changed during analysis')
             self.queue.join()
             if not self.state['jobs'] or any(j['status']!='passed' for j in self.state['jobs'].values()):raise RuntimeError('Some private batches failed; inspect private state.json')
-            for kind in sources:write_json(self.folder/(kind+'-summary.json'),merge(self.results,kind))
+            for label in sources:
+                dataset,kind=label.rsplit('.',1) if '.'in label else (None,label)
+                write_json(self.folder/(label+'-summary.json'),merge(self.results,kind,dataset))
             self.state['status']='passed'
         except Exception:
             self.queue.join();self.state['status']='failed';raise

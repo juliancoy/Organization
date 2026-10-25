@@ -16,10 +16,11 @@ def compute(payload,kind):
     result={'kind':kind,'records':0,'records_with_csq':0}
     counters={key:Counter() for key in ['consequences','filters','variant_types','genotypes','depth_bins','quality_bins']}
     sums={'depth_sum':0,'depth_count':0,'quality_sum':0,'quality_count':0,'transitions':0,'transversions':0}
-    csq_index=None;samples=None
+    csq_index=None;csq_tag=None;samples=None
     with io.TextIOWrapper(gzip.GzipFile(fileobj=io.BytesIO(payload)),encoding='utf8') as stream:
         for line in stream:
-            if line.startswith('##INFO=<ID=CSQ,'):
+            if line.startswith(('##INFO=<ID=CSQ,','##INFO=<ID=BCSQ,')):
+                csq_tag='BCSQ' if line.startswith('##INFO=<ID=BCSQ,')else 'CSQ'
                 fields=line.split('Format: ',1)[1].split('"',1)[0].split('|');csq_index=fields.index('Consequence')
             if line.startswith('#CHROM\t'):samples=max(0,len(line.rstrip().split('\t'))-9)
             if line.startswith('#'):continue
@@ -28,7 +29,7 @@ def compute(payload,kind):
             result['records']+=1
             if kind=='annotation':
                 if csq_index is None:raise ValueError('Missing consequence schema')
-                csq=next((item[4:] for item in fields[7].split(';') if item.startswith('CSQ=')),None)
+                csq=next((item[len(csq_tag)+1:] for item in fields[7].split(';') if item.startswith(csq_tag+'=')),None)
                 if csq and csq!='.':
                     result['records_with_csq']+=1;terms=set()
                     for annotation in csq.split(','):
