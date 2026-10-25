@@ -63,7 +63,7 @@ class ResourceTests(unittest.TestCase):
     def test_dead_process_releases_reservations(self):
         with tempfile.TemporaryDirectory() as directory:
             parent,child=multiprocessing.Pipe()
-            process=multiprocessing.get_context('fork').Process(target=hold,args=(directory,child))
+            process=multiprocessing.get_context('spawn').Process(target=hold,args=(directory,child))
             process.start()
             try:
                 self.assertTrue(parent.poll(3));self.assertTrue(parent.recv())

@@ -53,7 +53,8 @@ async function loadJobs(){
   jobFeedback.textContent=data.profiles.length?'Queue another analysis while other jobs run.':'No owner-configured DNA analysis profile available.';
   jobList.replaceChildren(...data.jobs.map(job=>{
    const row=el('article',null,'job-row'),text=el('div');text.append(el('strong',job.kind==='research'?'DNA analysis':'Distributed tests'),el('p',`${job.status} · ${new Date(job.submitted_at).toLocaleString()}`));row.append(text);
-   if(job.run_id){const link=el('a','Run details');link.href='/swarm-status';row.append(link);}
+   if(job.progress)text.append(el('p',`${job.progress.completed} / ${job.progress.total} generated batches complete · ${job.progress.failed} failed`));
+   if(job.run_id)text.append(el('small',job.run_id));
    if(['queued','running'].includes(job.status)){
     const cancel=el('button','Cancel');cancel.type='button';cancel.onclick=async()=>{cancel.disabled=true;try{await jobApi({cancel:job.id});await loadJobs();}catch(error){jobFeedback.textContent=error.message;cancel.disabled=false;}};row.append(cancel);
    }

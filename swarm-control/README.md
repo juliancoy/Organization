@@ -114,3 +114,36 @@ allowlist of public dataset folders on PILEDRIVE; it never serves genomic record
 sample identifiers, report contents, or arbitrary filesystem paths. Missing state
 is shown as unavailable. Partial downloads do not imply active transfer or
 successful validation. Browser checks use synthetic status fixtures.
+
+## Concurrent tests and private DNA jobs
+
+The durable request inbox admits up to eight independent runs concurrently and
+keeps up to 100 pending/running requests. Ordinary tests and configured DNA
+analyses use the same inbox. Publication is serialized; execution is not. Every
+run owns its checkout and dependency trees. Special P2P/device/GPU runs currently
+retain exclusive admission because they own coordinated hardware/network fixtures.
+
+All test/install containers and private DNA batches acquire CPU and memory from
+one process-safe pool per worker. Combined reservations cannot exceed logical
+CPUs or physical RAM minus 1 GiB for the host; current available memory is also
+checked. Fitting jobs backfill free slots. Groups with the smallest dominant CPU
+or memory share get priority, and a waiter older than 30 seconds reserves
+headroom to prevent starvation. Docker still enforces each container's limits.
+The controller bounds pending compressed DNA payloads to 128 MiB per run and 64 in-flight batches. Process locks recover capacity after crashes; orphan container reservations remain
+until the container exits. Private stream leases expire with container cleanup.
+Worker policy, enrollment/attestation, disk space and bounded session counts still
+apply. Cancellation affects one request/run and releases its owned resources.
+
+The Research page lists test and DNA requests and provides queue/cancel controls.
+DNA submissions use idempotent request IDs and named owner-only profiles in
+`~/.config/swarm-control/research-jobs.json` (mode 0600), each containing `qc`,
+`annotations`, and `output` paths. Those paths, private logs, and genomic reports
+are never returned by the control API. Research code is snapshotted from an exact
+Git commit into the private report directory before execution. Inputs remain
+SSH-streamed into RAM-only containers. The general test artifact system receives
+only operational progress. A coordinator restart marks unfinished requests
+interrupted instead of silently repeating private work; explicit reruns are
+available after reviewing the private reports.
+
+Deployments drain new admissions, wait for running jobs, then restart. A timeout
+or failure removes the drain flag and preserves active jobs.

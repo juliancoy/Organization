@@ -529,6 +529,21 @@ class Agent:
             raise ValueError('Invalid run ID')
         return self.root/ident
 
+    def expire_resource(self,ident):
+        with self.lock:
+            entry=getattr(self,'resource_leases',{}).get(ident)
+            if not entry:return
+            name=entry['lease'].row.get('container')
+            if entry['lease'].row['active'] and name:
+                # Remove the bounded, owned batch before returning its capacity.
+                result=subprocess.run(['docker','rm','-f',name],capture_output=True,timeout=20)
+                if result.returncode:
+                    check=subprocess.run(['docker','inspect',name],capture_output=True,timeout=5)
+                    if check.returncode==0:
+                        timer=threading.Timer(20,lambda:self.expire_resource(ident));timer.daemon=True
+                        entry['timer']=timer;timer.start();return
+            self.dispatch('resource.release',{'id':ident})
+
     def dispatch(self, op, args):
         if op in ('resource.acquire','resource.release'):
             with self.lock:
@@ -540,6 +555,8 @@ class Agent:
                     previous=leases.pop(ident,None)
                     if previous:previous['timer'].cancel();previous['lease'].close()
                     return {'released':True}
+                if set(args)!={'id','group','cpus','memory_mb','container'} or args['cpus']!=1 or args['memory_mb']!=512 or not re.fullmatch(r'genomics-[a-f0-9]{32}',args['container']):
+                    raise ValueError('Expected a bounded private batch resource request')
                 policy=worker_policy(self.config)
                 if not policy['accepting_jobs']:raise RuntimeError(policy['reason'])
                 previous=leases.get(ident)
@@ -547,10 +564,17 @@ class Agent:
                     if len(leases)>=128:raise RuntimeError('Resource request queue full')
                     lease=ResourceLease(args.get('group'),args.get('cpus'),args.get('memory_mb'),args.get('container',''),
                                         directory=os.getenv('SWARM_RESOURCE_DIR',str(self.root/'.resources')))
-                    timer=threading.Timer(300,lambda:self.dispatch('resource.release',{'id':ident}));timer.daemon=True
+                    timer=threading.Timer(300,lambda:self.expire_resource(ident));timer.daemon=True
                     leases[ident]={'lease':lease,'timer':timer};timer.start()
-                else:lease=previous['lease']
-                return {'acquired':lease.try_acquire()}
+                else:
+                    lease=previous['lease']
+                    if any(lease.row[k]!=args[k] for k in ('group','cpus','memory_mb','container')):raise ValueError('Resource request ID already used')
+                acquired=lease.try_acquire()
+                if acquired and not leases[ident].get('started'):
+                    leases[ident]['timer'].cancel()
+                    timer=threading.Timer(240,lambda:self.expire_resource(ident));timer.daemon=True
+                    leases[ident].update(timer=timer,started=True);timer.start()
+                return {'acquired':acquired}
         if op=='worker.policy':return worker_policy(self.config)
         if op in ('job.start','source.stage','p2p.start','image.pull','resource.acquire') or (op=='job.feed' and args.get('tasks')):
             policy=worker_policy(self.config)
@@ -1082,6 +1106,7 @@ class Agent:
 
     def close(self):
         self.storage_stop.set()
+        for ident in list(getattr(self,'resource_leases',{})):self.expire_resource(ident)
         for timer in self.browser_timers.values():timer.cancel()
         for ident in list(self.browsers):self.remove_containers(ident)
         for ident,job in list(self.jobs.items()):

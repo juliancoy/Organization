@@ -61,8 +61,14 @@ def research_jobs(body=None):
         with urlopen(Request(base+path,headers=headers,data=json.dumps(value).encode() if value is not None else None),timeout=10) as response:return json.load(response)
     if body is None:
         records=call('/test-requests')['requests']
-        return {'profiles':call('/research-profiles')['profiles'],'jobs':[
-            {k:r.get(k) for k in ('id','kind','status','submitted_at','run_id','finished_at','selection')} for r in records]}
+        jobs=[]
+        for record in records[:30]:
+            row={k:record.get(k) for k in ('id','kind','status','submitted_at','run_id','finished_at')}
+            if record.get('kind')=='research' and record.get('run_id'):
+                run=call('/runs/'+record['run_id']).get('run') or {}
+                row['progress']=run.get('progress')
+            jobs.append(row)
+        return {'profiles':call('/research-profiles')['profiles'],'jobs':jobs}
     if not isinstance(body,dict):raise ValueError('Invalid job action')
     if set(body)=={'profile','request_id'}:return call('/research-requests',body)
     if set(body)=={'cancel'}:return call('/cancel-request',{'request_id':body['cancel']})

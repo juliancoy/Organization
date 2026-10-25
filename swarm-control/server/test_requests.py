@@ -100,6 +100,7 @@ class TestRequests:
 
     def tick(self):
         with self.tests.lock, self.lock:
+            draining=(self.folder.parent/'DRAIN').exists()
             for record in self.records():
                 if record['status'] == 'running':
                     try:
@@ -115,7 +116,7 @@ class TestRequests:
                     record['queue_seconds']=seconds(record['submitted_at'],record.get('started_at'))
                     record['total_seconds']=seconds(record['submitted_at'],record['finished_at'])
                     self.save(record)
-                if record['status'] != 'queued': continue
+                if record['status'] != 'queued' or draining: continue
                 runner=self.tests.create_run(force=record.get('force',False),selection=record['selection'])
                 if runner is None:continue
                 # Persist the run ID before dispatch so restart cannot duplicate it.

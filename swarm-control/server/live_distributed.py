@@ -124,7 +124,7 @@ class LiveDistributedTests:
                         paths.append(str(PurePosixPath(repo)/prefix/file))
                     else:suites.append(base)
             selection={'paths':sorted(set(paths)),'suites':sorted(set(suites))}
-            # The durable inbox handles admission, fairness, and run-ID visibility.
+            # Fresh reruns use the same resource admission as ordinary requests.
             runner=self.create_run(force=True,selection=selection)
             if runner is None:raise ValueError('Concurrent run limit reached or an exclusive hardware job is active')
             runner.run['parent_run_id']=parent_run_id;runner.save()

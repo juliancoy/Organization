@@ -22,6 +22,8 @@ import uuid
 from scripts.genomics import private_run,write_json
 from scripts.genomics_compute import compute,MAX_PAYLOAD
 
+class CapacityWait(RuntimeError):pass
+
 STOP=threading.Event()
 GROUP='genomics-'+uuid.uuid4().hex[:16]
 
@@ -109,7 +111,8 @@ def execute(host,batch):
     deadline=time.monotonic()+120
     try:
         while not client.call('resource.acquire',{'id':lease_id,'group':GROUP,'cpus':1,'memory_mb':512,'container':name})['acquired']:
-            if STOP.wait(.5) or time.monotonic()>deadline:raise InterruptedError('Resource wait cancelled or expired')
+            if STOP.wait(.5):raise InterruptedError('Resource wait cancelled')
+            if time.monotonic()>deadline:raise CapacityWait('Waiting for shared worker resources')
         return execute_reserved(host,batch,name)
     finally:
         try:client.call('resource.release',{'id':lease_id})
@@ -161,7 +164,8 @@ def merge(results,kind,dataset=None):
 class Run:
     def __init__(self,hosts,folder,slots=2,resume=False):
         self.hosts=[h for h in hosts if h['eligible']];self.folder=folder;self.lock=threading.RLock();self.slots=slots
-        self.queue=queue.Queue();self.credits=threading.Semaphore(max(2,sum((slots or min(32,h.get('cpus',2))) for h in self.hosts)*2));self.results=[]
+        self.queue=queue.Queue();self.credits=threading.Semaphore(min(64,max(2,sum((slots or min(32,h.get('cpus',2))) for h in self.hosts)*2)));self.results=[]
+        self.payload_bytes=0;self.payload_condition=threading.Condition(self.lock)
         if not self.hosts:raise RuntimeError('No authenticated, accepting workers with pinned SSH access')
         digest=hashlib.sha256(WORKER.encode()).hexdigest()
         previous=json.loads((folder/'state.json').read_text()) if resume else {}
@@ -218,6 +222,9 @@ class Run:
                 with self.lock:
                     self.results.append(result);self.state['jobs'][item['id']].update(status='passed',elapsed_seconds=result['elapsed_seconds'],input_bytes=result['input_bytes']);self.save()
                 finished=True
+            except CapacityWait:
+                with self.lock:self.state['jobs'][item['id']].update(status='waiting_capacity');self.save()
+                self.queue.put(item);time.sleep(.25)
             except Exception as error:
                 item.setdefault('failed_hosts',[]).append(host['host']);host['_cooldown']=time.monotonic()+15
                 final=len(item['failed_hosts'])>=3
@@ -225,7 +232,10 @@ class Run:
                 if final:finished=True
                 else:self.queue.put(item)
             finally:
-                if finished:self.credits.release()
+                if finished:
+                    self.credits.release()
+                    with self.payload_condition:
+                        self.payload_bytes-=len(item['payload']);self.payload_condition.notify_all()
                 self.queue.task_done()
 
     def run(self,sources,limit):
@@ -249,7 +259,15 @@ class Run:
                             self.results.append(cached);self.state['jobs'][batch['id']].update(host=cached['host'],reused=True,elapsed_seconds=cached['elapsed_seconds'])
                         self.save()
                     if not cached:
-                        self.credits.acquire();batch['deadline']=time.monotonic()+1800;self.queue.put(batch)
+                        while not self.credits.acquire(timeout=.2):
+                            if STOP.is_set():raise InterruptedError('Research run stopped')
+                        size=len(batch['payload'])
+                        with self.payload_condition:
+                            while self.payload_bytes+size>128*1024*1024:
+                                if STOP.is_set():raise InterruptedError('Research run stopped')
+                                self.payload_condition.wait(.2)
+                            self.payload_bytes+=size
+                        batch['deadline']=time.monotonic()+1800;self.queue.put(batch)
                 if path.stat().st_mtime_ns!=stat.st_mtime_ns or path.stat().st_size!=stat.st_size:raise RuntimeError('Input changed during analysis')
             self.queue.join()
             if not self.state['jobs'] or any(j['status']!='passed' for j in self.state['jobs'].values()):raise RuntimeError('Some private batches failed; inspect private state.json')

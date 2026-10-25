@@ -7,11 +7,15 @@ import fcntl
 import shutil
 import tarfile
 import tempfile
+import time
 from urllib.request import urlopen
 from pathlib import Path
 import subprocess
 import sys
 import venv
+
+_DEPLOY_LOCK=None
+_DEPLOY_DRAIN=None
 
 APP = Path(__file__).resolve().parent
 ROOT = APP.parent
@@ -24,10 +28,16 @@ def run(*args, **kwargs):
 
 
 def main():
+    global _DEPLOY_LOCK,_DEPLOY_DRAIN
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=['install', 'deploy', 'start', 'stop', 'restart', 'status', 'test'])
     parser.add_argument('--revision',help='Reviewed Git revision to deploy; defaults to HEAD.')
     args = parser.parse_args()
+    if args.action=='deploy':
+        lock_path=Path.home()/'.local/state/swarm-control/deploy.lock'
+        lock_path.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+        _DEPLOY_LOCK=lock_path.open('a')
+        fcntl.flock(_DEPLOY_LOCK,fcntl.LOCK_EX|fcntl.LOCK_NB)
     if args.action in ('install','deploy'):
         source=APP
         state=Path.home()/'.local/state/swarm-control'
@@ -36,6 +46,10 @@ def main():
             sys.path.insert(0,str(APP/'server'))
             import identity
             identity.config('https://compai.lifetech.fyi')
+            # Stop admitting new jobs while accepted work finishes. Restart only
+            # after all runs drain; deployments never cancel user jobs.
+            drain=state/'distributed/DRAIN';drain.parent.mkdir(parents=True,exist_ok=True)
+            drain.touch(mode=0o600);_DEPLOY_DRAIN=drain
         if args.action=='deploy':
             revision=subprocess.check_output(['git','-C',str(ROOT),'rev-parse',args.revision or 'HEAD'],text=True).strip()
             release=Path.home()/'.local/share/swarm-control/releases'/revision
@@ -76,8 +90,12 @@ def main():
             try:
                 with urlopen('http://127.0.0.1:8089/api/distributed-tests',timeout=3) as response:active=json.load(response)
             except OSError:active={}
-            if active.get('running') or active.get('active_reruns'):
-                raise RuntimeError('Wait for active distributed jobs before deploying Swarm Control.')
+            deadline=time.monotonic()+1800
+            while active.get('running') or active.get('active_reruns'):
+                if time.monotonic()>deadline:raise RuntimeError('Deployment drain timed out; running jobs were preserved')
+                print('Waiting for active jobs to drain before deploying Swarm Control…',flush=True)
+                time.sleep(5)
+                with urlopen('http://127.0.0.1:8089/api/distributed-tests',timeout=5) as response:active=json.load(response)
             run('systemctl','--user','stop','swarm-control.target')
             previous=APP/'server/.runtime'
             if not state.exists() and previous.exists():
@@ -101,4 +119,7 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:main()
+    finally:
+        if _DEPLOY_DRAIN is not None:_DEPLOY_DRAIN.unlink(missing_ok=True)
+        if _DEPLOY_LOCK is not None:_DEPLOY_LOCK.close()
