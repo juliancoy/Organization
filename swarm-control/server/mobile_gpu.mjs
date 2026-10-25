@@ -17,4 +17,4 @@ try {
  await writeFile(reportPath,JSON.stringify(report,null,2));
  console.log(JSON.stringify({kind:'mobile_gpu',gpu}));
  if(gpu.status==='failed')throw Error(gpu.reason);
-} finally {if(page)await page.close();if(browser)await browser.close();await new Promise(resolve=>server.close(resolve));}
+} finally {if(page)await page.close();if(browser)await browser.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
