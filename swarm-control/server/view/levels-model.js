@@ -1,3 +1,4 @@
+import {hostCpuDetail,hostCpuContext,cpuStatusLabel} from './cpu-report.js';
 export const valid=v=>typeof v==='number'&&Number.isFinite(v)&&v>=0;
 export function deviceLevels(data,metrics,mode,now=Date.now()) {
  const hosts=metrics.hosts||[],used=new Set(),rows=[];
@@ -9,6 +10,7 @@ export function deviceLevels(data,metrics,mode,now=Date.now()) {
  }));
  const field={network:'network_mbps',disk:'disk_busy_percent',ram:'ram_percent',cpu:'percent',send:'network_tx_mbps',receive:'network_rx_mbps'}[mode];
  const hostValue=h=>h?.status==='live'&&now/1000-h.sampled_at<15&&valid(h[field])?h[field]:null;
+ const cpuInfo=h=>mode==='cpu'?{basis:h?hostCpuDetail(h)+' · '+hostCpuContext(h):'No host telemetry',unavailableLabel:h?cpuStatusLabel(now/1000-h.sampled_at>=15?'stale':h.status):'No telemetry'}:{};
  const capture=data.link_traffic, fresh=capture&&!capture.capture_error&&now-Date.parse(capture.updated)<10000;
  for(const d of data.devices||[]){
   const h=hosts.find(h=>Boolean(d.hostname)&&(h.host===d.hostname||h.observed_hostname===d.hostname.replace(/\.local$/,''))||h.addresses?.includes(d.ip)||d.self&&h.host==='compai.local');if(h&&used.has(h.host))continue;if(h)used.add(h.host);
@@ -21,9 +23,9 @@ export function deviceLevels(data,metrics,mode,now=Date.now()) {
    value=available&&valid(p[field])?p[field]:null;
    basis=d.self?'Coordinator LAN interface only':'Gateway-observed device traffic; switched traffic may be missing';
   }
-  rows.push({id:d.mac||d.ip,name:d.hostname||d.ip,value,basis});
+  rows.push({id:d.mac||d.ip,name:d.hostname||d.ip,value,basis,...cpuInfo(h)});
  }
- for(const h of hosts)if(!used.has(h.host))rows.push({id:h.host,name:h.host,value:hostValue(h),basis:'Host telemetry'});
+ for(const h of hosts)if(!used.has(h.host))rows.push({id:h.host,name:h.host,value:hostValue(h),basis:'Host telemetry',...cpuInfo(h)});
  return rows;
 }
 export function deviceColor(id){let hash=0;for(const c of id)hash=(hash*31+c.charCodeAt(0))|0;return `hsl(${(hash>>>0)%360} 78% 68%)`;}

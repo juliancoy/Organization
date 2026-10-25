@@ -1,10 +1,12 @@
 export const percent=value=>Number.isFinite(value)?value.toFixed(1)+'%':'Unavailable';
 export function cpuCoverage(data){
- return `${data.live_hosts} / ${data.total_hosts} hosts measured · ${data.measured_logical_cpus??0} logical CPUs`+(data.live_hosts<data.total_hosts?' · Partial coverage':'');
+ const live=data.live_hosts??(data.hosts||[]).filter(h=>h.status==='live').length,total=data.total_hosts??data.hosts?.length??0;
+ return `${live} / ${total} hosts measured · ${data.measured_logical_cpus??0} logical CPUs`+(live<total?' · Partial coverage':'');
 }
+export const cpuStatusLabel=status=>({permission_denied:'Permission denied',authentication_denied:'Agent authentication denied',warming:'Warming up',update_required:'Agent update required',stale:'Stale',unavailable:'Unavailable'}[status]||'Unavailable');
 export function hostCpuDetail(host){
  const age=Number.isFinite(host.sample_age_seconds)?host.sample_age_seconds.toFixed(1)+'s ago':'age unknown';
- if(host.status!=='live'||!Number.isFinite(host.percent))return `${host.host} · ${{permission_denied:'Permission denied',authentication_denied:'Agent authentication denied',warming:'Warming up',update_required:'Agent update required',stale:'Stale',unavailable:'Unavailable'}[host.status]||host.status} · ${age}`;
+ if(host.status!=='live'||!Number.isFinite(host.percent))return `${host.host} · ${cpuStatusLabel(host.status)} · ${age}`;
  const window=Number.isFinite(host.window_seconds)?host.window_seconds.toFixed(1)+'s':'unknown interval';
  return `${host.host} · ${percent(host.percent)} CPU · ${host.cpus} logical CPUs · ${window} average · ${age}`;
 }

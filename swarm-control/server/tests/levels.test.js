@@ -13,3 +13,12 @@ test('GPU charts use measured counters and suppress stale or absent values',()=>
  assert.deepEqual(deviceLevels({},metrics,'vram',now).map(r=>r.value),[75,null]);
  assert.equal(deviceLevels({},metrics,'gpu',now+16000)[0].value,null);
 });
+
+test('CPU chart explains measurement failures and supplies interval provenance',()=>{
+ const h={...host,percent:null,status:'permission_denied',sample_age_seconds:1};
+ const rows=deviceLevels({}, {hosts:[h]},'cpu',now);
+ assert.equal(rows[0].value,null);assert.equal(rows[0].unavailableLabel,'Permission denied');
+ assert.match(rows[0].basis,/Permission denied/);
+ const live=deviceLevels({}, {hosts:[{...h,status:'live',percent:25,window_seconds:5}]},'cpu',now)[0];
+ assert.equal(live.value,25);assert.match(live.basis,/5.0s average/);
+});
