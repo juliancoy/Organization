@@ -20,6 +20,7 @@ try{
   await page.locator('.primary-action').click();assert.equal(new URL(page.url()).hash,'#overview');
   assert.match(await page.locator('#overview-takeaway').innerText(),/Julian/);
   await page.locator('.journey a[href="#satellites"]').click();await expect(page.locator('.journey a[href="#satellites"]')).toHaveAttribute('aria-current','step');
+  await page.locator('.journey a[href="#next-step"]').click();await expect(page.locator('.journey a[href="#next-step"]')).toHaveAttribute('aria-current','step');
   await page.locator('#another-genome').click();assert.equal(await page.locator('#sample').evaluate(e=>document.activeElement===e),true);
 
   for(const name of ['Julian','HG001','HG002','HG005','Watson','Venter']){

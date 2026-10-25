@@ -17,6 +17,6 @@ window.addEventListener('resize',plot);
 // Navigation follows location; it does not claim that visitors understood a step.
 const journeyLinks=[...document.querySelectorAll('.journey a')];
 const journeySections=journeyLinks.map(a=>document.querySelector(a.getAttribute('href')));
-function updateJourney(){let active=journeySections[0];for(const section of journeySections){if(section.getBoundingClientRect().top<=180)active=section;}for(const a of journeyLinks){if(a.hash==='#'+active.id)a.setAttribute('aria-current','step');else a.removeAttribute('aria-current');}}
+function updateJourney(){let active=journeySections[0];for(const section of journeySections){if(section.getBoundingClientRect().top<=180)active=section;}if(window.scrollY+window.innerHeight>=document.documentElement.scrollHeight-2)active=journeySections.at(-1);for(const a of journeyLinks){if(a.hash==='#'+active.id)a.setAttribute('aria-current','step');else a.removeAttribute('aria-current');}}
 window.addEventListener('scroll',updateJourney,{passive:true});updateJourney();
 document.querySelector('#another-genome').onclick=()=>{document.querySelector('#choose-genome').scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});document.querySelector('#sample').focus({preventScroll:true});};
