@@ -6,6 +6,8 @@ import {createRequire} from 'node:module'
 import assert from 'node:assert/strict'
 const web=fileURLToPath(new URL('../../',import.meta.url))
 const {chromium}=createRequire(join(web,'package.json'))('@playwright/test')
+const apiSource=await readFile(fileURLToPath(new URL('../api.py',import.meta.url)),'utf8')
+const contentSecurityPolicy=apiSource.match(/'Content-Security-Policy':"([^"]+)"/)[1]
 const view=fileURLToPath(new URL('../view/',import.meta.url))
 export async function reviewCodexUi(output){
  await mkdir(output,{recursive:true})
@@ -16,6 +18,7 @@ export async function reviewCodexUi(output){
  const lanFixture={updated:'2026-10-24T20:00:00Z',devices:['worker','queued','stopped','failed','passed'].map((name,index)=>({hostname:name+'.local',address:'10.0.0.'+(index+2),reachable:true})),network:{interface:'eth0',subnet:'10.0.0.0/24',gateway:'10.0.0.1',interfaces:[{name:'eth0',rx_mbps:1.25,tx_mbps:0.5,capacity_mbps:1000}]},run:{id:'fixture-run',status:'running',hosts:['running','queued','stopped','failed','passed'].map((status,index)=>({host:['worker','queued','stopped','failed','passed'][index]+'.local',status,jobs:[{name:'Fixture tests',status}]}))}};
  const server=createServer(async(req,res)=>{
   try{
+   res.setHeader('Content-Security-Policy',contentSecurityPolicy)
    const url=new URL(req.url,'http://localhost')
    if(url.pathname==='/api/v1/swarm/research/jobs'){
     res.setHeader('Content-Type','application/json');if(statusUnauthorized){res.statusCode=401;res.end('{}');return}

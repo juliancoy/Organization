@@ -54,7 +54,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         for k,v in {'Content-Type':kind,'Content-Length':str(len(raw)),'Cache-Control':'no-store',
                     'X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','X-Frame-Options':'DENY',
-                    'Content-Security-Policy':"default-src 'self'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'",'Strict-Transport-Security':'max-age=31536000'}.items():self.send_header(k,v)
+                    'Content-Security-Policy':"default-src 'self'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self' data: blob:; frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'",'Strict-Transport-Security':'max-age=31536000'}.items():self.send_header(k,v)
         if kind=='application/vnd.android.package-archive':self.send_header('Content-Disposition','attachment; filename="swarm-control-test.apk"')
         if cookie is not None:
             for item in cookie if isinstance(cookie,list) else [cookie]:self.send_header('Set-Cookie',item)
