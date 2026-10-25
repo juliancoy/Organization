@@ -134,7 +134,7 @@ browsers and GPU kernel probes also reserve their CPU and memory in the same poo
 
 All test/install containers and private DNA batches acquire CPU and memory from
 one process-safe pool per worker. The pool also reserves each container’s PID
-limit and leaves 256 process/thread slots free in finite cgroup ancestors for host
+limit and leaves up to 256 process/thread slots free in finite cgroup ancestors for host
 services and Docker. Combined reservations cannot exceed logical
 CPUs or physical RAM minus 1 GiB for the host; current available memory is also
 checked. Fitting jobs backfill free slots. Groups with the smallest dominant CPU
@@ -158,3 +158,8 @@ available after reviewing the private reports.
 
 Deployments drain new admissions, wait for running jobs, then restart. A timeout
 or failure removes the drain flag and preserves active jobs.
+
+Launcher updates raise undersized PID limits on the verified launcher container to
+a bounded budget based on logical CPUs (at most 32,768). This uses Docker update
+and does not restart containers; unrelated containers and unlimited limits are
+left alone.

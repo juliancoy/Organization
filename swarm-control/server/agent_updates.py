@@ -8,7 +8,7 @@ import sys
 import time
 
 FILES=('launcher_peers.py','launcher_discovery.py','launcher_registration.py','launcher_agent.py','launcher_registry.py')
-INSTALL = '''import hashlib,json,os,pathlib,runpy,sys,tempfile
+INSTALL = '''import hashlib,json,os,pathlib,runpy,sys,tempfile,subprocess
 payload=json.load(sys.stdin)
 if hashlib.sha256(pathlib.Path('/etc/machine-id').read_bytes()).hexdigest()!=payload['machine']:
  raise RuntimeError('SSH host differs from the authenticated agent machine')
@@ -20,6 +20,17 @@ public_key=payload['controller_public_key']
 if len(bytes.fromhex(public_key))!=32:raise RuntimeError('Invalid controller public key')
 settings['controller_public_key']=public_key
 pending=config.with_suffix('.controller.tmp');pending.write_text(json.dumps(settings,indent=2)+'\\n');pending.chmod(0o600);pending.replace(config)
+# The launcher hosts coordinator threads and Docker clients for multiple runs.
+# Raise undersized provisioned limits without restarting active containers.
+for container_name in ('lifetech-launcher','lifetech-launcher-session'):
+ result=subprocess.run(['docker','inspect',container_name],capture_output=True,text=True,timeout=15)
+ if result.returncode:continue
+ container=json.loads(result.stdout)[0]
+ owned=any(m['Destination']=='/run/launcher-config' and pathlib.Path(m['Source']).resolve()==config.parent.resolve() for m in container.get('Mounts',[]))
+ current_limit=container['HostConfig'].get('PidsLimit') or 0
+ target_limit=min(32768,max(1024,len(os.sched_getaffinity(0))*256+512))
+ if owned and 0<current_limit<target_limit:
+  subprocess.run(['docker','update','--pids-limit',str(target_limit),container_name],check=True,stdout=subprocess.DEVNULL,timeout=20)
 files=payload['files']
 expected=('launcher_peers.py','launcher_discovery.py','launcher_registration.py','launcher_agent.py','launcher_registry.py')
 if set(files)!=set(expected)|{'launcher_update.py'}:

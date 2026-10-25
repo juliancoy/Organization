@@ -70,8 +70,8 @@ class ResourceLease:
                 if maximum!='max':bounds.append((int(maximum),int((parent/'pids.current').read_text())))
             except FileNotFoundError:continue
         if bounds:
-            limits['pids']=max(0,min(maximum for maximum,_ in bounds)-256)
-            limits['available_pids']=max(0,min(maximum-used for maximum,used in bounds)-256)
+            limits['pids']=max(0,min(maximum-min(256,max(32,maximum//4)) for maximum,_ in bounds))
+            limits['available_pids']=max(0,min(maximum-used-min(256,max(32,maximum//4)) for maximum,used in bounds))
         return limits
 
     def rows(self):

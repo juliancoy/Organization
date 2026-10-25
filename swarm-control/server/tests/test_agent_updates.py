@@ -58,3 +58,9 @@ class LauncherUpdateTests(unittest.TestCase):
         with patch.object(self.updates,'stage'),patch('agent_updates.time.monotonic',side_effect=[0,121]):
             with self.assertRaisesRegex(RuntimeError,'did not become ready'):
                 self.updates.ensure(self.host,Mock(),self.status)
+
+    def test_private_resource_lease_defers_update(self):
+        with patch.object(self.updates,'stage') as stage:
+            with self.assertRaisesRegex(RuntimeError,'busy'):
+                self.updates.ensure(self.host,Mock(),{**self.status,'active_resource_leases':1})
+        stage.assert_not_called()
