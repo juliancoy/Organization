@@ -35,6 +35,16 @@ class RemoteBoundaryTests(unittest.TestCase):
             self.assertEqual(self.request('/api/v1/master/status',token='owner'*16),404)
             self.assertEqual(self.request('/../../.env',token='owner'*16),404)
             rest.assert_not_called()
+    def test_screenshot_body_limit_only_applies_to_authenticated_commands(self):
+        body={'images':[{'name':'screen.png','data_url':'x'*100000}]}
+        with patch('api.codex.rest',return_value=(202,{'accepted':True})) as rest:
+            path='/api/v1/master/codex/commands'
+            self.assertEqual(self.request(path,'POST',origin='https://compai.example',body=body),401)
+            self.assertEqual(self.request(path,'POST',origin='https://evil.example',body=body,cookie=self.cookie),403)
+            rest.assert_not_called()
+            self.assertEqual(self.request(path,'POST',origin='https://compai.example',body=body,cookie=self.cookie),202)
+            self.assertEqual(self.request('/api/v1/swarm/research/jobs','POST',origin='https://compai.example',body=body,cookie=self.cookie),400)
+
     def test_authenticated_command_is_bound_to_public_origin(self):
         with patch('api.codex.rest',return_value=(202,{'accepted':True})) as rest:
             path='/api/v1/master/codex/commands'

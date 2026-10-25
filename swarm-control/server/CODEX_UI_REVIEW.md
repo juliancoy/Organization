@@ -73,3 +73,12 @@ Card links open a hash-addressed machine detail view with reachability, availabl
 CPU/memory and task states. Native Back and All machines preserve the overview;
 refresh retains the selected machine. Keyboard activation moves focus to the
 machine heading. Network interface details remain available under Network overview.
+
+Screenshot attachments use the composer’s file picker, clipboard paste, or drop.
+The browser strips image metadata by re-encoding to PNG/WebP, preserves alpha,
+limits images to four and 4 MB total, and shows removable previews. Send and Steer
+carry bounded inline image inputs through the same authenticated command route.
+Images are not saved to a separate upload store. Draft images survive failed sends;
+an uncertain retry preserves the command request ID. Lock and confirmed thread
+changes clear image drafts. The headless review checks these controls and alpha at
+phone/desktop sizes; Python tests check image validation and IPC input serialization.

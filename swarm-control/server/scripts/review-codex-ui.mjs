@@ -9,7 +9,7 @@ const {chromium}=createRequire(join(web,'package.json'))('@playwright/test')
 const view=fileURLToPath(new URL('../view/',import.meta.url))
 export async function reviewCodexUi(output){
  await mkdir(output,{recursive:true})
- const commands=[],results=[],researchRequests=[];let researchJobs=[];let ownerConnected=true,statusUnauthorized=false
+ const commands=[],results=[],researchRequests=[];let researchJobs=[];let failNext=false;let ownerConnected=true,statusUnauthorized=false
  const threads=[{id:'design',name:'Improve the remote control workspace',cwd:'/workspace/Organization',updated_at:1792880000,activity:'running'},{id:'release',name:'Review the release checks',cwd:'/workspace/OrgPortal',updated_at:1792876000,activity:'idle'}]
  threads.push(...Array.from({length:18},(_,index)=>({id:'history-'+index,name:'Earlier workspace task '+(index+1),cwd:'/workspace/Organization',updated_at:1792800000-index*300,activity:'idle'})))
  for(const thread of threads){thread.display_title=thread.name;thread.name='Raw database name';thread.title='Initial prompt text'}
@@ -34,12 +34,12 @@ export async function reviewCodexUi(output){
    if(url.pathname==='/swarm-status'){res.setHeader('Content-Type','text/html');res.end(await readFile(join(view,'swarm-status.html')));return}
    if(url.pathname.startsWith('/api/')){
     res.setHeader('Content-Type','application/json')
-    if(req.method==='POST'){let body='';for await(const chunk of req)body+=chunk;commands.push(JSON.parse(body));await new Promise(resolve=>setTimeout(resolve,300));res.end(JSON.stringify({accepted:true,message:'Instruction accepted by the synthetic thread.'}));return}
+    if(req.method==='POST'){let body='';for await(const chunk of req)body+=chunk;commands.push(JSON.parse(body));await new Promise(resolve=>setTimeout(resolve,300));if(failNext){failNext=false;res.writeHead(503);res.end(JSON.stringify({error:{message:'Synthetic uncertain delivery'}}));return}res.end(JSON.stringify({accepted:true,message:'Instruction accepted by the synthetic thread.'}));return}
     const item=threads.find(t=>url.pathname.endsWith('/'+t.id))
     res.end(JSON.stringify(item?{...item,model:'Codex',owner_connected:ownerConnected,messages:[{role:'user',text:'Make the remote workspace easier to scan and use on a phone.'},{role:'assistant',text:'I’ll organize the conversation list, clarify connection status and keep the instruction composer stable while updates arrive.\n\nThe active conversation will stay visible, and your draft will be preserved.'}]}:{threads,next_offset:null,machine:'Fixture workstation',connected:true}));return
    }
    if(url.pathname==='/'){res.setHeader('Content-Type','text/html');res.end('<!doctype html><html lang="en"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Codex UI review</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/codex.css"><body><main><section id="codex-context"></section></main><script type="module" src="/codex.js"></script></body></html>');return}
-   if(!['/task-manager.js','/task-manager.css','/tests.css','/levels.js','/levels-model.js','/cpu-report.js','/snapshot-fetch.js','/docker-downloads.js','/research.css','/research.js','/style.css','/codex.css','/codex.js','/swarm-status.css','/swarm-status.js','/swarm-machines.js'].includes(url.pathname)){res.writeHead(404).end();return}
+   if(!['/task-manager.js','/task-manager.css','/tests.css','/levels.js','/levels-model.js','/cpu-report.js','/snapshot-fetch.js','/docker-downloads.js','/research.css','/research.js','/style.css','/codex.css','/codex.js','/codex-screenshots.js','/swarm-status.css','/swarm-status.js','/swarm-machines.js'].includes(url.pathname)){res.writeHead(404).end();return}
    res.setHeader('Content-Type',url.pathname.endsWith('.js')?'text/javascript':'text/css');res.end(await readFile(join(view,url.pathname.slice(1))))
   }catch(error){res.writeHead(500).end(error.message)}
  })
@@ -132,6 +132,16 @@ export async function reviewCodexUi(output){
   if(width<800)await page.locator('.codex-thread').first().click()
   assert.match(await page.locator('.codex-message>div').last().evaluate(node=>getComputedStyle(node).fontFamily),/system-ui/)
   await page.locator('.codex-activity:visible').waitFor()
+  const imageData=await page.evaluate(()=>{const canvas=document.createElement('canvas');canvas.width=160;canvas.height=90;const ctx=canvas.getContext('2d');ctx.fillStyle='#155e59';ctx.fillRect(20,20,100,50);return canvas.toDataURL().split(',')[1]})
+  const screenshot={name:'screen.png',mimeType:'image/png',buffer:Buffer.from(imageData,'base64')}
+  await page.getByLabel('Choose screenshots').setInputFiles(screenshot);await page.locator('.codex-screenshot-previews img').waitFor()
+  assert.equal(await page.locator('.codex-screenshot-previews img').count(),1)
+  await page.locator('textarea').evaluate((node,data)=>{const bytes=Uint8Array.from(atob(data),c=>c.charCodeAt(0)),transfer=new DataTransfer();transfer.items.add(new File([bytes],'pasted.png',{type:'image/png'}));node.dispatchEvent(new ClipboardEvent('paste',{clipboardData:transfer,bubbles:true,cancelable:true}))},imageData)
+  await page.waitForFunction(()=>document.querySelectorAll('.codex-screenshot-previews img').length===2)
+  await page.getByRole('button',{name:'Remove pasted.png',exact:true}).click();assert.equal(await page.locator('.codex-screenshot-previews img').count(),1)
+  await page.locator('.codex-compose').evaluate((node,data)=>{const bytes=Uint8Array.from(atob(data),c=>c.charCodeAt(0)),transfer=new DataTransfer();transfer.items.add(new File([bytes],'dropped.png',{type:'image/png'}));node.dispatchEvent(new DragEvent('drop',{dataTransfer:transfer,bubbles:true,cancelable:true}))},imageData)
+  await page.waitForFunction(()=>document.querySelectorAll('.codex-screenshot-previews img').length===2)
+  const transparent=await page.locator('.codex-screenshot-previews img').first().evaluate(async img=>{await img.decode();const canvas=document.createElement('canvas');canvas.width=img.naturalWidth;canvas.height=img.naturalHeight;const ctx=canvas.getContext('2d');ctx.drawImage(img,0,0);return ctx.getImageData(0,0,1,1).data[3]===0});assert.equal(transparent,true)
   await page.screenshot({path:join(output,`codex-conversation-${width}.png`),fullPage:true})
   const before=commands.length;await page.locator('textarea').press('Control+Enter')
   await page.getByRole('button',{name:'Sending…',exact:true}).waitFor()
@@ -139,6 +149,10 @@ export async function reviewCodexUi(output){
   assert.match(await page.locator('.codex-activity').textContent(),/Sending your instruction/)
   await page.waitForFunction(()=>document.querySelector('textarea')?.value==='')
   assert.equal(commands.length,before+1);assert.equal(commands.at(-1).thread_id,'design');assert.equal(commands.at(-1).action,'send')
+  assert.equal(commands.at(-1).images.length,2);assert.match(commands.at(-1).images[0].data_url,/^data:image\/(png|webp);base64,/);assert.equal(await page.locator('.codex-screenshot-previews img').count(),0)
+  await page.getByLabel('Choose screenshots').setInputFiles(screenshot);await page.locator('.codex-screenshot-previews img').waitFor();failNext=true
+  await page.getByRole('button',{name:'Send instruction',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.codex-status')?.textContent.includes('Synthetic uncertain delivery'));assert.equal(await page.locator('.codex-screenshot-previews img').count(),1)
+  const uncertainId=commands.at(-1).request_id;await page.getByRole('button',{name:'Send instruction',exact:true}).click();await page.waitForFunction(()=>!document.querySelector('.codex-screenshot-previews img'));assert.equal(commands.at(-1).request_id,uncertainId);assert.equal(commands.at(-1).text,'')
   threads[0].activity='idle';
   await page.waitForFunction(()=>document.querySelector('.codex-activity')?.dataset.state==='idle',{},{timeout:8000})
   assert.match(await page.locator('.codex-activity').textContent(),/ready for your next instruction/)

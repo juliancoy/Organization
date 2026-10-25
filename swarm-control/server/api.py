@@ -17,7 +17,7 @@ import codex
 from master_api import authorized
 
 VIEW=Path(__file__).with_name('view')
-ASSETS={'/':'codex.html','/codex.html':'codex.html','/codex.js':'codex.js','/codex.css':'codex.css','/style.css':'style.css','/test-deployment.js':'test-deployment.js',
+ASSETS={'/':'codex.html','/codex.html':'codex.html','/codex.js':'codex.js','/codex-screenshots.js':'codex-screenshots.js','/codex.css':'codex.css','/style.css':'style.css','/test-deployment.js':'test-deployment.js',
         '/test-deployment.css':'test-deployment.css','/swarm-control':'swarm-control.html','/swarm-control.svg':'swarm-control.svg'}
 ASSETS.update({'/swarm-status':'swarm-status.html','/swarm-status.js':'swarm-status.js','/swarm-status.css':'swarm-status.css','/swarm-machines.js':'swarm-machines.js'})
 ASSETS.update({'/research': 'research.html', '/research.html': 'research.html', '/research.js': 'research.js', '/research.css': 'research.css'})
@@ -120,7 +120,7 @@ class Handler(BaseHTTPRequestHandler):
                 if self.headers.get('Transfer-Encoding') or len(self.headers.get_all('Content-Length',[]))!=1:raise ValueError()
                 if self.headers.get('Content-Type','').split(';')[0]!='application/json':raise ValueError()
                 size=int(self.headers.get('Content-Length','-1'))
-                if not 0<size<=65536:raise ValueError()
+                if not 0<size<=(6*1024*1024 if path==API+'commands' else 65536):raise ValueError()
                 self.connection.settimeout(10)
                 raw=self.rfile.read(size)
                 if len(raw)!=size:raise ValueError()

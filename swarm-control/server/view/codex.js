@@ -1,3 +1,4 @@
+import {screenshotPicker} from './codex-screenshots.js';
 const root = document.querySelector('#codex-context');
 const secureRemote=root.dataset.remote==='true' && location.protocol==='https:';
 const allowedBrowser=secureRemote || ['localhost','127.0.0.1','[::1]'].includes(location.hostname);
@@ -38,10 +39,11 @@ const latest=el('button','↓ Latest messages','codex-latest'); latest.type='but
 latest.onclick=()=>{transcript.scrollTop=transcript.scrollHeight;latest.hidden=true;};
 transcript.onscroll=()=>{latest.hidden=transcript.scrollHeight-transcript.scrollTop-transcript.clientHeight<80;};
 function showActivity(state,text){activity.hidden=false;activity.dataset.state=state;if(activityText.textContent!==text)activityText.textContent=text;}
-const form = el('form', '', 'codex-compose'), promptLabel = el('label', 'Instruction to the selected thread'), input = el('textarea'); input.rows = 3; input.maxLength = 16000; input.required = true; input.placeholder = 'Describe the next task or correction…'; input.setAttribute('aria-describedby','codex-compose-help'); promptLabel.append(input);
+const form = el('form', '', 'codex-compose'), promptLabel = el('label', 'Instruction to the selected thread'), input = el('textarea'); input.rows = 3; input.maxLength = 16000; input.required = false; input.placeholder = 'Describe the next task or correction…'; input.setAttribute('aria-describedby','codex-compose-help'); promptLabel.append(input);
 const actions = el('div', '', 'codex-actions'), mode = el('select'); mode.setAttribute('aria-label', 'Instruction delivery');
 for (const [value, text] of [['send', 'Send a new message'], ['steer', 'Steer the running turn']]) { const option = el('option', text); option.value = value; mode.append(option); }
 const send = el('button', 'Send instruction'); send.type = 'submit'; send.disabled=true; const open = el('button', 'Open in VS Code'); open.type = 'button'; actions.append(mode, send, open); const composeHelp=el('small', 'Ctrl/⌘ + Enter to send. Uses this thread’s existing permissions. Handle approvals in local VS Code.'); composeHelp.id='codex-compose-help'; form.append(promptLabel, actions, composeHelp);
+const screenshots=screenshotPicker(form,input,dirty=>{if(dirty)requestId=null;send.disabled=busy||screenshots.processing||send.dataset.connected!=='true'||(!input.value.trim()&&!screenshots.count);});form.insertBefore(screenshots.root,actions);
 input.addEventListener('keydown',event=>{if(event.key==='Enter' && (event.ctrlKey||event.metaKey) && !event.isComposing){event.preventDefault();if(!send.disabled)form.requestSubmit();}});
 form.hidden=true; transcript.hidden=true; info.className='codex-thread-info'; conversation.append(back,empty,info, transcript, latest, activity, form); workspace.append(sidebar, conversation); root.append(heading, unlock, status, workspace);
 let requestId = null;
@@ -76,8 +78,8 @@ async function load() {
 }
 async function choose(id) {
   if (busy) return;
-  if (selected !== id && input.value && !window.confirm('Discard the unsent instruction and switch threads?')) return;
-  if (selected !== id) { input.value = ''; requestId = null; renderedThread=''; renderedMessages=''; observedActivity=''; }
+  if (selected !== id && (input.value||screenshots.count||screenshots.processing) && !window.confirm('Discard the unsent instruction and switch threads?')) return;
+  if (selected !== id) { screenshots.clear();input.value = ''; requestId = null; renderedThread=''; renderedMessages=''; observedActivity=''; }
   activity.hidden=true; latest.hidden=true;
   workspace.classList.add('codex-reading'); conversation.setAttribute('aria-busy','true');
   selected = id;
@@ -108,7 +110,7 @@ async function readThread() {
   if (nearBottom) transcript.scrollTop = transcript.scrollHeight;
   latest.hidden=nearBottom;
   }
-  form.hidden = false; send.disabled = !thread.owner_connected || busy || !input.value.trim();
+  form.hidden = false; send.disabled = !thread.owner_connected || busy || screenshots.processing || (!input.value.trim()&&!screenshots.count);
   if(!busy)showActivity(thread.activity, thread.activity === 'running' ? 'Codex is generating a response… Updates every 5 seconds.' : thread.activity === 'idle' ? 'Codex is ready for your next instruction.' : 'Generation status unavailable. Refresh before sending.');
   transcript.setAttribute('aria-busy',String(thread.activity==='running'));
   for(const button of list.querySelectorAll('.codex-thread'))if(button.getAttribute('aria-pressed')==='true'){button.dataset.activity=thread.activity;button.querySelector('span').textContent=(thread.activity==='running'?'● Generating response':thread.activity==='idle'?'Past turn completed':'State unknown')+' · '+button.dataset.updated;}
@@ -123,12 +125,12 @@ unlock.onsubmit = async event => {
     await load(); password.value = ''; unlock.hidden = true; workspace.hidden = false; lock.hidden = false; form.hidden = !selected; }
   catch (error) { token = ''; failure(error); } finally { connect.disabled = false; }
 };
-lock.onclick = async () => { if(secureRemote){const response=await fetch('/logout',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(!response.ok){failure(Error('Could not revoke this device. Try Lock again.'));return;}} generation++; token = ''; selected = null; input.value = ''; requestId = null; list.replaceChildren(); transcript.replaceChildren(); info.replaceChildren(); workspace.hidden = true; workspace.classList.remove('codex-reading'); empty.hidden=false; transcript.hidden=true; form.hidden=true; renderedThread=''; renderedMessages=''; observedActivity=''; search.value=''; activity.hidden=true; latest.hidden=true; lock.hidden = true; unlock.hidden = false; status.dataset.state=''; status.textContent = 'Locked'; };
+lock.onclick = async () => { screenshots.clear(); if(secureRemote){const response=await fetch('/logout',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(!response.ok){failure(Error('Could not revoke this device. Try Lock again.'));return;}} generation++; token = ''; selected = null; input.value = ''; requestId = null; list.replaceChildren(); transcript.replaceChildren(); info.replaceChildren(); workspace.hidden = true; workspace.classList.remove('codex-reading'); empty.hidden=false; transcript.hidden=true; form.hidden=true; renderedThread=''; renderedMessages=''; observedActivity=''; search.value=''; activity.hidden=true; latest.hidden=true; lock.hidden = true; unlock.hidden = false; status.dataset.state=''; status.textContent = 'Locked'; };
 refresh.onclick = () => { load().then(readThread).catch(failure); };
 let newChatRequest = null;
 newChat.onclick = async () => {
   if (busy) return;
-  if (input.value && !window.confirm('Discard the unsent instruction and start a new chat?')) return;
+  if ((input.value||screenshots.count||screenshots.processing) && !window.confirm('Discard the unsent instruction and start a new chat?')) return;
   busy = true; newChat.disabled = true; lock.disabled = true; send.disabled = true;
   newChatRequest ||= uuid();
   status.textContent = 'Creating conversation…';
@@ -136,7 +138,7 @@ newChat.onclick = async () => {
     const result = await api('commands', { action: 'new', request_id: newChatRequest });
     status.textContent = result.message;
     if (result.accepted) {
-      selected = result.thread_id; offset = 0; input.value = ''; requestId = null; newChatRequest = null;
+      selected = result.thread_id; offset = 0; screenshots.clear();input.value = ''; requestId = null; newChatRequest = null;
       renderedThread = ''; renderedMessages = ''; observedActivity = ''; search.value = '';
       workspace.classList.add('codex-reading');
       await load(); await readThread(); input.focus(); status.textContent = result.message;
@@ -146,16 +148,16 @@ newChat.onclick = async () => {
 };
 previous.onclick = () => { offset = Math.max(0, offset - 20); load().catch(failure); };
 more.onclick = () => { if (next !== null) { offset = next; load().catch(failure); } };
-input.oninput = () => { requestId = null; send.disabled=busy || send.dataset.connected!=='true' || !input.value.trim(); };
+input.oninput = () => { requestId = null; send.disabled=busy || send.dataset.connected!=='true' || screenshots.processing || (!input.value.trim()&&!screenshots.count); };
 form.onsubmit = async event => {
-  event.preventDefault(); if (busy || !selected || !input.value.trim()) return;
-  busy = true; send.disabled = true; lock.disabled = true; input.readOnly=true; mode.disabled=true; send.textContent='Sending…'; showActivity('sending','Sending your instruction…'); requestId ||= uuid();
+  event.preventDefault(); if (busy || screenshots.processing || !selected || (!input.value.trim()&&!screenshots.count)) return;
+  busy = true; screenshots.setDisabled(true);send.disabled = true; lock.disabled = true; input.readOnly=true; mode.disabled=true; send.textContent='Sending…'; showActivity('sending','Sending your instruction…'); requestId ||= uuid();
   try {
-    const result = await api('commands', { thread_id: selected, action: mode.value, text: input.value, request_id: requestId });
+    const result = await api('commands', { thread_id: selected, action: mode.value, text: input.value, request_id: requestId, images:screenshots.snapshot() });
     status.textContent = result.message;
-    if (result.accepted) { input.value = ''; requestId = null; }
+    if (result.accepted) { screenshots.clear();input.value = ''; requestId = null; }
   } catch (error) { failure(new Error(error.message + ' Check the conversation before retrying; delivery may be uncertain.')); }
-  finally { busy = false; lock.disabled = false; input.readOnly=false; mode.disabled=false; send.textContent='Send instruction'; await readThread().catch(failure); }
+  finally { busy = false; screenshots.setDisabled(false);lock.disabled = false; input.readOnly=false; mode.disabled=false; send.textContent='Send instruction'; await readThread().catch(failure); }
 };
 open.onclick = async () => { if (!selected || busy) return; open.disabled = true; try { const result = await api('commands', { thread_id: selected, action: 'open' }); status.textContent = result.message; } catch (error) { failure(error); } finally { open.disabled = false; } };
 async function restoreDevice(){

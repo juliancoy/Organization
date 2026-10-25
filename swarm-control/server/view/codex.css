@@ -22,3 +22,10 @@
 .codex-compose textarea:read-only{opacity:.7;cursor:wait}
 .codex-app button:disabled{opacity:.55}
 @media(prefers-reduced-motion:no-preference){.codex-activity:is([data-state=running],[data-state=sending]) .codex-activity-dot{animation:codex-pulse 1.4s ease-in-out infinite}@keyframes codex-pulse{50%{opacity:.35;box-shadow:0 0 0 5px #a2e5cf20}}}
+.codex-screenshots { display:grid; gap:.6rem; min-width:0; }
+.codex-screenshots > button { justify-self:start; }
+.codex-screenshots > p:empty { display:none; }
+.codex-screenshot-previews { display:flex; flex-wrap:wrap; gap:.75rem; padding:0; margin:0; list-style:none; }
+.codex-screenshot-previews li { display:grid; gap:.4rem; width:140px; overflow-wrap:anywhere; font-size:.8rem; }
+.codex-screenshot-previews img { width:140px; height:100px; object-fit:contain; border:1px solid var(--border,#667); border-radius:6px; background:repeating-conic-gradient(#ddd 0 25%,#fff 0 50%) 0/16px 16px; }
+.codex-screenshot-previews button { font-size:.8rem; padding:.4rem; }

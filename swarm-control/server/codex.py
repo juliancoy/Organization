@@ -5,6 +5,8 @@ The follower protocol is internal to the installed OpenAI VS Code extension
 """
 from paths import WORKSPACE
 import json
+import base64
+import binascii
 import os
 from pathlib import Path
 import re
@@ -268,8 +270,35 @@ def detail(ident):
     return row
 
 
+def screenshot_inputs(images):
+    if not isinstance(images,list) or len(images)>4:
+        raise ContextError('Attach up to 4 screenshots.')
+    inputs=[]
+    total=0
+    for image in images:
+        if not isinstance(image,dict) or set(image)!={'name','data_url'} or not isinstance(image['name'],str) or not 1<=len(image['name'])<=120:
+            raise ContextError('Invalid screenshot attachment.')
+        value=image['data_url']
+        if not isinstance(value,str) or len(value)>3*1024*1024:
+            raise ContextError('Screenshot exceeds the size limit.')
+        match=re.fullmatch(r'data:image/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)',value)
+        if not match:
+            raise ContextError('Screenshots must be PNG, JPEG or WebP image data.')
+        try:
+            data=base64.b64decode(match[2],validate=True)
+        except (ValueError,binascii.Error):
+            raise ContextError('Invalid screenshot image data.')
+        kind=match[1]
+        valid=(kind=='png' and data.startswith(b'\x89PNG\r\n\x1a\n') or kind=='jpeg' and data.startswith(b'\xff\xd8\xff') or kind=='webp' and data.startswith(b'RIFF') and data[8:12]==b'WEBP')
+        total+=len(data)
+        if not valid or len(data)<32 or len(data)>2*1024*1024 or total>4*1024*1024:
+            raise ContextError('Use valid screenshots up to 2 MB each and 4 MB total.')
+        inputs.append({'type':'image','url':value})
+    return inputs
+
+
 def mutate(body):
-    if not isinstance(body, dict) or set(body) - {'thread_id', 'action', 'text', 'request_id'}:
+    if not isinstance(body, dict) or set(body) - {'thread_id', 'action', 'text', 'request_id', 'images'}:
         raise ContextError('Invalid command.')
     action = body.get('action')
     if action == 'new':
@@ -284,12 +313,15 @@ def mutate(body):
                 RECEIPTS[key] = {'accepted': False, 'uncertain': True, 'message': 'Creation outcome unknown. Refresh before trying again.'}
                 RECEIPTS[key] = new_thread()
             return RECEIPTS[key]
+    images=screenshot_inputs(body.get('images',[]))
     row = thread(body.get('thread_id'))
     if action == 'open':
         subprocess.run(['code', '--open-url', f'vscode://openai.chatgpt/local/{row["id"]}'],
                        check=True, timeout=10, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return {'accepted': True, 'message': 'Open requested on the local VS Code desktop. Wait for the thread to connect.'}
-    text = body.get('text')
+    text = body.get('text','')
+    if images and isinstance(text,str) and not text.strip():
+        text='Please review the attached screenshots.'
     request_id = body.get('request_id')
     if action not in ('send', 'steer') or not isinstance(text, str) or not 1 <= len(text.strip()) <= 16000 or not isinstance(request_id, str) or not re.fullmatch(r'[a-f0-9-]{36}', request_id):
         raise ContextError('Choose Send or Steer and enter 1–16000 characters.')
@@ -306,7 +338,7 @@ def mutate(body):
                 raise ContextError('Thread is running or its state is unknown. Refresh and use Steer for a running turn.')
             if action == 'steer' and state['activity'] != 'running':
                 raise ContextError('No running turn was observed. Refresh before sending.')
-            inputs = [{'type': 'text', 'text': text, 'text_elements': []}]
+            inputs = [{'type': 'text', 'text': text, 'text_elements': []},*images]
             params = {'conversationId': row['id']}
             if action == 'send':
                 params['turnStart'] = {'request': {'threadId': row['id'], 'input': inputs, 'clientUserMessageId': request_id}, 'context': {'inheritThreadSettings': True}}
