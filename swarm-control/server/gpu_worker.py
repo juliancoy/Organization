@@ -33,7 +33,9 @@ class GpuRun:
                     job.update(status='running',phase='CUDA kernel');self.service.save()
                 if self.service.run.get('stop_requested'):raise InterruptedError('Run stopped')
                 self.images.ensure(PYTHON,[host])
-                result=AgentClient(host).call('gpu.probe',timeout=50)
+                client=AgentClient(host)
+                try:result=client.call('gpu.probe',timeout=180)
+                finally:client.close()
                 if result.get('status')!='passed' or not result.get('devices') or any(device.get('kernel_result')!=42 for device in result['devices']):raise RuntimeError('Missing GPU compute validation or incorrect kernel result')
                 with self.service.lock:
                     job.update(status='passed',gpu=result,test_counts={'tests':len(result['devices']),'passed':len(result['devices']),'failed':0})
