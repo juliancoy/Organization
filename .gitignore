@@ -93,3 +93,5 @@
 
 /swarm-control/server/node_modules
 /swarm-control/.venv/
+
+!/tests/test_launcher_retention.py
