@@ -75,3 +75,32 @@ class DistributedGenomicsTests(unittest.TestCase):
         import scripts.genomics_distributed as runner
         result=subprocess.run(['python3','-c',runner.WORKER,'qc'],input=gzip.compress(b'PRIVATE-SAMPLE-DATA\n'),capture_output=True)
         self.assertNotEqual(result.returncode,0);self.assertNotIn(b'PRIVATE',result.stderr);self.assertEqual(result.stdout,b'')
+
+    def test_temporary_unavailability_requeues_instead_of_failing_batch(self):
+        import scripts.genomics_distributed as runner
+        def response(host,batch):return {**compute(batch['payload'],batch['kind']),'sha256':batch['sha256'],'host':host['host'],'elapsed_seconds':.1,'input_bytes':len(batch['payload'])}
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);source=root/'source.vcf.gz';source.write_bytes(payload([ROWS[0]]))
+            run=Run([{'host':'fixture','local':True,'eligible':True}],root,slots=1)
+            with patch.object(run,'capacity',side_effect=[False,True]),patch.object(runner,'execute',side_effect=response),patch.object(runner.time,'sleep'):
+                run.run({'qc':source},10)
+            self.assertEqual(run.state['status'],'passed')
+            self.assertEqual(len(run.results),1)
+
+    def test_resume_verifies_and_reuses_completed_payloads(self):
+        import scripts.genomics_distributed as runner
+        import hashlib
+        def response(host,batch):return {**compute(batch['payload'],batch['kind']),'sha256':batch['sha256'],'host':host['host'],'elapsed_seconds':.1,'input_bytes':len(batch['payload'])}
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);source=root/'source.vcf.gz';source.write_bytes(payload())
+            jobs=list(batches(source,'qc',1));cached=response({'host':'old-worker'},jobs[0]);(root/'qc-1.json').write_text(json.dumps(cached))
+            previous={'status':'failed','worker_source_sha256':hashlib.sha256(runner.WORKER.encode()).hexdigest(),'sources':{}}
+            (root/'state.json').write_text(json.dumps(previous))
+            run=Run([{'host':'fixture','local':True,'eligible':True}],root,slots=1,resume=True)
+            with patch.object(run,'capacity',return_value=True),patch.object(runner,'execute',side_effect=response)as execute:
+                run.run({'qc':source},1)
+            self.assertEqual(execute.call_count,1)
+            self.assertTrue(run.state['jobs']['qc-1']['reused'])
+            self.assertEqual(json.loads((root/'qc-summary.json').read_text())['records'],2)
+            wrong={**jobs[0],'sha256':'different'}
+            with self.assertRaisesRegex(ValueError,'differs'):run.cached(wrong)

@@ -51,7 +51,7 @@ SUITES = {
                'test': ['node', 'scripts/render-layout-fixtures.mjs', '/work/visual-artifacts']},
     'identity': {'name': 'Identity API and browser regression', 'cwd': 'PIdP/serverless', 'image': BROWSER,
                  'prepare': ['npm', 'ci', '--no-audit', '--no-fund'],
-                 'test': ['sh', '-c', 'npm run typecheck && node --import tsx --test test/*.test.mjs test/*.test.ts']},
+                 'test': ['sh', '-c', 'npm run typecheck && node --import tsx --test test/*.test.mjs test/*.test.ts browser/mcp-*.mjs']},
     'identity-python': {'name': 'Identity Python', 'cwd': 'PIdP', 'image': PYTHON,
                         'prepare': ['python', '-m', 'pip', 'install', '--target', '/work/.test-deps/identity-python', '-r', 'requirements-test.txt', 'pytest'],
                         'test': ['python', '-m', 'pytest', 'tests', '-q', '--tb=short']},

@@ -120,61 +120,94 @@ def merge(results,kind):
 
 
 class Run:
-    def __init__(self,hosts,folder,slots=2):
+    def __init__(self,hosts,folder,slots=2,resume=False):
         self.hosts=[h for h in hosts if h['eligible']];self.folder=folder;self.lock=threading.RLock();self.slots=slots
-        self.queue=queue.Queue(maxsize=max(2,len(self.hosts)*slots));self.results=[]
+        self.queue=queue.Queue();self.credits=threading.Semaphore(max(2,len(self.hosts)*slots*2));self.results=[]
+        if not self.hosts:raise RuntimeError('No authenticated, accepting workers with pinned SSH access')
+        digest=hashlib.sha256(WORKER.encode()).hexdigest()
+        previous=json.loads((folder/'state.json').read_text()) if resume else {}
+        if resume and previous.get('worker_source_sha256')!=digest:raise ValueError('Resume requires matching scientific worker code')
+        self.previous_sources=previous.get('sources',{})
         self.state={'started':datetime.datetime.now(datetime.timezone.utc).isoformat(),'status':'running',
+                    'previous_started':previous.get('started'),'worker_source_sha256':digest,
                     'workers':[{k:v for k,v in h.items() if k not in ('ssh','agent_endpoint')} for h in hosts],
                     'jobs':{},'sources':{},'scope':'Private streamed QC and existing-annotation audit; no fresh VEP run. Remote inputs remain in process memory only.'}
-        if not self.hosts:raise RuntimeError('No authenticated, accepting workers with pinned SSH access')
+        for host in self.hosts:host['_capacity_lock']=threading.Lock();host['_checked']=0;host['_cooldown']=0
 
     def save(self):
         with self.lock:
             temporary=self.folder/'state.tmp';temporary.write_text(json.dumps(self.state,indent=2));temporary.chmod(0o600);temporary.replace(self.folder/'state.json')
 
+    def capacity(self,host):
+        with host['_capacity_lock']:
+            if time.monotonic()<host['_cooldown']:return False
+            if time.monotonic()-host['_checked']<3:return host.get('_available',False)
+            from agent_client import AgentClient
+            client=AgentClient(host);available=False
+            try:
+                status=client.call('status',timeout=15)
+                if eligible(status) and status.get('machine')==host['machine']:
+                    metrics=client.call('metrics',timeout=15)
+                    free=metrics.get('ram_total_bytes',0)-metrics.get('ram_used_bytes',0)
+                    available=free>=1536*1024*1024 and metrics.get('percent',100)<85
+            except (OSError,RuntimeError,ValueError):pass
+            finally:client.close()
+            host['_available']=available;host['_checked']=time.monotonic();return available
+
+    def cached(self,batch):
+        path=self.folder/(batch['id']+'.json')
+        if not path.exists():return None
+        result=json.loads(path.read_text())
+        if any(result.get(key)!=batch[key] for key in ['sha256','records','kind']):raise ValueError('Cached batch differs from current input')
+        return result
+
     def worker(self,host):
         while True:
-            item=self.queue.get()
+            item=self.queue.get();finished=False
             try:
                 if item is None:return
+                if time.monotonic()>item['deadline']:
+                    with self.lock:self.state['jobs'][item['id']].update(status='failed',reason='No accepting worker before deadline');self.save()
+                    finished=True;continue
+                if not self.capacity(host) or (host['host'] in item.get('failed_hosts',[]) and len(set(item['failed_hosts']))<len(self.hosts)):
+                    with self.lock:self.state['jobs'][item['id']].update(status='waiting_capacity');self.save()
+                    self.queue.put(item);time.sleep(2);continue
                 with self.lock:self.state['jobs'][item['id']].update(status='running',host=host['host']);self.save()
                 try:
-                    # Power/deny changes are respected between batches, not just at discovery.
-                    from agent_client import AgentClient
-                    client=AgentClient(host)
-                    try:
-                        deadline=time.monotonic()+1800
-                        while True:
-                            status=client.call('status',timeout=15)
-                            if not eligible(status) or status.get('machine')!=host['machine']:raise RuntimeError('Worker identity or accepting policy changed')
-                            metrics=client.call('metrics',timeout=15)
-                            free=metrics.get('ram_total_bytes',0)-metrics.get('ram_used_bytes',0)
-                            if free>=1536*1024*1024 and metrics.get('percent',100)<85:break
-                            with self.lock:self.state['jobs'][item['id']]['status']='waiting_capacity';self.save()
-                            if time.monotonic()>deadline:raise RuntimeError('Worker capacity wait expired')
-                            time.sleep(5)
-                        with self.lock:self.state['jobs'][item['id']]['status']='running';self.save()
-                    finally:client.close()
-                    result=execute(host,item)
-                    write_json(self.folder/(item['id']+'.json'),result)
+                    result=execute(host,item);write_json(self.folder/(item['id']+'.json'),result)
                     with self.lock:
                         self.results.append(result);self.state['jobs'][item['id']].update(status='passed',elapsed_seconds=result['elapsed_seconds'],input_bytes=result['input_bytes']);self.save()
+                    finished=True
                 except Exception as error:
-                    with self.lock:self.state['jobs'][item['id']].update(status='failed',reason=type(error).__name__+': '+str(error)[:500]);self.save()
-            finally:self.queue.task_done()
+                    item.setdefault('failed_hosts',[]).append(host['host']);host['_cooldown']=time.monotonic()+15
+                    final=len(item['failed_hosts'])>=3
+                    with self.lock:self.state['jobs'][item['id']].update(status='failed' if final else 'retrying',reason=type(error).__name__+': '+str(error)[:500],attempts=len(item['failed_hosts']));self.save()
+                    if final:finished=True
+                    else:self.queue.put(item)
+            finally:
+                if finished:self.credits.release()
+                self.queue.task_done()
 
     def run(self,sources,limit):
         threads=[threading.Thread(target=self.worker,args=(host,),daemon=True) for host in self.hosts for _ in range(self.slots)]
         for thread in threads:thread.start()
         try:
             for kind,path in sources.items():
-                stat=path.stat();self.state['sources'][kind]={'path':str(path),'bytes':stat.st_size,'mtime_ns':stat.st_mtime_ns}
+                stat=path.stat();identity={'path':str(path),'bytes':stat.st_size,'mtime_ns':stat.st_mtime_ns}
+                if kind in self.previous_sources and identity!=self.previous_sources[kind]:raise ValueError('Input identity changed since original run')
+                self.state['sources'][kind]=identity
                 for batch in batches(path,kind,limit):
-                    with self.lock:self.state['jobs'][batch['id']]={'kind':kind,'status':'queued','records':batch['records']};self.save()
-                    self.queue.put(batch)
+                    cached=self.cached(batch)
+                    with self.lock:
+                        self.state['jobs'][batch['id']]={'kind':kind,'status':'passed' if cached else 'queued','records':batch['records']}
+                        if cached:
+                            self.results.append(cached);self.state['jobs'][batch['id']].update(host=cached['host'],reused=True,elapsed_seconds=cached['elapsed_seconds'])
+                        self.save()
+                    if not cached:
+                        self.credits.acquire();batch['deadline']=time.monotonic()+1800;self.queue.put(batch)
                 if path.stat().st_mtime_ns!=stat.st_mtime_ns or path.stat().st_size!=stat.st_size:raise RuntimeError('Input changed during analysis')
             self.queue.join()
-            if any(j['status']!='passed' for j in self.state['jobs'].values()):raise RuntimeError('Some private batches failed; inspect private state.json')
+            if not self.state['jobs'] or any(j['status']!='passed' for j in self.state['jobs'].values()):raise RuntimeError('Some private batches failed; inspect private state.json')
             for kind in sources:write_json(self.folder/(kind+'-summary.json'),merge(self.results,kind))
             self.state['status']='passed'
         except Exception:
@@ -188,11 +221,17 @@ class Run:
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--qc',type=Path,required=True);parser.add_argument('--annotations',type=Path,required=True)
+    parser.add_argument('--resume',type=Path,help='Resume a private run with matching input and scientific code')
     parser.add_argument('--slots',type=int,choices=[1,2],default=2)
     parser.add_argument('--output',type=Path,required=True);parser.add_argument('--batch-records',type=int,default=50000)
-    args=parser.parse_args();os.umask(0o077);folder=private_run(args.output)
+    args=parser.parse_args();os.umask(0o077)
+    if args.resume:
+        folder=args.resume.absolute()
+        if folder.is_symlink() or folder.parent.resolve()!=args.output.resolve() or folder.stat().st_uid!=os.getuid() or folder.stat().st_mode&0o077:raise ValueError('Resume requires an owner-only run under the output directory')
+        if any((parent/'.git').exists() for parent in [folder,*folder.parents]):raise ValueError('Private runs cannot be inside Git')
+    else:folder=private_run(args.output)
     print('Private distributed run: '+str(folder),flush=True)
-    run=Run(discover(),folder,args.slots);run.save()
+    run=Run(discover(),folder,args.slots,resume=bool(args.resume));run.save()
     run.run({'qc':args.qc.resolve(strict=True),'annotation':args.annotations.resolve(strict=True)},args.batch_records)
     print('Distributed genomics run passed',flush=True)
 

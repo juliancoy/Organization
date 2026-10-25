@@ -16,7 +16,7 @@ class FileQueueTests(unittest.TestCase):
             'OrgPortal': ['org-worker/test/api.test.ts', 'chat-worker/test/chat.test.ts',
                           'web/src/root.test.ts', 'web/src/nested/component.test.tsx', 'web/src/not-a-test.ts'],
             'CodeCollective': ['tests/usajobs-mobile.test.cjs'],
-            'PIdP': ['serverless/test/identity.test.mjs', 'tests/test_one.py', 'tests/nested/two_test.py'],
+            'PIdP': ['serverless/test/identity.test.mjs', 'serverless/browser/mcp-admin-reconnect.mjs', 'serverless/browser/mcp-forms.mjs', 'serverless/browser/unrelated.mjs', 'tests/test_one.py', 'tests/nested/two_test.py'],
         }
         repos = {name: {'commit': name+'-pinned'} for name in trees}
         calls = []
@@ -38,7 +38,13 @@ class FileQueueTests(unittest.TestCase):
         self.assertIn('src/nested/component.test.tsx', files)
         self.assertIn('tests/nested/two_test.py', files)
         self.assertNotIn('src/not-a-test.ts', files)
-        self.assertEqual(len(files), 11)
+        self.assertEqual(len(files), 13)
+        self.assertIn('browser/mcp-admin-reconnect.mjs', files)
+        self.assertIn('browser/mcp-forms.mjs', files)
+        self.assertNotIn('browser/unrelated.mjs', files)
+        browser = next(specs[t] for t in tasks if specs[t].get('file') == 'browser/mcp-admin-reconnect.mjs')
+        self.assertEqual(browser['image'], SUITES['identity']['image'])
+        self.assertEqual(browser['test'][-1], 'browser/mcp-admin-reconnect.mjs')
         self.assertEqual({call[-1] for call in calls}, {r['commit'] for r in repos.values()})
         self.assertIn('web--build-bundle', tasks)
         self.assertIn('web--typecheck', tasks)
