@@ -2,9 +2,9 @@ import {snapshotFetch} from './snapshot-fetch.js';
 import {deviceLevels,deviceColor} from './levels-model.js';
 import {renderDockerDownloads} from './docker-downloads.js';
 const root=document.getElementById('device-levels');
-root.innerHTML=`<div class="panel-heading"><div><div class="eyebrow">ALL DEVICES · LIVE OVERLAY</div><h2>Device levels</h2><p id="levels-description" class="muted"></p></div><div class="levels-controls"><label>Measure <select id="levels-mode"><option value="network">Network</option><option value="disk">Disk</option><option value="ram">RAM</option><option value="cpu">CPU (%)</option></select></label><label class="levels-smoothing"><input id="levels-smooth" type="checkbox"> Smooth (10 s)</label><label class="levels-smoothing" id="levels-split-label"><input id="levels-split" type="checkbox"> Separate send / receive</label></div></div><div class="levels-workspace"><div class="levels-chart"><div class="levels-key"><span id="levels-scale"></span><span id="levels-status" role="status">Connecting…</span></div><div id="levels-plot" tabindex="0" aria-label="Overlaid device measurements"></div><div class="levels-time"><span id="levels-window">Collecting history…</span><span>Now</span></div></div><aside class="levels-devices"><h3>Devices <small>Click to show or hide</small></h3><div id="levels-legend"></div></aside></div><section id="levels-docker" aria-label="Docker image download context"></section><p id="levels-coverage" class="muted"></p>`;
+root.innerHTML=`<div class="panel-heading"><div><div class="eyebrow">ALL DEVICES · LIVE OVERLAY</div><h2 id="usage-title">Resource usage</h2><p id="levels-description" class="muted"></p></div><div class="levels-controls"><label>Measure <select id="levels-mode"><option value="network">Network</option><option value="disk">Disk</option><option value="ram">RAM</option><option value="cpu">CPU (%)</option></select></label><label class="levels-smoothing"><input id="levels-smooth" type="checkbox"> Smooth (10 s)</label><label class="levels-smoothing" id="levels-split-label"><input id="levels-split" type="checkbox"> Separate send / receive</label></div></div><div class="levels-workspace"><div class="levels-chart"><div class="levels-key"><span id="levels-scale"></span><span id="levels-status" role="status">Connecting…</span></div><div id="levels-plot" tabindex="0" aria-label="Overlaid device measurements"></div><div class="levels-time"><span id="levels-window">Collecting history…</span><span>Now</span></div></div><aside class="levels-devices"><h3>Devices <small>Click to show or hide</small></h3><div id="levels-legend"></div></aside></div><section id="levels-docker" aria-label="Docker image download context"></section><p id="levels-coverage" class="muted"></p>`;
 const selector=document.getElementById('levels-mode'),histories={network:new Map(),disk:new Map(),ram:new Map(),cpu:new Map(),split:new Map()},hidden=new Set();
-let mode='network',latest=[],busy=false,lastData=null,smoothing=false,highlighted=null;
+let mode='cpu',latest=[],busy=false,lastData=null,smoothing=false,highlighted=null;
 const smoothControl=document.getElementById('levels-smooth');
 try{smoothing=localStorage.getItem('lan-map.levels.smooth')==='true';}catch{}
 smoothControl.checked=smoothing;
@@ -27,6 +27,9 @@ function displayPoints(points){
  });
 }
 try{const saved=localStorage.getItem('lan-map.levels');if(['network','disk','ram','cpu'].includes(saved))mode=saved;}catch{}
+const resources=document.createElement('nav');resources.className='resource-tabs';resources.setAttribute('aria-label','Resource');
+for(const [value,title]of [['cpu','CPU'],['ram','Memory'],['disk','Disk'],['network','Network']]){const button=document.createElement('button');button.type='button';button.dataset.measure=value;button.textContent=title;button.onclick=()=>{selector.value=value;selector.dispatchEvent(new Event('change'));};resources.append(button);}
+root.querySelector('.panel-heading').after(resources);
 selector.value=mode;
 selector.onchange=()=>{mode=selector.value;try{localStorage.setItem('lan-map.levels',mode);}catch{}if(lastData)update(...lastData,false);};
 function draw(){
@@ -49,6 +52,8 @@ function draw(){
  document.getElementById('levels-scale').textContent=mode==='network'?(split?'Mb/s · send solid / receive dashed · shared scale':'Mb/s · receive + send · shared auto-scale'):mode==='disk'?'% I/O busy · busiest physical disk':mode==='cpu'?'% CPU busy · across all logical cores':'% RAM used · excludes available cache';
 }
 function update(data,metrics,record=true){
+ for(const button of resources.children)button.setAttribute('aria-pressed',String(button.dataset.measure===mode));
+ document.getElementById('usage-title').textContent={cpu:'CPU usage',ram:'Memory usage',disk:'Disk activity',network:'Network throughput'}[mode];
  document.getElementById('levels-split-label').hidden=mode!=='network';
  renderDockerDownloads(document.getElementById('levels-docker'),data,mode);
  lastData=[data,metrics];latest=rowsFor(data,metrics,historyMode());const now=Date.now();

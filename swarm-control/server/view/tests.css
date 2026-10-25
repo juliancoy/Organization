@@ -123,3 +123,8 @@ main{max-width:1440px;margin:auto;padding:28px}a{color:#b7e4cf}.intro,.panel-hea
 @media(max-width:560px){.dashboard-sections{padding:12px 12px 0}.dashboard-sections a{flex:1;text-align:center;white-space:nowrap}}
 
 .dashboard-hidden{display:none!important}
+
+.resource-tabs{display:flex;gap:8px;margin:20px 0;flex-wrap:wrap}.resource-tabs button{min-width:100px;padding:12px 20px;background:#14232d;border:1px solid #405968;border-radius:7px;color:#cbdce6}.resource-tabs button[aria-pressed=true]{background:#254b42;border-color:#90d9bb;color:#fff}
+.task-manager main{padding-top:12px}.task-manager #device-levels{margin-top:0}.task-manager #levels-plot{height:clamp(280px,43vh,540px)}.task-manager #levels-legend{max-height:clamp(320px,49vh,620px)}
+.task-manager #levels-docker{display:none}.task-manager #levels-description{max-width:80ch}.task-manager #overall-progress{padding:16px 20px}.task-manager #overall-progress p{margin:8px 0}.task-manager #status{font-size:14px}.task-manager .levels-controls>label:first-child{display:none}
+@media(max-width:760px){.resource-tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:5px}.resource-tabs button{min-width:0;padding:10px 5px}.task-manager #levels-plot{height:280px}.task-manager #levels-legend{max-height:320px}}
