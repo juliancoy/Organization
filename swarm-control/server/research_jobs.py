@@ -77,27 +77,9 @@ class ResearchRun(DistributedTests):
                     if self.run.get('stop_requested'):
                         try:self.process.wait(timeout=30)
                         except subprocess.TimeoutExpired:os.killpg(self.process.pid,signal.SIGKILL)
-                    try:
-                        state=json.loads((folder/'state.json').read_text())
-                        jobs=list(state.get('jobs',{}).values())
-                        with self.lock:
-                            self.run['progress']={'total':len(jobs),'completed':sum(j.get('status')=='passed' for j in jobs),
-                                'failed':sum(j.get('status')=='failed' for j in jobs)}
-                            hosts={}
-                            for index,job in enumerate(jobs):
-                                if not job.get('host'):continue
-                                host=hosts.setdefault(job['host'],{'host':job['host'],'status':'passed','jobs':{},'active_tasks':[]})
-                                status=job.get('status')
-                                status=status if status in ('running','passed','failed','stopped') else 'queued'
-                                key='batch-'+str(index)
-                                phase='waiting_for_capacity' if job.get('status')=='waiting_capacity' else 'test'
-                                host['jobs'][key]={'name':'DNA batch','status':status,'phase':phase,'cpus':1,'memory_mb':512}
-                                if status in ('running','queued'):host['status']='running';host['active_tasks'].append(key)
-                                elif status=='failed' and host['status']!='running':host['status']='failed'
-                            self.run['hosts']=list(hosts.values())
-                            self.save()
-                    except (OSError,ValueError):pass
+                    self.read_progress(folder)
                     time.sleep(.5)
+                self.read_progress(folder)
                 self.run['status']='stopped' if self.run.get('stop_requested') else 'passed' if self.process.returncode==0 else 'failed'
         except Exception:
             self.run.update(status='failed',error='Private research job failed; inspect owner-only reports on the data disk')
@@ -105,6 +87,28 @@ class ResearchRun(DistributedTests):
             with self.lock:
                 if self.run.get('stop_requested'):self.run['status']='stopped'
                 self.run['finished']=now();self.running=False;self.save()
+
+    def read_progress(self,folder):
+        try:
+            state=json.loads((folder/'state.json').read_text())
+            jobs=list(state.get('jobs',{}).values())
+            with self.lock:
+                self.run['progress']={'total':len(jobs),'completed':sum(j.get('status')=='passed' for j in jobs),
+                    'failed':sum(j.get('status')=='failed' for j in jobs)}
+                hosts={}
+                for index,job in enumerate(jobs):
+                    if not job.get('host'):continue
+                    host=hosts.setdefault(job['host'],{'host':job['host'],'status':'passed','jobs':{},'active_tasks':[]})
+                    status=job.get('status')
+                    status=status if status in ('running','passed','failed','stopped') else 'queued'
+                    key='batch-'+str(index)
+                    phase='waiting_for_capacity' if job.get('status')=='waiting_capacity' else 'test'
+                    host['jobs'][key]={'name':'DNA batch','status':status,'phase':phase,'cpus':1,'memory_mb':512}
+                    if status in ('running','queued'):host['status']='running';host['active_tasks'].append(key)
+                    elif status=='failed' and host['status']!='running':host['status']='failed'
+                self.run['hosts']=list(hosts.values())
+                self.save()
+        except (OSError,ValueError):pass
 
     def stop(self):
         with self.lock:
