@@ -24,6 +24,70 @@ VERSION = 'lifetech-agent.v1'
 LIMIT = 1024 * 1024
 UNPRIVILEGED_OPS={'status','metrics','worker.policy','image.inspect','registry.read','tests.request','tests.status'}
 
+
+def hardware_sample(root=Path('/sys/bus/pci/devices'), disk=Path.home()):
+    """Read hardware without treating GPU detection as container validation."""
+    usage=shutil.disk_usage(disk)
+    result={'storage':{'path':str(disk),'total_bytes':usage.total,'free_bytes':usage.free},'gpus':[]}
+    vendors={'0x10de':'NVIDIA','0x8086':'Intel','0x1002':'AMD'}
+    for path in sorted(root.glob('*')):
+        try:
+            if not (path/'class').read_text().strip().startswith('0x03'):continue
+            vendor=vendors.get((path/'vendor').read_text().strip(),'Other')
+            result['gpus'].append({'pci_id':path.name,'vendor':vendor,
+                'name':vendor+' GPU '+(path/'device').read_text().strip(),
+                'backend':'CUDA candidate' if vendor=='NVIDIA' else 'Graphics / backend unverified'})
+        except OSError:continue
+    if shutil.which('nvidia-smi'):
+        import csv
+        try:
+            output=subprocess.check_output(['nvidia-smi','--query-gpu=pci.bus_id,name,memory.total,memory.free,utilization.gpu,temperature.gpu','--format=csv,noheader,nounits'],text=True,stderr=subprocess.DEVNULL,timeout=2)
+            rows=[]
+            for fields in csv.reader(output.splitlines()):
+                ident,name,total,free,util,temp=[v.strip() for v in fields]
+                def number(value):
+                    try:return float(value)
+                    except ValueError:return None
+                rows.append({'pci_id':ident,'vendor':'NVIDIA','name':name,'backend':'CUDA candidate',
+                             'memory_total_mib':number(total),'memory_free_mib':number(free),
+                             'utilization_percent':number(util),'temperature_c':number(temp)})
+            result['gpus']=[g for g in result['gpus'] if g['vendor']!='NVIDIA']+rows
+        except (OSError,ValueError,subprocess.SubprocessError):pass
+    return result
+
+
+GPU_SMOKE = r'''import ctypes as c,json
+lib=c.CDLL('libcuda.so.1')
+def api(name,types):
+ f=getattr(lib,name);f.argtypes=types;f.restype=c.c_int
+ def call(*args):
+  code=f(*args)
+  if code:raise RuntimeError(name+' returned CUDA error '+str(code))
+ return call
+P=c.c_void_p;I=c.c_int;U=c.c_uint;S=c.c_size_t;D=c.c_uint64
+api('cuInit',[U])(0);count=I();api('cuDeviceGetCount',[c.POINTER(I)])(c.byref(count))
+if count.value<1:raise RuntimeError('No CUDA devices exposed to the container')
+ptx=b'.version 6.0\n.target sm_52\n.address_size 64\n.visible .entry check_value(.param .u64 out){.reg .u64 %rd; .reg .u32 %r; ld.param.u64 %rd,[out]; mov.u32 %r,42; st.global.u32 [%rd],%r; ret;}\n'
+rows=[]
+for device in range(count.value):
+ name=c.create_string_buffer(256);total=S();ctx=P();module=P();func=P();address=D()
+ api('cuDeviceGetName',[P,I,I])(name,256,device)
+ api('cuDeviceTotalMem_v2',[c.POINTER(S),I])(c.byref(total),device)
+ api('cuCtxCreate_v2',[c.POINTER(P),U,I])(c.byref(ctx),0,device)
+ try:
+  api('cuModuleLoadData',[c.POINTER(P),P])(c.byref(module),c.cast(c.c_char_p(ptx),P))
+  api('cuModuleGetFunction',[c.POINTER(P),P,c.c_char_p])(c.byref(func),module,b'check_value')
+  api('cuMemAlloc_v2',[c.POINTER(D),S])(c.byref(address),4)
+  params=(P*1)(c.cast(c.byref(address),P))
+  api('cuLaunchKernel',[P,U,U,U,U,U,U,U,P,P,P])(func,1,1,1,1,1,1,0,None,params,None)
+  api('cuCtxSynchronize',[])()
+  output=I();api('cuMemcpyDtoH_v2',[P,D,S])(c.byref(output),address,4)
+  if output.value!=42:raise RuntimeError('GPU kernel readback mismatch')
+  rows.append({'name':name.value.decode(),'memory_total_mib':round(total.value/2**20),'kernel_result':output.value})
+ finally:api('cuCtxDestroy_v2',[P])(ctx)
+print(json.dumps({'devices':rows,'status':'passed'}))
+'''
+
 # Workspaces are disposable; coordinator results and small job receipts are separate.
 WORKSPACE_BUDGET=5*1024**3
 MIN_FREE_BYTES=10*1024**3
@@ -199,6 +263,10 @@ class Agent:
         self.lock = threading.RLock()
         self.changed = threading.Condition(self.lock)
         self.nonces = {}
+        self.gpu_lock=threading.Lock()
+        self.gpu_validation=None
+        self.hardware_cache=None
+        self.hardware_sampled=0
         self.jobs = {}
         self.active_workers=set()
         self.storage_status={}
@@ -360,7 +428,29 @@ class Agent:
                 with self.lock:self.registry_transfers-=1;self.busy()
         if op == 'metrics':
             result=subprocess.run([sys.executable,'-c',METRIC_SAMPLE],capture_output=True,text=True,timeout=8,check=True)
-            return json.loads(result.stdout)
+            return {**json.loads(result.stdout),'hardware':self.hardware()}
+        if op == 'gpu.probe':
+            if args:raise ValueError('GPU probe does not accept commands or image overrides')
+            if not self.gpu_lock.acquire(blocking=False):raise RuntimeError('GPU validation already running')
+            try:
+                import docker
+                with self.client() as client:
+                    if 'nvidia' not in client.info().get('Runtimes',{}):raise RuntimeError('NVIDIA container runtime is not configured')
+                    # Existing image only: readiness checks never pull from WAN.
+                    image=client.images.get('python:3.12-bookworm')
+                    container=client.containers.run(image.id,['python','-c',GPU_SMOKE],detach=True,
+                        network_mode='none',read_only=True,cap_drop=['ALL'],security_opt=['no-new-privileges'],
+                        mem_limit='512m',pids_limit=64,nano_cpus=1000000000,
+                        device_requests=[docker.types.DeviceRequest(count=-1,capabilities=[['gpu']])])
+                    try:
+                        status=container.wait(timeout=40)
+                        logs=container.logs().decode(errors='replace')[:4000]
+                        if status['StatusCode']:raise RuntimeError('CUDA kernel probe failed: '+logs[-800:])
+                        result=json.loads(logs)
+                    finally:container.remove(force=True)
+                self.gpu_validation={**result,'verified_at':time.time()}
+                return self.gpu_validation
+            finally:self.gpu_lock.release()
         if op == 'status':
             policy=worker_policy(self.config)
             config = json.loads(self.config.read_text())
@@ -376,6 +466,7 @@ class Agent:
                     'addresses':addresses,'platform':info['OSType']+'/'+info['Architecture'],
                     'worker_policy':policy,'capabilities':['controller-signature','github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','file-queue','snapshot-stage','event-wait','encrypted-backup'],
                     'storage':self.storage_status,
+                    'hardware':self.hardware(info),
                     'preparations':[key for key,j in self.jobs.items() if j['status']=='running' and j.get('prepare_only')],
                     'active_jobs':[key for key,j in self.jobs.items() if j['status']=='running' and not j.get('prepare_only')],'active_image_transfers':self.registry_transfers,'active_uploads':len(self.uploads)}
         if op.startswith('backup.'):
@@ -826,6 +917,14 @@ class Agent:
         timer=threading.Timer(1800,lambda:self.dispatch('p2p.stop',{'id':ident}))
         timer.daemon=True;self.browser_timers[ident]=timer;timer.start()
         return {'started':True}
+
+    def hardware(self, info=None):
+        if self.hardware_cache is None or time.time()-self.hardware_sampled>15:
+            self.hardware_cache=hardware_sample(disk=self.root)
+            self.hardware_sampled=time.time()
+        value={**self.hardware_cache,'gpu_validation':self.gpu_validation}
+        if info is not None:value['cuda_container_runtime']='nvidia' in info.get('Runtimes',{})
+        return value
 
     def close(self):
         self.storage_stop.set()
