@@ -150,3 +150,26 @@ job IDs and results to keep each summary separate. Each dataset gets QC and codi
 consequence summaries; native bcftools statistics provide independent record-count
 checks. The sources, discarded records, annotation engine and tool/reference
 versions must accompany any later scientific comparison.
+
+## Demo-day Genome Explorer
+
+`/genome-explorer.html` is a dependency-free visual tour, linked from Research.
+It intentionally serves aggregate summaries for Julian and five public datasets;
+no individual loci, alleles, reads, local paths, or clinical predictions are exported.
+The static aggregate snapshot is visible to anyone who can access the page.
+
+Rebuild after a completed analysis:
+
+```bash
+curl --fail --location https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/rmsk.txt.gz -o /mnt/PILEDRIVE/genomics-workbench/demo/rmsk.txt.gz
+python3 scripts/genome_demo.py --output swarm-control/server/view/genome-data.js
+```
+
+The builder checks chromosome totals against the completed QC summaries. Charts
+include variant types, genotype categories, called-site depth, ten-megabase windows,
+and functional consequences. RepeatMasker `repClass=Satellite` intervals are merged
+before intersecting variant reference spans (0-based, half-open). Only GRCh38
+samples receive satellite overlap counts. The reference satellite landscape is
+not a personal repeat-length measurement; expansions require separate analysis.
+The generated module contains only reviewed aggregate fields and records the
+repeat-source SHA-256. These are dated snapshots, not live analysis progress.

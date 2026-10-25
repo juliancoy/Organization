@@ -23,6 +23,7 @@ ASSETS.update({'/swarm-status':'swarm-status.html','/swarm-status.js':'swarm-sta
 ASSETS.update({'/research': 'research.html', '/research.html': 'research.html', '/research.js': 'research.js', '/research.css': 'research.css'})
 ASSETS.update({'/'+name: name for name in ('task-manager.html','task-manager.js','task-manager.css','tests.css','levels.js','levels-model.js','cpu-report.js','snapshot-fetch.js','docker-downloads.js')})
 ASSETS['/task-manager']='task-manager.html'
+ASSETS.update({'/'+name: name for name in ('genome-explorer.html','genome-explorer.js','genome-explorer.css','genome-data.js')})
 API='/api/v1/master/codex/'
 
 def audit_auth_failure(error,phase):
