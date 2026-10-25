@@ -72,3 +72,39 @@ class DependencyArchiveTests(unittest.TestCase):
             spec={'cwd':'OrgPortal/web','image':'sha256:a','prepare':['sh','-c','npm ci --no-audit']}
             with patch('distributed_worker.Path.home',return_value=root/'home'):
                 self.assertEqual(prepare_package(work,'web','web',spec,'one',{},lambda *a,**kw:self.fail('Installer must not run')),130)
+
+    def test_parallel_jobs_share_one_install_but_not_writable_trees(self):
+        import concurrent.futures
+        import threading
+        import time
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);works=[self.setup_work(root,str(i)) for i in range(2)]
+            spec={'cwd':'OrgPortal/web','image':'sha256:a','prepare':['sh','-c','npm ci --no-audit']}
+            installed=[];guard=threading.Lock()
+            def runner(work,task,phase,setup,*args,**kwargs):
+                if setup.get('prepare'):
+                    with guard:installed.append(work)
+                    time.sleep(.03)
+                    node=work/'OrgPortal/web/node_modules';node.mkdir();(node/'fixture').write_text('installed')
+                return 0
+            with patch('distributed_worker.Path.home',return_value=root/'home'),patch('distributed_worker.emit'):
+                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                    results=list(pool.map(lambda work:prepare_package(work,'web','web',spec,'fixture',{},runner),works))
+            self.assertEqual(results,[0,0]);self.assertEqual(len(installed),1)
+            self.assertTrue(all((work/'OrgPortal/web/node_modules/fixture').exists() for work in works))
+
+    def test_archive_cannot_extract_outside_its_private_staging_directory(self):
+        import io
+        import tarfile
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);work=self.setup_work(root,'one')
+            spec={'cwd':'OrgPortal/web','image':'sha256:a','prepare':['sh','-c','npm ci --no-audit']}
+            with patch('distributed_worker.Path.home',return_value=root/'home'):
+                cache=dependency_cache(work,'web',spec)
+                with tarfile.open(cache/'installed-v1.tar.gz','w:gz') as tar:
+                    entry=tarfile.TarInfo('node_modules/../../escape');entry.size=7;tar.addfile(entry,io.BytesIO(b'escaped'))
+                installer=Mock(return_value=17)
+                self.assertEqual(prepare_package(work,'web','web',spec,'fixture',{},installer),17)
+                installer.assert_called_once()
+                self.assertFalse((work/'OrgPortal/escape').exists())
+                self.assertFalse((work/'OrgPortal/web/escape').exists())
