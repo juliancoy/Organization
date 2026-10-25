@@ -27,16 +27,16 @@ class ResourceLease:
     dominant resource share get the next fitting slot. After 30 seconds the
     oldest waiter reserves headroom, preventing large jobs from starving.
     """
-    def __init__(self, group, cpus, memory_mb, container='', directory=None, limits=None):
+    def __init__(self, group, cpus, memory_mb, container='', directory=None, limits=None, pids=512):
         if not isinstance(group,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}',group):raise ValueError('Invalid resource group')
-        if type(cpus) is not int or type(memory_mb) is not int or cpus<1 or memory_mb<1:raise ValueError('Invalid resources')
+        if type(cpus) is not int or type(memory_mb) is not int or type(pids) is not int or min(cpus,memory_mb,pids)<1:raise ValueError('Invalid resources')
         if container and not re.fullmatch(r'[a-zA-Z0-9_.-]{1,160}',container):raise ValueError('Invalid container')
         self.directory=Path(directory or os.getenv('SWARM_RESOURCE_DIR',str(Path.home()/'.local/state/swarm-control/resources')))
         self.directory.mkdir(parents=True,exist_ok=True,mode=0o700)
         self.limits=limits
         self.key=secrets.token_hex(16)
         self.path=self.directory/(self.key+'.json')
-        self.row={'id':self.key,'group':group,'cpus':cpus,'memory_mb':memory_mb,'container':container,'created':time.time(),'active':False}
+        self.row={'id':self.key,'group':group,'cpus':cpus,'memory_mb':memory_mb,'pids':pids,'container':container,'created':time.time(),'active':False}
         with self.guard():
             self.file=self.path.open('x+');self.path.chmod(0o600)
             fcntl.flock(self.file,fcntl.LOCK_EX);self.write()
@@ -55,8 +55,24 @@ class ResourceLease:
     def capacity(self):
         if self.limits is not None:return self.limits
         memory={line.split(':',1)[0]:int(line.split()[1])//1024 for line in Path('/proc/meminfo').read_text().splitlines() if len(line.split())>=2 and line.split()[1].isdigit()}
-        return {'cpus':max(1,len(os.sched_getaffinity(0))), 'memory_mb':max(0,memory['MemTotal']-1024),
+        limits={'cpus':max(1,len(os.sched_getaffinity(0))), 'memory_mb':max(0,memory['MemTotal']-1024),
                 'available_mb':max(0,memory['MemAvailable']-1024)}
+        # Respect every finite cgroup ancestor, including the user/service slice
+        # shared by rootless Docker. Reserve room for Docker and agent threads.
+        root=Path('/sys/fs/cgroup')
+        group=next((line.split(':',2)[2] for line in Path('/proc/self/cgroup').read_text().splitlines() if line.startswith('0::')), '/')
+        current=root/group.lstrip('/')
+        bounds=[]
+        for parent in [current,*current.parents]:
+            if parent!=root and root not in parent.parents:continue
+            try:
+                maximum=(parent/'pids.max').read_text().strip()
+                if maximum!='max':bounds.append((int(maximum),int((parent/'pids.current').read_text())))
+            except FileNotFoundError:continue
+        if bounds:
+            limits['pids']=max(0,min(maximum for maximum,_ in bounds)-256)
+            limits['available_pids']=max(0,min(maximum-used for maximum,used in bounds)-256)
+        return limits
 
     def rows(self):
         rows=[]
@@ -79,9 +95,11 @@ class ResourceLease:
         with self.guard():
             if self.row['active']:return True
             limits=self.capacity();rows=self.rows();active=[r for r in rows if r['active']]
-            free={k:limits[k]-sum(r[k] for r in active) for k in ('cpus','memory_mb')}
+            keys=('cpus','memory_mb')+(('pids',) if 'pids' in limits else ())
+            free={k:limits[k]-sum(r.get(k,512) for r in active) for k in keys}
             free['memory_mb']=min(free['memory_mb'],limits.get('available_mb',limits['memory_mb']))
-            if any(self.row[k]>limits[k] for k in ('cpus','memory_mb')):raise ValueError('Task exceeds node resource capacity')
+            if 'pids' in free:free['pids']=min(free['pids'],limits.get('available_pids',limits['pids']))
+            if any(self.row[k]>limits[k] for k in keys):raise ValueError('Task exceeds node resource capacity')
             waiting=sorted((r for r in rows if not r['active']),key=lambda r:(r['created'],r['id']))
             oldest=waiting[0]
             def fits(row):return all(row[k]<=free[k] for k in free)
@@ -89,7 +107,7 @@ class ResourceLease:
                 chosen=oldest if fits(oldest) else None
             else:
                 def share(row):
-                    used={k:sum(r[k] for r in active if r['group']==row['group']) for k in free}
+                    used={k:sum(r.get(k,512) for r in active if r['group']==row['group']) for k in free}
                     return max(used[k]/max(1,limits[k]) for k in free),row['created'],row['id']
                 chosen=next(iter(sorted((r for r in waiting if fits(r)),key=share)),None)
             if not chosen or chosen['id']!=self.key:return False
@@ -563,7 +581,7 @@ class Agent:
                 if not previous:
                     if len(leases)>=128:raise RuntimeError('Resource request queue full')
                     lease=ResourceLease(args.get('group'),args.get('cpus'),args.get('memory_mb'),args.get('container',''),
-                                        directory=os.getenv('SWARM_RESOURCE_DIR',str(self.root/'.resources')))
+                                        directory=os.getenv('SWARM_RESOURCE_DIR',str(self.root/'.resources')),pids=32)
                     timer=threading.Timer(300,lambda:self.expire_resource(ident));timer.daemon=True
                     leases[ident]={'lease':lease,'timer':timer};timer.start()
                 else:
@@ -611,7 +629,7 @@ class Agent:
             lease=None
             try:
                 name='orgportal-test-gpu-'+secrets.token_hex(8)
-                lease=ResourceLease('gpu-probe',1,512,name,directory=os.getenv('SWARM_RESOURCE_DIR',str(self.root/'.resources')))
+                lease=ResourceLease('gpu-probe',1,512,name,directory=os.getenv('SWARM_RESOURCE_DIR',str(self.root/'.resources')),pids=64)
                 if not lease.try_acquire():return {'waiting_capacity':True}
                 import docker
                 with self.client() as client:

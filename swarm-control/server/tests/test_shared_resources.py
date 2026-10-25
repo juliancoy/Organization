@@ -146,3 +146,14 @@ class HardwareAdmissionTests(unittest.TestCase):
             research=Mock(run={'id':'research'})
             with patch('research_jobs.ResearchRun',return_value=research):
                 self.assertIs(service.create_run(selection={'research':'baseline'}),research)
+
+class ProcessBudgetTests(unittest.TestCase):
+    def test_process_headroom_blocks_launch_even_when_cpu_and_memory_fit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            limits={'cpus':8,'memory_mb':8192,'pids':1024,'available_pids':100}
+            lease=ResourceLease('test',1,512,directory=directory,limits=limits,pids=128)
+            try:
+                self.assertFalse(lease.try_acquire())
+                limits['available_pids']=200
+                self.assertTrue(lease.try_acquire())
+            finally:lease.close()

@@ -53,6 +53,7 @@ def catalog(root, specs, repositories=None, bases=None):
             ident = base + '--' + hashlib.sha256(path.encode()).hexdigest()[:16]
             specs[ident] = {**specs[base], 'base': base, 'file': path, 'test': command,
                             'name': specs[base]['name'] + ' · ' + path, 'cpus': 1,
+                            'pids_limit':128 if base in ('monitor','workspace') else 256,
                             'memory_mb': 512 if base in ('monitor','map','workspace') else 1536 if base == 'identity' else 1024}
             if base == 'web':
                 specs[ident]['test']=['npm','test','--','--config','.distributed-tests/'+ident+'.mjs','--maxWorkers=1']

@@ -133,7 +133,9 @@ ordinary test and DNA jobs continue to share remaining worker capacity. P2P
 browsers and GPU kernel probes also reserve their CPU and memory in the same pool.
 
 All test/install containers and private DNA batches acquire CPU and memory from
-one process-safe pool per worker. Combined reservations cannot exceed logical
+one process-safe pool per worker. The pool also reserves each container’s PID
+limit and leaves 256 process/thread slots free in finite cgroup ancestors for host
+services and Docker. Combined reservations cannot exceed logical
 CPUs or physical RAM minus 1 GiB for the host; current available memory is also
 checked. Fitting jobs backfill free slots. Groups with the smallest dominant CPU
 or memory share get priority, and a waiter older than 30 seconds reserves

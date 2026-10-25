@@ -210,7 +210,7 @@ def run(work, suite_id, phase, spec, run_id, env, cancel=None):
     sys.path.insert(0,str(WORKSPACE))
     from scripts.launcher_agent import ResourceLease
     lease=ResourceLease(run_id,int(spec.get('cpus',2)),int(spec.get('memory_mb',3072)),
-                        'orgportal-test-'+run_id+'-'+suite_id,directory=env.get('SWARM_RESOURCE_DIR'))
+                        'orgportal-test-'+run_id+'-'+suite_id,directory=env.get('SWARM_RESOURCE_DIR'),pids=int(spec.get('pids_limit',512)))
     try:
         emit('phase',suite=suite_id,phase='waiting_for_capacity')
         deadline=time.monotonic()+7200
@@ -234,7 +234,7 @@ def _run(work, suite_id, phase, spec, run_id, env, cancel=None):
     if not native:
         cache=download_cache()
         command = ['docker', 'run', '--pull=never', '--rm', '--name', name, '--user', env.get('ORGANIZATION_CONTAINER_USER', str(os.getuid()) + ':' + str(os.getgid())), '-e', 'HOME=/tmp', '--cpus', str(spec.get('cpus',2)), '--memory', str(spec.get('memory_mb',3072))+'m',
-                   '--pids-limit', '512', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+                   '--pids-limit', str(spec.get('pids_limit',512)), '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
                    '--shm-size', '256m', '--network', 'host' if phase == 'prepare' else 'none',
                    '--mount', 'type=bind,src=' + str(work) + ',dst=/work',
                    '--mount', 'type=bind,src=' + str(cache) + ',dst=/cache',
