@@ -221,7 +221,6 @@ class Agent:
                 state.update(status='interrupted', error='Agent restarted during execution')
                 path.write_text(json.dumps(state))
                 self.remove_containers(path.parent.name)
-        self.cleanup_workspaces()
         threading.Thread(target=self.maintain_storage,daemon=True).start()
 
     def cleanup_workspaces(self):
@@ -248,7 +247,9 @@ class Agent:
             return self.storage_status
 
     def maintain_storage(self):
-        while not self.storage_stop.wait(300):self.cleanup_workspaces()
+        while not self.storage_stop.is_set():
+            self.cleanup_workspaces()
+            if self.storage_stop.wait(300):break
 
     def busy(self):
         path=Path('/tmp/launcher-agent-busy.json');temporary=path.with_suffix('.tmp')
