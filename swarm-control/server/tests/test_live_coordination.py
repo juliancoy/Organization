@@ -45,7 +45,7 @@ class LiveCoordinationTests(unittest.TestCase):
             commit=git(source,'rev-parse','HEAD')
             url='https://github.com/example/worker.git'
             agent=Agent.__new__(Agent);agent.root=root/'jobs';agent.root.mkdir()
-            agent.lock=threading.RLock();agent.changed=threading.Condition(agent.lock);agent.jobs={}
+            agent.lock=threading.RLock();agent.storage_lock=threading.RLock();agent.changed=threading.Condition(agent.lock);agent.jobs={}
             agent.config=root/'peers.json';agent.config.write_text(json.dumps({'name':'worker'}))
             cache=agent.root/'git-cache'/(hashlib.sha256(url.encode()).hexdigest()+'.git')
             cache.parent.mkdir()
@@ -115,7 +115,7 @@ class LiveCoordinationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder)
             agent=Agent.__new__(Agent)
-            agent.root=root;agent.lock=threading.RLock();agent.changed=threading.Condition(agent.lock)
+            agent.root=root;agent.lock=threading.RLock();agent.storage_lock=threading.RLock();agent.changed=threading.Condition(agent.lock)
             agent.config=root/'peers.json';agent.config.write_text(json.dumps({'name':'worker'}))
             old='20261024T000000Z-1234abcd';new='20261024T000001Z-1234abcd'
             source=agent.folder(old)/'source';source.mkdir(parents=True)
