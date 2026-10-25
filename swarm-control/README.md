@@ -84,3 +84,19 @@ The user must approve installation on the Galaxy.
 
 Run the global distributed suite through the coordinator or the Swarm status
 page. Queueing tests publishes reviewed source revisions before execution.
+
+## CPU reporting
+
+CPU load uses differences in Linux counters across the entire interval between
+snapshots, normally five seconds. No one-second sampling gaps or root privileges
+are required. Startup, counter resets, reboot and long gaps warm up without
+reporting idle. Missing, permission-denied and stale samples remain unmeasured.
+Agents need the current metrics implementation; old agents show update required.
+
+The fleet average is weighted by measured logical CPUs. A second average includes
+only machines currently executing tests, including active reruns. Both describe
+all processes on those machines, not CPU time attributed to test containers.
+The UI shows coverage, interval, age and execution phase. I/O wait and stolen CPU
+time are reported separately from executing CPU time. CPU pressure is the kernel's
+10-second average of time tasks wait for CPU. Container CPU quotas still constrain
+execution; they do not change the whole-machine utilization denominator.

@@ -1,3 +1,4 @@
+import {hostCpuDetail,hostCpuContext} from './cpu-report.js';
 import {snapshotFetch} from './snapshot-fetch.js';
 import {containerWebsites} from './container-websites.js';
 import {breadcrumbNav,setBreadcrumbs} from './breadcrumbs.js';
@@ -21,7 +22,7 @@ function render(){
  const machine=report?.run?.hosts?.find(item=>item.host===host);
  heading.textContent=host+' · CPU & test terminal';
  const cpu=cpuReport?.hosts?.find(item=>item.host===host);
- cpuSummary.textContent=cpu?.status==='live'?cpu.cpus+' logical CPUs · '+cpu.percent.toFixed(1)+'% total utilization':'CPU measurements '+(cpu?.status||'unavailable');
+ cpuSummary.textContent=cpu?hostCpuDetail(cpu)+'\n'+hostCpuContext(cpu):'CPU measurements unavailable';
  cpuSummary.textContent+='\n'+hardwareLines(cpu?.hardware).join('\n');cpuSummary.style.whiteSpace='pre-line';
  grid.replaceChildren();
  if(cpu?.status==='live')for(const core of cpu.logical_cpus||[]){

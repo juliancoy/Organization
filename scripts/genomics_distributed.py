@@ -96,8 +96,8 @@ def execute(host,batch):
         host['image'],'python','-c',WORKER,batch['kind']])
     started=time.monotonic()
     try:
-        result=subprocess.run(command,input=batch['payload'],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=600)
-        if result.returncode:raise RuntimeError('Worker computation or SSH transport failed')
+        result=subprocess.run(command,input=batch['payload'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=180)
+        if result.returncode:raise RuntimeError('Worker failed ('+str(result.returncode)+'): '+result.stderr.decode(errors='replace')[:400])
     except Exception:
         try:subprocess.run(shell_command(host,['docker','rm','-f',name]),stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=20)
         except (OSError,subprocess.SubprocessError):pass
@@ -160,7 +160,7 @@ class Run:
                     with self.lock:
                         self.results.append(result);self.state['jobs'][item['id']].update(status='passed',elapsed_seconds=result['elapsed_seconds'],input_bytes=result['input_bytes']);self.save()
                 except Exception as error:
-                    with self.lock:self.state['jobs'][item['id']].update(status='failed',reason=type(error).__name__);self.save()
+                    with self.lock:self.state['jobs'][item['id']].update(status='failed',reason=type(error).__name__+': '+str(error)[:500]);self.save()
             finally:self.queue.task_done()
 
     def run(self,sources,limit):

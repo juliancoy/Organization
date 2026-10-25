@@ -250,7 +250,58 @@ def worker_environment(home):
     return env
 
 
-METRIC_SAMPLE = "import json,time,os,socket,subprocess\nfrom pathlib import Path\ndef read():\n result={}\n for line in Path('/proc/stat').read_text().splitlines():\n  fields=line.split()\n  if fields and (fields[0]=='cpu' or fields[0].startswith('cpu') and fields[0][3:].isdigit()):\n   values=[int(v) for v in fields[1:9]]\n   result[fields[0]]=(sum(values),values[3]+values[4])\n return result\ndef io():\n result={}\n for device in Path('/sys/block').iterdir():\n  if device.resolve().as_posix().startswith('/sys/devices/virtual/'):continue\n  try:\n   v=(device/'stat').read_text().split();result[device.name]=(int(v[9]),int(v[2])+int(v[6]))\n  except (OSError,ValueError,IndexError):pass\n return result\ndef net():\n result=0\n for device in Path('/sys/class/net').iterdir():\n  if device.name=='lo' or '/virtual/' in str(device.resolve()):continue\n  try:result+=sum(int((device/'statistics'/field).read_text()) for field in ['rx_bytes','tx_bytes'])\n  except (OSError,ValueError):pass\n return result\na=read();ia=io();na=net();start=time.monotonic();time.sleep(1);b=read();ib=io();nb=net();elapsed=time.monotonic()-start\ndef utilization(key):\n if key not in a:return None\n total=b[key][0]-a[key][0];idle=b[key][1]-a[key][1]\n return round(max(0,min(100,100*(total-idle)/total)),1) if total>0 else None\ncores=[{'id':int(key[3:]),'percent':utilization(key)} for key in b if key!='cpu']\nmemory={}\nfor line in Path('/proc/meminfo').read_text().splitlines():\n k,v=line.split(':',1);memory[k]=int(v.split()[0])*1024\nram_total=memory.get('MemTotal',0);ram_used=max(0,ram_total-memory.get('MemAvailable',ram_total))\ndisks=[max(0,min(100,(ib[k][0]-ia[k][0])/elapsed/10)) for k in ib if k in ia]\ntry:ips=subprocess.check_output(['hostname','-I'],text=True,timeout=1).split()\nexcept (OSError,subprocess.SubprocessError):ips=[]\nprint(json.dumps({'percent':utilization('cpu'),'cpus':len(cores),'logical_cpus':cores,\n 'observed_hostname':socket.gethostname(),'addresses':ips,\n 'ram_percent':round(100*ram_used/ram_total,1) if ram_total else None,\n 'ram_used_bytes':ram_used,'ram_total_bytes':ram_total,\n 'disk_busy_percent':round(max(disks),1) if disks else None,\n 'disk_basis':'Busiest physical block device; Linux I/O busy time',\n 'network_mbps':round(max(0,nb-na)*8/elapsed/1000000,4)}))\n"
+METRIC_SAMPLE = "import json,time,socket,subprocess\nfrom pathlib import Path\nresult={'monotonic':time.monotonic(),'sampled_at':time.time(),'cpu_counters':None,'cpu_error':None,\n        'ram_percent':None,'ram_used_bytes':None,'ram_total_bytes':None,'disk_counters':{},'network_bytes':None,\n        'disk_basis':'Busiest physical block device; Linux I/O busy time','cpu_pressure_some_percent':None}\ntry:\n result['boot_id']=Path('/proc/sys/kernel/random/boot_id').read_text().strip()\nexcept OSError:result['boot_id']=None\ntry:\n result['cpu_counters']={v[0]:[int(x) for x in v[1:9]] for line in Path('/proc/stat').read_text().splitlines() if (v:=line.split()) and (v[0]=='cpu' or v[0].startswith('cpu') and v[0][3:].isdigit())}\nexcept PermissionError:result['cpu_error']='permission_denied'\nexcept (OSError,ValueError):result['cpu_error']='unavailable'\ntry:\n memory={k:int(v.split()[0])*1024 for line in Path('/proc/meminfo').read_text().splitlines() for k,v in [line.split(':',1)]}\n total=memory['MemTotal'];used=total-memory['MemAvailable']\n result.update(ram_total_bytes=total,ram_used_bytes=used,ram_percent=round(100*used/total,1))\nexcept (OSError,ValueError,KeyError):pass\ntry:\n for device in Path('/sys/block').iterdir():\n  if '/virtual/' in str(device.resolve()):continue\n  try:result['disk_counters'][device.name]=int((device/'stat').read_text().split()[9])\n  except (OSError,ValueError,IndexError):pass\nexcept OSError:pass\ntry:\n counters=[]\n for device in Path('/sys/class/net').iterdir():\n  if device.name=='lo' or '/virtual/' in str(device.resolve()):continue\n  counters.append(sum(int((device/'statistics'/field).read_text()) for field in ('rx_bytes','tx_bytes')))\n result['network_bytes']=sum(counters) if counters else None\nexcept (OSError,ValueError):pass\ntry:\n pressure=next(line.split() for line in Path('/proc/pressure/cpu').read_text().splitlines() if line.startswith('some '))\n result['cpu_pressure_some_percent']=float(dict(v.split('=') for v in pressure[1:])['avg10'])\nexcept (OSError,ValueError,KeyError,StopIteration):pass\ntry:result['addresses']=subprocess.check_output(['hostname','-I'],text=True,timeout=1).split()\nexcept (OSError,subprocess.SubprocessError):result['addresses']=[]\nresult['observed_hostname']=socket.gethostname()\nprint(json.dumps(result))\n"
+
+class ResourceSampler:
+    """Counter deltas span the entire interval between snapshots, including RPC gaps."""
+    def __init__(self, reader=None):
+        self.reader=reader or self.capture
+        self.previous=None
+        self.lock=threading.Lock()
+
+    @staticmethod
+    def capture():
+        result=subprocess.run([sys.executable,'-c',METRIC_SAMPLE],capture_output=True,text=True,timeout=5,check=True)
+        return json.loads(result.stdout)
+
+    def sample(self):
+        with self.lock:
+            current=self.reader();previous=self.previous;self.previous=current
+            counters=current['cpu_counters']
+            result={k:v for k,v in current.items() if k not in ('cpu_counters','disk_counters','network_bytes','monotonic','boot_id')}
+            result.update(measurement_version=2,percent=None,logical_cpus=[],window_seconds=None,
+                          cpu_iowait_percent=None,cpu_steal_percent=None,network_mbps=None,disk_busy_percent=None,
+                          cpu_busy_logical_cpus=None)
+            result['cpus']=len([k for k in counters or {} if k!='cpu']) or None
+            if current.get('cpu_error'):
+                result['status']=current['cpu_error'];return result
+            elapsed=current['monotonic']-previous['monotonic'] if previous else 0
+            if not previous or previous.get('boot_id')!=current.get('boot_id') or not 0<elapsed<=30:
+                result['status']='warming';return result
+            def delta(key):
+                before=(previous.get('cpu_counters') or {}).get(key);after=(counters or {}).get(key)
+                if before is None or after is None or len(before)!=len(after):return None
+                values=[b-a for a,b in zip(before,after)]
+                return values if all(v>=0 for v in values) and sum(values)>0 else None
+            def percent(values,index=None):
+                if values is None:return None
+                value=values[index] if index is not None else sum(values)-values[3]-values[4]-values[7]
+                return round(100*value/sum(values),1)
+            aggregate=delta('cpu')
+            if aggregate is None or set(previous.get('cpu_counters') or {})!=set(counters or {}):
+                result['status']='warming';return result
+            result.update(status='live',percent=percent(aggregate),window_seconds=round(elapsed,3),
+                          cpu_iowait_percent=percent(aggregate,4),cpu_steal_percent=percent(aggregate,7),
+                          logical_cpus=[{'id':int(k[3:]),'percent':percent(delta(k))} for k in counters if k!='cpu'])
+            result['cpu_busy_logical_cpus']=round(result['percent']*result['cpus']/100,2)
+            disks=[100*(value-previous.get('disk_counters',{}).get(k,value))/(elapsed*1000)
+                   for k,value in current.get('disk_counters',{}).items()
+                   if k in previous.get('disk_counters',{}) and value>=previous['disk_counters'][k]]
+            result['disk_busy_percent']=round(min(100,max(disks)),1) if disks else None
+            if current.get('network_bytes') is not None and previous.get('network_bytes') is not None:
+                change=current['network_bytes']-previous['network_bytes']
+                if change>=0:result['network_mbps']=round(change*8/elapsed/1000000,4)
+            return result
 
 
 class Agent:
@@ -263,6 +314,7 @@ class Agent:
         self.lock = threading.RLock()
         self.changed = threading.Condition(self.lock)
         self.nonces = {}
+        self.metrics_sampler=ResourceSampler()
         self.gpu_lock=threading.Lock()
         self.gpu_validation=None
         self.hardware_cache=None
@@ -427,8 +479,7 @@ class Agent:
             finally:
                 with self.lock:self.registry_transfers-=1;self.busy()
         if op == 'metrics':
-            result=subprocess.run([sys.executable,'-c',METRIC_SAMPLE],capture_output=True,text=True,timeout=8,check=True)
-            return {**json.loads(result.stdout),'hardware':self.hardware()}
+            return {**self.metrics_sampler.sample(),'hardware':self.hardware()}
         if op == 'gpu.probe':
             if args:raise ValueError('GPU probe does not accept commands or image overrides')
             if not self.gpu_lock.acquire(blocking=False):raise RuntimeError('GPU validation already running')

@@ -1,3 +1,4 @@
+import {hostCpuDetail,hostCpuContext,percent} from './cpu-report.js';
 import {cpuColor} from './cpu-colors.js';
 import {hardwareLines} from './hardware.js';
 let hosts=[];
@@ -10,7 +11,8 @@ function decorate(){
   if(grid.dataset.sample===signature)continue;grid.dataset.sample=signature;
   grid.replaceChildren();
   if(host?.status==='live')for(const core of host.logical_cpus||[]){const tile=document.createElement('span');tile.style.backgroundColor=cpuColor(core.percent);tile.title='CPU '+core.id+': '+(core.percent??'unknown')+'%';grid.append(tile);}
-  caption.textContent=host?.status==='live'?host.percent.toFixed(1)+'% CPU · '+host.cpus+' logical CPUs':'CPU '+(host?.status||'measuring…');
+  caption.textContent=host?.status==='live'?percent(host.percent)+' CPU · '+host.cpus+' logical CPUs':'CPU '+(host?.status||'measuring…');
+  caption.title=host?hostCpuDetail(host)+' · '+hostCpuContext(host):'No CPU measurement yet';
   let hardware=node.querySelector('.machine-hardware');
   if(!hardware){hardware=document.createElement('small');hardware.className='machine-hardware';node.append(hardware);}
   hardware.textContent=hardwareLines(host?.hardware).join('\n');

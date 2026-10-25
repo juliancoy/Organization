@@ -71,3 +71,5 @@ header{height:auto;min-height:86px;flex-wrap:wrap;padding-top:14px;padding-botto
 .embedded-map-controls button,.embedded-map-controls .geo-control,.embedded-map-controls span{font-size:13px;min-height:38px}
 .edge-hover,.edge-hover small,.edge-hover-scope,.edge-hover-artefact strong,.edge-hover-artefact>span{font-size:13px;line-height:1.6;color:#c7d8e2}
 .embedded-lan .inspector-panel{font-size:14px;line-height:1.6}
+
+#cpu-active{display:block;font-size:14px;margin-top:6px}#cpu-hosts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr))}.cpu-host{min-width:0;overflow-wrap:anywhere}
