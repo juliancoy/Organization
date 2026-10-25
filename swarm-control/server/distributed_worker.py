@@ -46,7 +46,7 @@ SUITES = {
             'prepare': ['sh', '-c', 'npm ci --prefix ../org-worker --omit=dev --no-audit --no-fund && npm ci --no-audit --no-fund'],
             'test': ['sh', '-c', 'npm test -- --maxWorkers=2 && npm run build']},
     'visual': {'name': 'Portal layout renders', 'cwd': 'OrgPortal/web', 'image': BROWSER,
-               'prepare': ['npm', 'ci', '--no-audit', '--no-fund'],
+               'prepare': ['sh', '-c', 'npm ci --prefix ../org-worker --omit=dev --no-audit --no-fund && npm ci --no-audit --no-fund'],
                'test': ['node', 'scripts/render-layout-fixtures.mjs', '/work/visual-artifacts']},
     'identity': {'name': 'Identity API and browser regression', 'cwd': 'PIdP/serverless', 'image': BROWSER,
                  'prepare': ['npm', 'ci', '--no-audit', '--no-fund'],
