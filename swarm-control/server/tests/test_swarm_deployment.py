@@ -33,6 +33,11 @@ class RtcTests(unittest.IsolatedAsyncioTestCase):
     async def test_actual_datachannel_transfer_digest_and_revoked_session(self):
         import asyncio
         from aiortc import RTCPeerConnection,RTCConfiguration
+        # Distributed containers have only loopback. Exercise real UDP/DTLS/SCTP
+        # between these peers without requiring an external interface or STUN.
+        addresses=patch('aioice.ice.get_host_addresses',return_value=['127.0.0.1'])
+        addresses.start()
+        self.addCleanup(addresses.stop)
         peer=RTCPeerConnection(RTCConfiguration(iceServers=[]))
         manager=deploy.Deployment();channel=peer.createDataChannel('swarm-control-test.v1')
         opened=asyncio.Event();responses=asyncio.Queue()

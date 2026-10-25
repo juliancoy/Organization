@@ -12,6 +12,6 @@
     "test": "python3 run.py test"
   },
   "devDependencies": {
-    "@playwright/test": "^1.59.1"
+    "@playwright/test": "1.59.1"
   }
 }
