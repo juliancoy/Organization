@@ -32,14 +32,15 @@ export async function reviewCodexUi(output){
    if(url.pathname==='/api/v1/swarm/status'){res.setHeader('Content-Type','application/json');res.statusCode=statusUnauthorized?401:200;res.end(JSON.stringify(lanFixture));return}
    if(url.pathname==='/research.html'){res.setHeader('Content-Type','text/html');res.end(await readFile(join(view,'research.html')));return}
    if(url.pathname==='/swarm-status'){res.setHeader('Content-Type','text/html');res.end(await readFile(join(view,'swarm-status.html')));return}
+   if(url.pathname==='/api/v1/master/codex/queue'&&req.method==='GET'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({messages:[]}));return}
    if(url.pathname.startsWith('/api/')){
     res.setHeader('Content-Type','application/json')
-    if(req.method==='POST'){let body='';for await(const chunk of req)body+=chunk;commands.push(JSON.parse(body));await new Promise(resolve=>setTimeout(resolve,300));if(failNext){failNext=false;res.writeHead(503);res.end(JSON.stringify({error:{message:'Synthetic uncertain delivery'}}));return}res.end(JSON.stringify({accepted:true,message:'Instruction accepted by the synthetic thread.'}));return}
+    if(req.method==='POST'){let body='';for await(const chunk of req)body+=chunk;commands.push({...JSON.parse(body),...(url.pathname.endsWith('/queue')?{action:'send'}:{})});await new Promise(resolve=>setTimeout(resolve,300));if(failNext){failNext=false;res.writeHead(503);res.end(JSON.stringify({error:{message:'Synthetic uncertain delivery'}}));return}res.end(JSON.stringify({accepted:true,message:'Instruction accepted by the synthetic thread.'}));return}
     const item=threads.find(t=>url.pathname.endsWith('/'+t.id))
     res.end(JSON.stringify(item?{...item,model:'Codex',owner_connected:ownerConnected,messages:[{role:'user',text:'Make the remote workspace easier to scan and use on a phone.'},{role:'assistant',text:'I’ll organize the conversation list, clarify connection status and keep the instruction composer stable while updates arrive.\n\nThe active conversation will stay visible, and your draft will be preserved.'}]}:{threads,next_offset:null,machine:'Fixture workstation',connected:true}));return
    }
    if(url.pathname==='/'){res.setHeader('Content-Type','text/html');res.end('<!doctype html><html lang="en"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Codex UI review</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/codex.css"><body><main><section id="codex-context"></section></main><script type="module" src="/codex.js"></script></body></html>');return}
-   if(!['/task-manager.js','/task-manager.css','/tests.css','/levels.js','/levels-model.js','/cpu-report.js','/snapshot-fetch.js','/docker-downloads.js','/research.css','/research.js','/style.css','/codex.css','/codex.js','/codex-screenshots.js','/swarm-status.css','/swarm-status.js','/swarm-machines.js'].includes(url.pathname)){res.writeHead(404).end();return}
+   if(!['/task-manager.js','/task-manager.css','/tests.css','/levels.js','/levels-model.js','/cpu-report.js','/snapshot-fetch.js','/docker-downloads.js','/research.css','/research.js','/style.css','/codex.css','/codex.js','/codex-screenshots.js','/codex-voice.js','/codex-queue.js','/swarm-status.css','/swarm-status.js','/swarm-machines.js'].includes(url.pathname)){res.writeHead(404).end();return}
    res.setHeader('Content-Type',url.pathname.endsWith('.js')?'text/javascript':'text/css');res.end(await readFile(join(view,url.pathname.slice(1))))
   }catch(error){res.writeHead(500).end(error.message)}
  })
@@ -162,7 +163,7 @@ export async function reviewCodexUi(output){
   threads[0].activity='running';
   ownerConnected=false;
   await page.waitForFunction(()=>document.querySelector('.codex-thread-info')?.dataset.connected==='false',{},{timeout:8000})
-  assert.equal(await page.getByRole('button',{name:'Send instruction',exact:true}).isDisabled(),true);ownerConnected=true
+  await page.locator('textarea').fill('Queue while disconnected');assert.equal(await page.getByRole('button',{name:'Send instruction',exact:true}).isDisabled(),false);ownerConnected=true
   await page.getByRole('button',{name:'Lock',exact:true}).click();assert.equal(await page.locator('.codex-workspace').isVisible(),false)
   assert.equal(await page.locator('textarea').inputValue(),'')
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false)

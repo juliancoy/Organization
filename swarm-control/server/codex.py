@@ -356,6 +356,13 @@ def mutate(body):
 
 def rest(method, path, query, body):
     try:
+        if path.endswith(('/codex/queue','/codex/queue/cancel')):
+            from message_queue import manager
+            queue=manager()
+            if method=='GET' and path.endswith('/queue'):return 200,queue.view(query.get('thread_id',[''])[0])
+            if method=='POST' and path.endswith('/cancel'):return 200,queue.cancel(body)
+            if method=='POST':return 202,queue.submit(body)
+            raise ContextError('Unsupported queue operation')
         if method == 'GET' and path.endswith('/codex/threads'):
             offset = int(query.get('offset', ['0'])[0])
             if offset < 0 or offset > 100000:

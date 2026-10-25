@@ -68,6 +68,13 @@ def main():
         if not (RUNTIME / 'bin/python').exists():
             venv.EnvBuilder(with_pip=True).create(RUNTIME)
         run(RUNTIME / 'bin/python', '-m', 'pip', 'install', '-r', APP / 'requirements.txt', cwd=ROOT)
+        # Resolve locally or over LAN before allowing a registry download.
+        whisper_image='ghcr.io/ggml-org/whisper.cpp@sha256:3f86f6bcaa1d83f5c73a578ff263888570eb82688474bf587dcc51e6f3672a1c'
+        if subprocess.run(['docker','image','inspect',whisper_image],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode:
+            sys.path.insert(0,str(ROOT))
+            from docker_utils import ensure_image
+            ensure_image(whisper_image)
+        run('docker','compose','-p','swarm-voice','-f',source/'server/whisper/compose.yaml','up','-d','--pull','never')
         # One-time data migration preserves credentials and expiry, without an old API.
         config.mkdir(parents=True,exist_ok=True,mode=0o700)
         integration=Path.home()/'.config/lan-monitor/orgportal.json'

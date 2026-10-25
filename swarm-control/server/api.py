@@ -24,6 +24,7 @@ ASSETS.update({'/research': 'research.html', '/research.html': 'research.html', 
 ASSETS.update({'/'+name: name for name in ('task-manager.html','task-manager.js','task-manager.css','tests.css','levels.js','levels-model.js','cpu-report.js','snapshot-fetch.js','docker-downloads.js')})
 ASSETS['/task-manager']='task-manager.html'
 ASSETS.update({'/'+name: name for name in ('genome-explorer.html','genome-explorer.js','genome-explorer.css','genome-data.js')})
+ASSETS.update({'/'+name:name for name in ('codex-voice.js','codex-queue.js')})
 API='/api/v1/master/codex/'
 
 def audit_auth_failure(error,phase):
@@ -109,10 +110,22 @@ class Handler(BaseHTTPRequestHandler):
             name=ASSETS[path];return self.reply(200,(VIEW/name).read_bytes(),mimetypes.guess_type(name)[0] or 'application/octet-stream')
         pairing=self.command=='POST' and path in ('/pair','/logout')
         deployment=path in ('/api/v1/test-app/status','/api/v1/test-app/offer','/api/v1/test-app/download')
-        valid_read=self.command=='GET' and (path in ('/api/v1/swarm/task-manager','/api/v1/swarm/status','/api/v1/swarm/session','/api/v1/swarm/research','/api/v1/swarm/research/jobs') or path==API+'threads' or path.startswith(API+'threads/') or path in ('/api/v1/test-app/status','/api/v1/test-app/download'))
-        valid_write=self.command=='POST' and path in (API+'commands','/api/v1/swarm/research/jobs','/api/v1/test-app/offer','/api/v1/swarm/tests/request')
+        valid_read=self.command=='GET' and (path in ('/api/v1/swarm/task-manager','/api/v1/swarm/status','/api/v1/swarm/session','/api/v1/swarm/research','/api/v1/swarm/research/jobs') or path==API+'queue' or path==API+'threads' or path.startswith(API+'threads/') or path in ('/api/v1/test-app/status','/api/v1/test-app/download'))
+        valid_write=self.command=='POST' and path in (API+'commands',API+'queue',API+'queue/cancel',API+'transcribe','/api/v1/swarm/research/jobs','/api/v1/test-app/offer','/api/v1/swarm/tests/request')
         if not (valid_read or valid_write or pairing):return self.reply(404,{'error':{'message':'Not found'}})
         if path not in ('/pair','/logout') and not devices.valid(self.device()):return self.reply(401,{'error':{'message':'Sign in with PIdP to reconnect to CompAI'}})
+        if path==API+'transcribe':
+            from voice import transcribe,VoiceError,MAX_AUDIO,TYPES
+            try:
+                if self.headers.get('Origin')!=origin:return self.reply(403,{'error':{'message':'Same-origin browser required'}})
+                if self.headers.get('Transfer-Encoding') or len(self.headers.get_all('Content-Length',[]))!=1:raise ValueError()
+                kind=self.headers.get('Content-Type','');size=int(self.headers['Content-Length'])
+                if kind.split(';')[0] not in TYPES or not 32<=size<=MAX_AUDIO:raise ValueError()
+                self.connection.settimeout(20);audio=self.rfile.read(size)
+                if len(audio)!=size:raise ValueError()
+                return self.reply(200,transcribe(audio,kind))
+            except VoiceError as error:return self.reply(error.status,{'error':{'message':str(error)}})
+            except (ValueError,OSError):return self.reply(400,{'error':{'message':'Invalid audio upload'}})
         body=None
         try:
             if valid_write or pairing:
@@ -120,7 +133,7 @@ class Handler(BaseHTTPRequestHandler):
                 if self.headers.get('Transfer-Encoding') or len(self.headers.get_all('Content-Length',[]))!=1:raise ValueError()
                 if self.headers.get('Content-Type','').split(';')[0]!='application/json':raise ValueError()
                 size=int(self.headers.get('Content-Length','-1'))
-                if not 0<size<=(6*1024*1024 if path==API+'commands' else 65536):raise ValueError()
+                if not 0<size<=(6*1024*1024 if path in (API+'commands',API+'queue') else 65536):raise ValueError()
                 self.connection.settimeout(10)
                 raw=self.rfile.read(size)
                 if len(raw)!=size:raise ValueError()
@@ -162,6 +175,14 @@ class Handler(BaseHTTPRequestHandler):
                 device=self.device()
                 valid=lambda: devices.valid(device)
                 return self.reply(200,manager().offer(body,valid))
+            if path in (API+'queue',API+'queue/cancel'):
+                from message_queue import manager
+                try:
+                    queue=manager()
+                    if path.endswith('/cancel'):return self.reply(200,queue.cancel(body))
+                    if self.command=='POST':return self.reply(202,queue.submit(body))
+                    return self.reply(200,queue.view(parse_qs(urlsplit(self.path).query).get('thread_id',[''])[0]))
+                except (ValueError,codex.ContextError):return self.reply(400,{'error':{'message':'Invalid queue request or unavailable thread'}})
             code,value=codex.rest(self.command,path,parse_qs(urlsplit(self.path).query),body)
             self.reply(code,value)
         except ImportError:return self.reply(503,{'error':{'message':'P2P deployment dependencies are not installed on CompAI'}})
@@ -213,4 +234,6 @@ if __name__=='__main__':
     import threading
     issuer=ThreadingHTTPServer(('127.0.0.1',8092),LocalPairingHandler);issuer.daemon_threads=True;issuer.public_origin=origin
     threading.Thread(target=issuer.serve_forever,daemon=True).start()
+    from message_queue import manager
+    manager(start_worker=True)
     server.serve_forever()

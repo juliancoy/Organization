@@ -59,6 +59,20 @@ def handle(handler,api):
             launcher_route=(handler.command=='GET' and path==API+'/status') or (handler.command=='POST' and path==API+'/test-requests')
             if not launcher_route or not authorized(handler.headers,'launcher'):
                 raise APIError(401,'unauthorized','A configured master bearer token is required')
+        if codex and path==API+'/codex/transcribe':
+            from voice import transcribe,VoiceError,MAX_AUDIO,TYPES
+            try:
+                if handler.command!='POST':raise VoiceError('POST required',405)
+                if origin not in ('http://'+host,'https://'+host):raise VoiceError('Same-origin browser required',403)
+                if handler.headers.get('Transfer-Encoding') or len(handler.headers.get_all('Content-Length',[]))!=1:raise ValueError()
+                kind=handler.headers.get('Content-Type','');size=int(handler.headers['Content-Length'])
+                if kind.split(';')[0] not in TYPES or not 32<=size<=MAX_AUDIO:raise ValueError()
+                handler.connection.settimeout(20);audio=handler.rfile.read(size)
+                if len(audio)!=size:raise ValueError()
+                send(handler,200,transcribe(audio,kind))
+            except VoiceError as exc:send(handler,exc.status,{'error':{'message':str(exc)}})
+            except (ValueError,OSError):send(handler,400,{'error':{'message':'Invalid audio upload'}})
+            return True
         if mcp and handler.command!='POST':
             send(handler,405,{'error':{'code':'method_not_allowed','message':'This stateless MCP endpoint accepts POST; no SSE session is opened'}},{'Allow':'POST'});return True
         if handler.command not in ('GET','POST'):
@@ -70,7 +84,7 @@ def handle(handler,api):
             if media!='application/json':raise APIError(415,'unsupported_media_type','Use application/json')
             try:size=int(handler.headers.get('Content-Length','-1'))
             except ValueError:raise APIError(400,'invalid_body','Invalid Content-Length') from None
-            limit=6*1024*1024 if path==API+'/codex/commands' else MAX_BODY
+            limit=6*1024*1024 if path in (API+'/codex/commands',API+'/codex/queue') else MAX_BODY
             if not 0<=size<=limit:raise APIError(413,'body_too_large','Request exceeds the size limit')
             if mcp and not {'application/json','text/event-stream'}.issubset(set(x.split(';')[0].strip() for x in handler.headers.get('Accept','').split(','))):
                 raise APIError(406,'not_acceptable','MCP clients must accept application/json and text/event-stream')

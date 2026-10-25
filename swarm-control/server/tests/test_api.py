@@ -30,8 +30,8 @@ class RemoteBoundaryTests(unittest.TestCase):
         c.request(method,path,body=body,headers=headers);r=c.getresponse();status=r.status;self.last_cookie=r.getheader('Set-Cookie');r.read();c.close();return status
     def test_private_data_and_commands_require_owner_credentials(self):
         with patch('api.codex.rest') as rest:
-            for path in ['/api/v1/master/codex/threads','/api/v1/master/codex/commands']:
-                self.assertEqual(self.request(path,'POST' if path.endswith('commands') else 'GET'),401)
+            for path in ['/api/v1/master/codex/threads','/api/v1/master/codex/commands','/api/v1/master/codex/queue','/api/v1/master/codex/transcribe']:
+                self.assertEqual(self.request(path,'POST' if path.endswith(('commands','transcribe')) else 'GET'),401)
             self.assertEqual(self.request('/api/v1/master/status',token='owner'*16),404)
             self.assertEqual(self.request('/../../.env',token='owner'*16),404)
             rest.assert_not_called()
@@ -170,6 +170,29 @@ class RemoteBoundaryTests(unittest.TestCase):
             request.assert_not_called()
             self.assertEqual(self.request(path,'POST',origin='https://compai.example',body={},cookie=self.cookie),202)
             request.assert_called_once_with()
+
+    def test_voice_requires_session_origin_and_bounded_audio(self):
+        def upload(cookie=None,origin='https://compai.example',kind='audio/wav'):
+            c=http.client.HTTPConnection(*self.server.server_address)
+            headers={'Host':'compai.example','Origin':origin,'Content-Type':kind}
+            if cookie:headers['Cookie']=cookie
+            c.request('POST','/api/v1/master/codex/transcribe',body=b'RIFF'+b'0'*60,headers=headers)
+            r=c.getresponse();status=r.status;r.read();c.close();return status
+        with patch('voice.transcribe',return_value={'text':'draft only'}) as speech:
+            self.assertEqual(upload(),401)
+            self.assertEqual(upload(self.cookie,'https://evil.example'),403)
+            self.assertEqual(upload(self.cookie,kind='text/plain'),400)
+            speech.assert_not_called()
+            self.assertEqual(upload(self.cookie),200);speech.assert_called_once()
+
+    def test_queue_mutation_requires_session_and_origin(self):
+        with patch('message_queue.manager') as factory:
+            factory.return_value.submit.return_value={'accepted':True}
+            path='/api/v1/master/codex/queue'
+            self.assertEqual(self.request(path,'POST',origin='https://compai.example',body={}),401)
+            self.assertEqual(self.request(path,'POST',origin='https://evil.example',body={},cookie=self.cookie),403)
+            factory.assert_not_called()
+            self.assertEqual(self.request(path,'POST',origin='https://compai.example',body={},cookie=self.cookie),202)
 
 class CommandDeliveryTests(unittest.TestCase):
     def test_auth_diagnostics_never_log_exception_contents(self):
