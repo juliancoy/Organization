@@ -65,10 +65,10 @@ class ScopeTests(unittest.TestCase):
 
 
 class InboxTests(unittest.TestCase):
-    def test_busy_master_keeps_requests_then_records_runtime(self):
+    def test_active_request_does_not_block_later_requests_and_records_runtime(self):
         with tempfile.TemporaryDirectory() as folder:
             runner = SimpleNamespace(folder=Path(folder), running=True)
-            tests = SimpleNamespace(runner=runner, lock=threading.RLock(), reruns={}, view=Mock())
+            tests = SimpleNamespace(runner=runner, lock=threading.RLock(), reruns={}, view=Mock(),create_run=Mock(return_value=None))
             queue = TestRequests(tests)
             record = {'id':'00000000-0000-0000-0000-000000000001', 'submitted_at':'2026-01-01T00:00:00+00:00',
                       'status':'queued','selection':normalize([],['monitor']),'run_id':None}
@@ -86,7 +86,7 @@ class InboxTests(unittest.TestCase):
     def test_run_is_saved_before_execution_dispatch(self):
         with tempfile.TemporaryDirectory() as folder:
             runner=Mock(folder=Path(folder),running=False,run={'id':'new-run'})
-            tests=SimpleNamespace(runner=runner,lock=threading.RLock(),reruns={},load=Mock(return_value=runner))
+            tests=SimpleNamespace(runner=runner,lock=threading.RLock(),reruns={},create_run=Mock(return_value=runner))
             queue=TestRequests(tests)
             record={'id':'00000000-0000-0000-0000-000000000001','submitted_at':'2026-01-01T00:00:00+00:00',
                     'status':'queued','selection':normalize([],['map']),'run_id':None}
@@ -94,4 +94,4 @@ class InboxTests(unittest.TestCase):
             with patch('test_requests.threading.Thread') as thread:
                 thread.return_value.start.side_effect=lambda: self.assertEqual(queue.view(record['id'])['run_id'],'new-run')
                 queue.tick()
-            runner.start.assert_called_once_with(force=False,launch=False,selection=record['selection'])
+            tests.create_run.assert_called_once_with(force=False,selection=record['selection'])

@@ -34,3 +34,39 @@ async function refresh(){
 }
 document.querySelector('#refresh').onclick=refresh;refresh();
 setInterval(()=>{if(!document.hidden)refresh();},30000);
+
+
+const jobFeedback=document.querySelector('#job-feedback'),jobList=document.querySelector('#job-list'),profile=document.querySelector('#job-profile'),startJob=document.querySelector('#start-job');
+let loadingJobs=false,submitting=false,submission=null;
+async function jobApi(body){
+ const response=await fetch('/api/v1/swarm/research/jobs',{cache:'no-store',...(body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{})});
+ if(!response.ok)throw new Error(response.status===401?'Sign in to Swarm Control to manage jobs.':'Job request unavailable. Retry with the same request ID.');
+ return response.json();
+}
+async function loadJobs(){
+ if(loadingJobs)return;loadingJobs=true;
+ try{
+  const data=await jobApi();const selected=profile.value;
+  profile.replaceChildren(...data.profiles.map(name=>{const option=el('option',name);option.value=name;return option;}));
+  if(data.profiles.includes(selected))profile.value=selected;
+  profile.disabled=!data.profiles.length;startJob.disabled=submitting||!data.profiles.length;
+  jobFeedback.textContent=data.profiles.length?'Queue another analysis while other jobs run.':'No owner-configured DNA analysis profile available.';
+  jobList.replaceChildren(...data.jobs.map(job=>{
+   const row=el('article',null,'job-row'),text=el('div');text.append(el('strong',job.kind==='research'?'DNA analysis':'Distributed tests'),el('p',`${job.status} · ${new Date(job.submitted_at).toLocaleString()}`));row.append(text);
+   if(job.run_id){const link=el('a','Run details');link.href='/swarm-status';row.append(link);}
+   if(['queued','running'].includes(job.status)){
+    const cancel=el('button','Cancel');cancel.type='button';cancel.onclick=async()=>{cancel.disabled=true;try{await jobApi({cancel:job.id});await loadJobs();}catch(error){jobFeedback.textContent=error.message;cancel.disabled=false;}};row.append(cancel);
+   }
+   return row;
+  }));
+ }catch(error){jobFeedback.textContent=error.message;profile.disabled=true;startJob.disabled=true;jobList.replaceChildren();}
+ finally{loadingJobs=false;}
+}
+document.querySelector('#job-form').onsubmit=async event=>{
+ event.preventDefault();if(submitting)return;submitting=true;startJob.disabled=true;
+ if(!submission||submission.profile!==profile.value)submission={profile:profile.value,request_id:crypto.randomUUID()};
+ try{await jobApi(submission);submission=null;await loadJobs();jobFeedback.textContent='Analysis queued. Workers will claim batches as resources become available.';}
+ catch(error){jobFeedback.textContent=error.message;}
+ finally{submitting=false;startJob.disabled=profile.disabled;}
+};
+loadJobs();setInterval(()=>{if(!document.hidden&&!submitting)loadJobs();},5000);

@@ -23,7 +23,7 @@ export async function reviewCodexUi(output){
    if(url.pathname==='/swarm-status'){res.setHeader('Content-Type','text/html');res.end(await readFile(join(view,'swarm-status.html')));return}
    if(url.pathname.startsWith('/api/')){
     res.setHeader('Content-Type','application/json')
-    if(req.method==='POST'){let body='';for await(const chunk of req)body+=chunk;commands.push(JSON.parse(body));res.end(JSON.stringify({accepted:true,message:'Instruction accepted by the synthetic thread.'}));return}
+    if(req.method==='POST'){let body='';for await(const chunk of req)body+=chunk;commands.push(JSON.parse(body));await new Promise(resolve=>setTimeout(resolve,300));res.end(JSON.stringify({accepted:true,message:'Instruction accepted by the synthetic thread.'}));return}
     const item=threads.find(t=>url.pathname.endsWith('/'+t.id))
     res.end(JSON.stringify(item?{...item,model:'Codex',owner_connected:ownerConnected,messages:[{role:'user',text:'Make the remote workspace easier to scan and use on a phone.'},{role:'assistant',text:'I’ll organize the conversation list, clarify connection status and keep the instruction composer stable while updates arrive.\n\nThe active conversation will stay visible, and your draft will be preserved.'}]}:{threads,next_offset:null,machine:'Fixture workstation',connected:true}));return
    }
@@ -75,6 +75,8 @@ export async function reviewCodexUi(output){
   await page.getByRole('searchbox').fill('release');assert.equal(await page.locator('.codex-thread:visible').count(),1)
   await page.getByRole('searchbox').fill('');await page.locator('.codex-thread').first().click()
   await page.locator('.codex-message').first().waitFor()
+  assert.match(await page.locator('.codex-activity').textContent(),/generating a response/)
+  assert.equal(await page.getByRole('button',{name:'Send instruction',exact:true}).isDisabled(),true)
   assert.equal(await page.locator('.codex-thread-info h2').textContent(),'Improve the remote control workspace')
   assert.equal(await page.locator('.codex-thread').first().locator('strong').textContent(),'Improve the remote control workspace')
   await page.locator('.codex-compose textarea').fill('Keep this draft while refreshing.')
@@ -88,16 +90,26 @@ export async function reviewCodexUi(output){
   if(width<800)await page.locator('.codex-thread').first().click()
   assert.match(await page.locator('.codex-message>div').last().evaluate(node=>getComputedStyle(node).fontFamily),/system-ui/)
   await page.screenshot({path:join(output,`codex-conversation-${width}.png`),fullPage:false})
-  const before=commands.length;await page.getByRole('button',{name:'Send instruction',exact:true}).click()
+  const before=commands.length;await page.locator('textarea').press('Control+Enter')
+  await page.getByRole('button',{name:'Sending…',exact:true}).waitFor()
+  assert.equal(await page.locator('textarea').getAttribute('readonly'),'')
+  assert.match(await page.locator('.codex-activity').textContent(),/Sending your instruction/)
   await page.waitForFunction(()=>document.querySelector('textarea')?.value==='')
   assert.equal(commands.length,before+1);assert.equal(commands.at(-1).thread_id,'design');assert.equal(commands.at(-1).action,'send')
+  threads[0].activity='idle';
+  await page.waitForFunction(()=>document.querySelector('.codex-activity')?.dataset.state==='idle',{},{timeout:8000})
+  assert.match(await page.locator('.codex-activity').textContent(),/ready for your next instruction/)
+  threads[0].activity='unknown';
+  await page.waitForFunction(()=>document.querySelector('.codex-activity')?.dataset.state==='unknown',{},{timeout:8000})
+  assert.match(await page.locator('.codex-activity').textContent(),/status unavailable/)
+  threads[0].activity='running';
   ownerConnected=false;
   await page.waitForFunction(()=>document.querySelector('.codex-thread-info')?.dataset.connected==='false',{},{timeout:8000})
   assert.equal(await page.getByRole('button',{name:'Send instruction',exact:true}).isDisabled(),true);ownerConnected=true
   await page.getByRole('button',{name:'Lock',exact:true}).click();assert.equal(await page.locator('.codex-workspace').isVisible(),false)
   assert.equal(await page.locator('textarea').inputValue(),'')
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false)
-  assert.deepEqual(errors,[]);results.push({width,status:'passed',checks:['connect','empty-state','search','select-thread','stable-refresh','draft-retained','delivery-retained','send-once','lock','no-overflow','no-script-errors','empty-search','disconnected-thread','long-list-pagination','lan-machine-colors','machine-detail','machine-back','machine-refresh']});await context.close()
+  assert.deepEqual(errors,[]);results.push({width,status:'passed',checks:['running-idle-unknown-feedback','sending-feedback','keyboard-submit','blank-send-disabled','connect','empty-state','search','select-thread','stable-refresh','draft-retained','delivery-retained','send-once','lock','no-overflow','no-script-errors','empty-search','disconnected-thread','long-list-pagination','lan-machine-colors','machine-detail','machine-back','machine-refresh']});await context.close()
  }}finally{await browser.close();server.closeAllConnections();await new Promise(r=>server.close(r));await writeFile(join(output,'codex-review.json'),JSON.stringify({mode:'synthetic-local-only',results},null,2)+'\n')}
  return results
 }

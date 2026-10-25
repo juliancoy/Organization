@@ -13,6 +13,9 @@ TOKEN_FILE=Path.home()/'.config/map-master/api-token'
 API='/api/v1/master'
 RUN_ID={'type':'string','pattern':r'^[0-9TZ-]+-[a-f0-9]{8}$','description':'Recorded run ID; omit to select the latest run.'}
 TOOLS=[
+ ('request_research','Queue private DNA analysis','Queue an owner-configured private research profile. No file paths or genomic payloads accepted.',{'profile':{'type':'string','minLength':1,'maxLength':40},'request_id':{'type':'string','minLength':36,'maxLength':36}},['profile','request_id']),
+ ('cancel_request','Cancel a queued or running job','Cancel one durable job request without stopping other runs.',{'request_id':{'type':'string','minLength':36,'maxLength':36}},['request_id']),
+ ('list_research_profiles','Configured private analyses','List profile names only; never private input paths.',{},[]),
  ('get_runtime_stats','Test runtime statistics','Read persistent per-task and per-machine runtime samples, median and p95. Reused results are excluded from timing percentiles.',{'host':{'type':'string','minLength':1,'maxLength':253},'task':{'type':'string','minLength':1,'maxLength':100}},[]),
  ('create_backups','Back up enrolled devices','Replicate current production data from the latest complete DR snapshot as encrypted, verified device copies. Historical public dataset versions and private decryption keys stay on the recovery host.',{},[]),
  ('get_backups','Backup status','Read persistent per-device backup progress, verification receipts and failures.',{},[]),
@@ -26,7 +29,7 @@ TOOLS=[
  ('list_machines','Machine inventory','Inspect observed LAN machines and machines recorded in the latest run. Does not probe or initialize agents.',{},[]),
  ('list_suites','Configured suites','List application-owned suites and their container images; arbitrary commands cannot be submitted.',{},[]),
  ('start_run','Start distributed tests','Start the configured distributed run. The coordinator COMMITS AND PUSHES the current Organization, OrgPortal, PIdP and CodeCollective branches to GitHub, prepares agents/images, and runs suites. Does not deploy production services.',{},[]),
- ('rerun_suite','Rerun one suite','Queue an independent fresh execution on the original worker using current published sources. Commits and pushes current branches. No deployment or email checks.',{'run_id':RUN_ID,'host':{'type':'string','minLength':1,'maxLength':253},'suite':{'type':'string','minLength':1,'maxLength':80}},['run_id','host','suite']),
+ ('rerun_suite','Rerun one suite','Queue an independent fresh execution on available workers using current published sources. Commits and pushes current branches. No deployment or email checks.',{'run_id':RUN_ID,'host':{'type':'string','minLength':1,'maxLength':253},'suite':{'type':'string','minLength':1,'maxLength':80}},['run_id','host','suite']),
  ('rerun_failed','Rerun failed suites','Queue failed ordinary suites from a recorded run. P2P requires a full run. Commits and pushes current branches; no deployment or email checks.',{'run_id':RUN_ID},['run_id']),
  ('stop_run','Stop a specific run','Request cancellation of the currently running test run by ID. Refuses to stop a newer, different run.',{'run_id':RUN_ID},['run_id']),
 ]
@@ -41,8 +44,8 @@ class APIError(Exception):
 def tool_definitions():
     return [{'name':name,'title':title,'description':description,
              'inputSchema':{'type':'object','properties':properties,'required':required,'additionalProperties':False},
-             'annotations':{'readOnlyHint':name not in ('start_run','stop_run','rerun_suite','rerun_failed','request_tests','create_backups'),
-                            'destructiveHint':name in ('start_run','stop_run','rerun_suite','rerun_failed','request_tests','create_backups'),
+             'annotations':{'readOnlyHint':name not in ('start_run','stop_run','rerun_suite','rerun_failed','request_tests','create_backups','request_research','cancel_request'),
+                            'destructiveHint':name in ('start_run','stop_run','rerun_suite','rerun_failed','request_tests','create_backups','request_research','cancel_request'),
                             'idempotentHint':name not in ('start_run','rerun_suite','rerun_failed','request_tests','create_backups'),'openWorldHint':name in ('start_run','rerun_suite','rerun_failed','request_tests','create_backups')}}
             for name,title,description,properties,required in TOOLS]
 
@@ -84,6 +87,11 @@ class MasterAPI:
                         from fleet_backups import FleetBackups
                         self._backups=FleetBackups(self.tests)
                 return self._backups.start() if name=='create_backups' else self._backups.view()
+            if name=='request_research':return self.tests.requests.submit_research(args['profile'],args['request_id'])
+            if name=='cancel_request':return {'accepted':self.tests.requests.cancel(args['request_id'])}
+            if name=='list_research_profiles':
+                from research_jobs import profiles
+                return {'profiles':sorted(profiles())}
             if name=='get_runtime_stats':
                 from runtime_stats import report
                 return report(self.tests.runner.folder,**args)
@@ -143,7 +151,7 @@ class MasterAPI:
 
     def status(self):
         view=self.tests.view();run=view.get('run')
-        return {'service':'map-test-master','running':view['running'],'snapshot_staging':view.get('snapshot_staging'),'run':None if not run else
+        return {'service':'map-test-master','running':view['running'],'active_runs':view.get('active_runs',[]),'snapshot_staging':view.get('snapshot_staging'),'run':None if not run else
                 {key:copy.deepcopy(run.get(key)) for key in ('id','status','started','finished','preparation','image_progress','error','granular','pending_tasks')},
                 'links':{'dashboard':'/tests.html','mcp':'/mcp','api':API,'openapi':API+'/openapi.json'}}
 
@@ -156,6 +164,7 @@ class MasterAPI:
             import codex
             return codex.rest(method,path,query,body)
         if method=='GET':
+            if path==API+'/research-profiles':return 200,self.call('list_research_profiles')
             if path==API+'/backups':return 200,self.call('get_backups')
             if path==API+'/runtime-stats':return 200,self.call('get_runtime_stats',parameters(('host','task')))
             if path==API+'/test-requests':return 200,self.call('list_test_requests')
@@ -180,6 +189,8 @@ class MasterAPI:
                     return 200,self.call('get_logs',args)
         elif method=='POST':
             parameters(())
+            if path==API+'/research-requests':return 202,self.call('request_research',body)
+            if path==API+'/cancel-request':return 202,self.call('cancel_request',body)
             if path==API+'/backups':
                 if body not in ({},None):raise APIError(400,'invalid_body','Backups use the latest complete DR snapshot')
                 return 202,self.call('create_backups')
@@ -196,7 +207,7 @@ class MasterAPI:
     @staticmethod
     def openapi():
         paths={}
-        routes=[('post','/backups','create_backups'),('get','/backups','get_backups'),('post','/test-requests','request_tests'),('get','/test-requests','list_test_requests'),('get','/test-requests/{request_id}','get_test_request'),('post','/rerun-suite','rerun_suite'),('post','/rerun-failed','rerun_failed'),('get','/status','get_status'),('get','/runs','list_runs'),('post','/runs','start_run'),
+        routes=[('post','/research-requests','request_research'),('post','/cancel-request','cancel_request'),('get','/research-profiles','list_research_profiles'),('post','/backups','create_backups'),('get','/backups','get_backups'),('post','/test-requests','request_tests'),('get','/test-requests','list_test_requests'),('get','/test-requests/{request_id}','get_test_request'),('post','/rerun-suite','rerun_suite'),('post','/rerun-failed','rerun_failed'),('get','/status','get_status'),('get','/runs','list_runs'),('post','/runs','start_run'),
                 ('get','/runs/{run_id}','get_run'),('get','/runs/{run_id}/logs','get_logs'),
                 ('post','/runs/{run_id}/stop','stop_run'),('get','/machines','list_machines'),('get','/suites','list_suites')]
         definitions={tool['name']:tool for tool in tool_definitions()}

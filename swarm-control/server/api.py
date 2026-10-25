@@ -106,8 +106,8 @@ class Handler(BaseHTTPRequestHandler):
             name=ASSETS[path];return self.reply(200,(VIEW/name).read_bytes(),mimetypes.guess_type(name)[0] or 'application/octet-stream')
         pairing=self.command=='POST' and path in ('/pair','/logout')
         deployment=path in ('/api/v1/test-app/status','/api/v1/test-app/offer','/api/v1/test-app/download')
-        valid_read=self.command=='GET' and (path in ('/api/v1/swarm/status','/api/v1/swarm/session','/api/v1/swarm/research') or path==API+'threads' or path.startswith(API+'threads/') or path in ('/api/v1/test-app/status','/api/v1/test-app/download'))
-        valid_write=self.command=='POST' and path in (API+'commands','/api/v1/test-app/offer','/api/v1/swarm/tests/request')
+        valid_read=self.command=='GET' and (path in ('/api/v1/swarm/status','/api/v1/swarm/session','/api/v1/swarm/research','/api/v1/swarm/research/jobs') or path==API+'threads' or path.startswith(API+'threads/') or path in ('/api/v1/test-app/status','/api/v1/test-app/download'))
+        valid_write=self.command=='POST' and path in (API+'commands','/api/v1/swarm/research/jobs','/api/v1/test-app/offer','/api/v1/swarm/tests/request')
         if not (valid_read or valid_write or pairing):return self.reply(404,{'error':{'message':'Not found'}})
         if path not in ('/pair','/logout') and not devices.valid(self.device()):return self.reply(401,{'error':{'message':'Sign in with PIdP to reconnect to CompAI'}})
         body=None
@@ -133,6 +133,10 @@ class Handler(BaseHTTPRequestHandler):
                 from status import snapshot
                 try:return self.reply(200,snapshot())
                 except (OSError,ValueError):return self.reply(503,{'error':{'message':'Local swarm coordinator unavailable'}})
+            if path=='/api/v1/swarm/research/jobs':
+                from status import research_jobs
+                try:return self.reply(202 if self.command=='POST' else 200,research_jobs(body))
+                except OSError:return self.reply(503,{'error':{'message':'Job coordinator unavailable'}})
             if path=='/api/v1/swarm/research':
                 from research import snapshot
                 try:return self.reply(200,snapshot())

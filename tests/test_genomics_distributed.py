@@ -4,9 +4,9 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 from scripts.genomics_compute import compute
-from scripts.genomics_distributed import batches,eligible,execute,merge,Run
+from scripts.genomics_distributed import batches,eligible,execute_reserved,merge,Run
 
 HEADER='##fileformat=VCFv4.2\n##INFO=<ID=CSQ,Number=.,Type=String,Description="Format: Allele|Consequence">\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSYNTHETIC\n'
 ROWS=['1\t1\t.\tA\tG\t30\tPASS\tCSQ=G|missense_variant,G|missense_variant&splice_region_variant\tGT:DP:GQ\t0/1:25:40\n',
@@ -56,17 +56,17 @@ class DistributedGenomicsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             source=Path(d)/'x.vcf.gz';source.write_bytes(payload());job=next(batches(source,'qc',1))
             reply={**compute(job['payload'],'qc'),'sha256':job['sha256']}
-            with patch('scripts.genomics_distributed.subprocess.run',return_value=SimpleNamespace(returncode=0,stdout=json.dumps(reply).encode())) as run:
-                execute({'host':'node.local','local':False,'image':'sha256:test','ssh':['ssh','-o','StrictHostKeyChecking=yes','user@node.local']},job)
+            with patch('scripts.genomics_distributed.subprocess.Popen',return_value=Mock(returncode=0,poll=Mock(return_value=0),communicate=Mock(return_value=(json.dumps(reply).encode(),b'')))) as run:
+                execute_reserved({'host':'node.local','local':False,'image':'sha256:test','ssh':['ssh','-o','StrictHostKeyChecking=yes','user@node.local']},job,'genomics-fixture')
             command=run.call_args.args[0]
             self.assertLess(command.index('ServerAliveInterval=15'),command.index('user@node.local'))
             self.assertNotIn('shell',run.call_args.kwargs)
-            self.assertEqual(run.call_args.kwargs['input'],job['payload'])
+            self.assertEqual(run.return_value.communicate.call_args.args[0],job['payload'])
 
     def test_result_substitution_rejected(self):
         from types import SimpleNamespace
-        with patch('scripts.genomics_distributed.subprocess.run',return_value=SimpleNamespace(returncode=0,stdout=b'{"sha256":"wrong"}')):
-            with self.assertRaisesRegex(RuntimeError,'does not match'):execute({'host':'local','local':True,'image':'sha256:test'},{'kind':'qc','records':1,'payload':payload(),'sha256':'expected'})
+        with patch('scripts.genomics_distributed.subprocess.Popen',return_value=Mock(returncode=0,poll=Mock(return_value=0),communicate=Mock(return_value=(b'{"sha256":"wrong"}',b'')))):
+            with self.assertRaisesRegex(RuntimeError,'does not match'):execute_reserved({'host':'local','local':True,'image':'sha256:test'},{'kind':'qc','records':1,'payload':payload(),'sha256':'expected'},'genomics-fixture')
 
     def test_reference_blocks_cannot_be_counted_as_alternate_variants(self):
         with self.assertRaisesRegex(ValueError,'prepared'):compute(payload([ROWS[0].replace('\tG\t','\t<NON_REF>\t')]),'qc')
@@ -111,4 +111,4 @@ class DistributedGenomicsTests(unittest.TestCase):
         self.assertTrue(has_capacity(measured))
         for missing in ['percent','ram_total_bytes','ram_used_bytes']:
             self.assertFalse(has_capacity({**measured,missing:None}))
-        self.assertFalse(has_capacity({**measured,'percent':90}))
+        self.assertTrue(has_capacity({**measured,'percent':90}))

@@ -5,6 +5,8 @@ import json
 import os
 from pathlib import Path
 import signal
+import tarfile
+import tempfile
 import subprocess
 import threading
 import time
@@ -40,6 +42,8 @@ class ResearchRun(DistributedTests):
 
     def execute(self):
         try:
+            import sys
+            sys.path.insert(0,str(self.root))
             from scripts.genomics import private_run
             config=self.config
             if set(config)!={'qc','annotations','output'}:raise ValueError('Invalid research profile')
@@ -47,6 +51,13 @@ class ResearchRun(DistributedTests):
             for path in inputs.values():
                 if not path.is_file():raise ValueError('Input unavailable')
             folder=private_run(Path(config['output']))
+            revision=subprocess.check_output(['git','-C',str(self.root),'rev-parse','HEAD'],text=True).strip()
+            source=folder/'runner';source.mkdir(mode=0o700)
+            with tempfile.TemporaryFile() as archive:
+                subprocess.run(['git','-C',str(self.root),'archive',revision,'scripts','docker_utils','swarm-control/server'],stdout=archive,check=True)
+                archive.seek(0)
+                with tarfile.open(fileobj=archive) as bundle:bundle.extractall(source,filter='data')
+            self.run['source_revision']=revision
             command=[os.getenv('SWARM_RESEARCH_PYTHON',str(Path.home()/'.local/share/swarm-control/venv/bin/python')),
                      '-m','scripts.genomics_distributed','--qc',str(inputs['qc']),'--annotations',str(inputs['annotations']),
                      '--output',config['output'],'--run-directory',str(folder),'--group',self.run['id'],'--slots','0']
@@ -57,7 +68,7 @@ class ResearchRun(DistributedTests):
             with (folder/'supervisor.log').open('x') as log:
                 os.chmod(folder/'supervisor.log',0o600)
                 with self.lock:
-                    self.process=subprocess.Popen(command,cwd=self.root,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
+                    self.process=subprocess.Popen(command,cwd=source,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
                     if self.run.get('stop_requested'):os.killpg(self.process.pid,signal.SIGTERM)
                 deadline=time.monotonic()+24*3600
                 while self.process.poll() is None:

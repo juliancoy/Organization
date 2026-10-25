@@ -36,7 +36,7 @@ def shell_command(host,command):
 
 def has_capacity(metrics):
     cpu=metrics.get('percent');total=metrics.get('ram_total_bytes');used=metrics.get('ram_used_bytes')
-    return (isinstance(cpu,(int,float)) and math.isfinite(cpu) and 0<=cpu<85 and
+    return (isinstance(cpu,(int,float)) and math.isfinite(cpu) and 0<=cpu<=100 and
             isinstance(total,(int,float)) and isinstance(used,(int,float)) and total-used>=1536*1024*1024)
 
 
@@ -74,7 +74,7 @@ def discover():
             if fingerprint!=expected or not image.startswith('sha256:'):raise RuntimeError('Worker does not have the approved Python image contents')
             host['image_fingerprint']=fingerprint
             host['image']=image
-            host['eligible']=True;host['machine']=status['machine'];host['cpus']=status.get('cpus') or status.get('hardware',{}).get('cpus') or 2
+            host['eligible']=True;host['machine']=status['machine'];host['cpus']=client.call('metrics',timeout=15).get('cpus') or 2
             if 'shared-resources' not in status.get('capabilities',[]):raise RuntimeError('Worker needs the shared resource scheduler update')
         except Exception as error:host.update(eligible=False,reason=type(error).__name__+': '+str(error)[:240])
         finally:
@@ -102,6 +102,7 @@ def batches(path,kind,limit=50000):
 
 
 def execute(host,batch):
+    sys.path.insert(0,str(ROOT/'swarm-control/server'))
     from agent_client import AgentClient
     name='genomics-'+uuid.uuid4().hex
     client=AgentClient(host);lease_id=uuid.uuid4().hex
@@ -284,7 +285,7 @@ def main():
         if any((parent/'.git').exists() for parent in [folder,*folder.parents]):raise ValueError('Private runs cannot be inside Git')
     elif args.run_directory:
         folder=args.run_directory.absolute()
-        if folder.parent.resolve()!=args.output.resolve() or folder.is_symlink() or folder.stat().st_mode&0o077 or any(p.name!='supervisor.log' for p in folder.iterdir()):raise ValueError('Expected empty private run directory')
+        if folder.parent.resolve()!=args.output.resolve() or folder.is_symlink() or folder.stat().st_mode&0o077 or any(p.name not in ('supervisor.log','runner') for p in folder.iterdir()):raise ValueError('Expected empty private run directory')
     else:folder=private_run(args.output)
     print('Private distributed run: '+str(folder),flush=True)
     run=Run(discover(),folder,args.slots,resume=bool(args.resume));run.save()

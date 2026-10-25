@@ -50,3 +50,20 @@ def snapshot():
                            'jobs': [{'name': job.get('name') or key, 'status': job.get('status')}
                                     for key, job in list(host.get('jobs', {}).items())[:100]]}
                           for host in run.get('hosts', [])[:64]]}}
+
+
+def research_jobs(body=None):
+    from master_api import TOKEN_FILE
+    token=Path(os.getenv('MAP_MASTER_TOKEN_FILE',str(TOKEN_FILE))).read_text().strip()
+    headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'}
+    base='http://127.0.0.1:8089/api/v1/master'
+    def call(path,value=None):
+        with urlopen(Request(base+path,headers=headers,data=json.dumps(value).encode() if value is not None else None),timeout=10) as response:return json.load(response)
+    if body is None:
+        records=call('/test-requests')['requests']
+        return {'profiles':call('/research-profiles')['profiles'],'jobs':[
+            {k:r.get(k) for k in ('id','kind','status','submitted_at','run_id','finished_at','selection')} for r in records]}
+    if not isinstance(body,dict):raise ValueError('Invalid job action')
+    if set(body)=={'profile','request_id'}:return call('/research-requests',body)
+    if set(body)=={'cancel'}:return call('/cancel-request',{'request_id':body['cancel']})
+    raise ValueError('Invalid job action')
