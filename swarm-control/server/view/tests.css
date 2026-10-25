@@ -121,3 +121,5 @@ main{max-width:1440px;margin:auto;padding:28px}a{color:#b7e4cf}.intro,.panel-hea
 .dashboard-sections a[aria-current=page]{background:#244a40;color:#e9fff2;border-color:#88cdb2}
 .dashboard-sections a:hover{background:#24343f}
 @media(max-width:560px){.dashboard-sections{padding:12px 12px 0}.dashboard-sections a{flex:1;text-align:center;white-space:nowrap}}
+
+.dashboard-hidden{display:none!important}

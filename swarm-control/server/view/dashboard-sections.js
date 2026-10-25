@@ -18,3 +18,5 @@ document.title=title.textContent+' · LAN ecosystem';
 if(['overview','traffic'].includes(current))void import('./levels.js');
 if(current==='traffic'){void import('./throughput.js');void import('./congestion.js');}
 if(current==='tools'){void import('./cpu.js');void import('./codex.js');void import('./mobile-devices.js');}
+for(const panel of document.querySelectorAll('main>section[hidden],main>footer[hidden],#cpu-readout[hidden]'))panel.classList.add('dashboard-hidden');
+document.addEventListener('click',event=>{const link=event.target.closest('a[href^="#"]');if(!link)return;const target=document.getElementById(link.getAttribute('href').slice(1));if(target?.closest('.dashboard-hidden')){event.preventDefault();const query=new URLSearchParams(location.search);query.set('view','runs');location.href='/tests.html?'+query+link.getAttribute('href');}});
