@@ -6,6 +6,7 @@ import datetime
 import gzip
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import queue
@@ -26,6 +27,12 @@ WORKER=(ROOT/'scripts/genomics_compute.py').read_text()
 def shell_command(host,command):
     if host['local']:return command
     return host['ssh'][:-1]+['-o','ServerAliveInterval=15','-o','ServerAliveCountMax=2',host['ssh'][-1],shlex.join(command)]
+
+
+def has_capacity(metrics):
+    cpu=metrics.get('percent');total=metrics.get('ram_total_bytes');used=metrics.get('ram_used_bytes')
+    return (isinstance(cpu,(int,float)) and math.isfinite(cpu) and 0<=cpu<85 and
+            isinstance(total,(int,float)) and isinstance(used,(int,float)) and total-used>=1536*1024*1024)
 
 
 def eligible(status):
@@ -148,8 +155,7 @@ class Run:
                 status=client.call('status',timeout=15)
                 if eligible(status) and status.get('machine')==host['machine']:
                     metrics=client.call('metrics',timeout=15)
-                    free=metrics.get('ram_total_bytes',0)-metrics.get('ram_used_bytes',0)
-                    available=free>=1536*1024*1024 and metrics.get('percent',100)<85
+                    available=has_capacity(metrics)
             except (OSError,RuntimeError,ValueError):pass
             finally:client.close()
             host['_available']=available;host['_checked']=time.monotonic();return available
@@ -173,17 +179,16 @@ class Run:
                     with self.lock:self.state['jobs'][item['id']].update(status='waiting_capacity');self.save()
                     self.queue.put(item);time.sleep(2);continue
                 with self.lock:self.state['jobs'][item['id']].update(status='running',host=host['host']);self.save()
-                try:
-                    result=execute(host,item);write_json(self.folder/(item['id']+'.json'),result)
-                    with self.lock:
-                        self.results.append(result);self.state['jobs'][item['id']].update(status='passed',elapsed_seconds=result['elapsed_seconds'],input_bytes=result['input_bytes']);self.save()
-                    finished=True
-                except Exception as error:
-                    item.setdefault('failed_hosts',[]).append(host['host']);host['_cooldown']=time.monotonic()+15
-                    final=len(item['failed_hosts'])>=3
-                    with self.lock:self.state['jobs'][item['id']].update(status='failed' if final else 'retrying',reason=type(error).__name__+': '+str(error)[:500],attempts=len(item['failed_hosts']));self.save()
-                    if final:finished=True
-                    else:self.queue.put(item)
+                result=execute(host,item);write_json(self.folder/(item['id']+'.json'),result)
+                with self.lock:
+                    self.results.append(result);self.state['jobs'][item['id']].update(status='passed',elapsed_seconds=result['elapsed_seconds'],input_bytes=result['input_bytes']);self.save()
+                finished=True
+            except Exception as error:
+                item.setdefault('failed_hosts',[]).append(host['host']);host['_cooldown']=time.monotonic()+15
+                final=len(item['failed_hosts'])>=3
+                with self.lock:self.state['jobs'][item['id']].update(status='failed' if final else 'retrying',reason=type(error).__name__+': '+str(error)[:500],attempts=len(item['failed_hosts']));self.save()
+                if final:finished=True
+                else:self.queue.put(item)
             finally:
                 if finished:self.credits.release()
                 self.queue.task_done()

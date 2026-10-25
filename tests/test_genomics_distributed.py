@@ -104,3 +104,11 @@ class DistributedGenomicsTests(unittest.TestCase):
             self.assertEqual(json.loads((root/'qc-summary.json').read_text())['records'],2)
             wrong={**jobs[0],'sha256':'different'}
             with self.assertRaisesRegex(ValueError,'differs'):run.cached(wrong)
+
+    def test_unknown_cpu_or_memory_is_not_treated_as_spare_capacity(self):
+        from scripts.genomics_distributed import has_capacity
+        measured={'percent':20,'ram_total_bytes':4*1024**3,'ram_used_bytes':1024**3}
+        self.assertTrue(has_capacity(measured))
+        for missing in ['percent','ram_total_bytes','ram_used_bytes']:
+            self.assertFalse(has_capacity({**measured,missing:None}))
+        self.assertFalse(has_capacity({**measured,'percent':90}))
