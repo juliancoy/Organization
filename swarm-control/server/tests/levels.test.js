@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {deviceLevels} from '../view/levels-model.js';
+import {deviceLevels,compareNetworkRows} from '../view/levels-model.js';
 const now=Date.now(),host={host:'laptop.local',observed_hostname:'laptop',addresses:['10.42.0.2'],status:'live',sampled_at:now/1000,network_mbps:3,ram_percent:54,disk_busy_percent:82};
 const data={devices:[{ip:'10.42.0.2',mac:'aa'},{ip:'10.42.0.3',mac:'bb'}],link_traffic:{updated:new Date(now).toISOString(),peers:{aa:{rx_mbps:2,tx_mbps:2},bb:{rx_mbps:1,tx_mbps:2}}}};
 test('SSH address identity deduplicates and passive peers cover other devices',()=>{const rows=deviceLevels(data,{hosts:[host]},'network',now);assert.equal(rows.length,2);assert.equal(rows[0].value,3);assert.equal(rows[1].value,3);});
@@ -37,4 +37,15 @@ test('each machine exposes distinct interface and directional series without a d
  assert.deepEqual(deviceLevels(network,{hosts:[h]},'send',stamp).map(row=>row.value),[2,3]);
  assert.deepEqual(deviceLevels(network,{hosts:[h]},'receive',stamp).map(row=>row.value),[4,1]);
  assert.deepEqual(deviceLevels(network,{hosts:[h]},'network',stamp+16000).map(row=>row.value),[null,null]);
+});
+
+
+test('named computer interfaces precede IP-only gateway devices in the sidebar',()=>{
+ const stamp=Date.now();
+ const host={host:'worker.local',network_interfaces:[{name:'eth0',ifindex:2,status:'live',sampled_at:stamp/1000,network_mbps:1}]};
+ const data={devices:[{ip:'10.42.0.3',mac:'aa'}],link_traffic:{updated:new Date(stamp).toISOString(),peers:{aa:{rx_mbps:50,tx_mbps:50}}}};
+ const rows=deviceLevels(data,{hosts:[host]},'network',stamp).sort(compareNetworkRows);
+ assert.equal(rows[0].name,'worker.local · eth0');
+ assert.equal(rows[1].name,'10.42.0.3 · gateway only');
+ assert(!rows.some(row=>row.name.includes('interface unknown')));
 });

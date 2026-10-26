@@ -5,7 +5,7 @@ import {fileURLToPath} from 'node:url'
 import {join} from 'node:path'
 import {chromium,expect} from '@playwright/test'
 const view=fileURLToPath(new URL('../view/',import.meta.url)),output=process.argv[2]||'/tmp/resource-network-review';await mkdir(output,{recursive:true})
-const network=time=>({devices:[{hostname:'worker.local',ip:'10.42.0.2',mac:'aa'}],link_traffic:{updated:new Date(time).toISOString(),peers:{aa:{rx_mbps:10,tx_mbps:4}}}})
+const network=time=>({devices:[{hostname:'worker.local',ip:'10.42.0.2',mac:'aa'},{ip:'10.42.0.3',mac:'bb'}],link_traffic:{updated:new Date(time).toISOString(),peers:{aa:{rx_mbps:10,tx_mbps:4}}}})
 const server=createServer(async(req,res)=>{
  const url=new URL(req.url,'http://localhost');res.setHeader('Cache-Control','no-store')
  if(req.method!=='GET'){res.writeHead(405).end();return}
@@ -29,7 +29,10 @@ try{
  await page.getByLabel('Separate send / receive').check()
  const paths=await page.locator('#levels-plot path[fill="none"]').evaluateAll(paths=>paths.map(path=>path.getAttribute('d')))
  assert.equal(paths.length,4,'Two interfaces should each have continuous send and receive series')
- await expect(page.locator('.levels-machine-group')).toHaveText('worker.local')
+ await expect(page.locator('.levels-machine-group').first()).toHaveText('worker.local')
+ await expect(page.locator('#levels-legend button').first()).toContainText('worker.local · eth0')
+ await expect(page.locator('.levels-machine-group').last()).toHaveText('Gateway-only devices')
+ await expect(page.locator('#levels-legend')).not.toContainText('interface unknown')
  await expect(page.locator('#levels-legend button').filter({hasText:'eth0'})).toHaveCount(2)
  await expect(page.locator('#levels-legend button').filter({hasText:'wlan0'})).toHaveCount(2)
  assert(paths.every(path=>(path.match(/L/g)||[]).length>=12),'Restored network history should contain all background samples')
