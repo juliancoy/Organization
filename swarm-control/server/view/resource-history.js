@@ -6,7 +6,10 @@ export function recordResourceHistory(histories,data,metrics,now,rowsFor){
   const history=histories[metric];
   for(const frame of [...frames,{sampled_at:now/1000,hosts:metrics.hosts||[],current:true}]){
    const time=frame.sampled_at*1000;
-   for(const row of rowsFor(frame.current?data:historicalNetwork,{hosts:frame.hosts},metric,time)){
+   for(const row of rowsFor(frame.current?data:frame.network||historicalNetwork,{hosts:frame.hosts},metric,time)){
+    // Older frames never saved gateway counters. Their absence must not
+    // overwrite actual live readings with alternating artificial gaps.
+    if(!frame.current&&!frame.network&&['network','split'].includes(metric)&&row.value===null)continue;
     if(!history.has(row.id))history.set(row.id,[]);
     const points=history.get(row.id);
     // Repeated reads of the same server frame must not duplicate points.

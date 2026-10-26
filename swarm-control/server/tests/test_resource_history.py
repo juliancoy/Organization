@@ -23,3 +23,14 @@ class ResourceHistoryTests(unittest.TestCase):
         saved[-1]['hosts'][0]['percent']=0
         self.assertEqual(history.view(399)[-1]['hosts'][0]['percent'],42)
         self.assertEqual(history.view(1000),[])
+
+
+    def test_gateway_samples_are_collected_without_browser_and_private_flow_data_is_excluded(self):
+        monitor=CpuMonitor(network=lambda:{'devices':[{'ip':'10.42.0.2','mac':'aa','secret':'private'}],
+            'link_traffic':{'updated':'now','peers':{'aa':{'rx_mbps':3,'tx_mbps':2,'secret':'private'}},'flows':{'payload':'private'}}})
+        with patch('cpu.targets',return_value=[]),patch.object(monitor,'sample',return_value={'host':'compai.local'}), \
+             patch('cpu.time.time',return_value=100),patch('cpu.time.sleep',side_effect=InterruptedError):
+            with self.assertRaises(InterruptedError):monitor.worker()
+        frames=monitor.history.view(100)
+        self.assertEqual(frames[0]['network']['link_traffic']['peers']['aa']['rx_mbps'],3)
+        self.assertNotIn('private',str(frames))

@@ -17,12 +17,24 @@ def project_host(row):
     return host
 
 
+def project_network(value):
+    def pick(row,fields):return {key:deepcopy(row[key]) for key in fields.split() if key in row}
+    capture=value.get('link_traffic') or {}
+    return {'interface':value.get('interface'),
+            'devices':[pick(row,'hostname ip mac self') for row in value.get('devices',[])[:256]],
+            'interface_traffic':{key:pick(row,'rx_mbps tx_mbps updated') for key,row in list(value.get('interface_traffic',{}).items())[:32]},
+            'link_traffic':{'updated':capture.get('updated'),'capture_error':bool(capture.get('capture_error')),
+                            'peers':{key:pick(row,'rx_mbps tx_mbps') for key,row in list(capture.get('peers',{}).items())[:256]}}}
+
+
 class ResourceHistory:
     def __init__(self):
         self.samples = deque(maxlen=MAX_SAMPLES)
 
-    def append(self, hosts, now):
-        self.samples.append({'sampled_at': now, 'hosts': [project_host(host) for host in hosts[:64]]})
+    def append(self, hosts, now, network=None):
+        frame={'sampled_at': now, 'hosts': [project_host(host) for host in hosts[:64]]}
+        if network is not None:frame['network']=project_network(network)
+        self.samples.append(frame)
         self.prune(now)
 
     def prune(self, now):

@@ -12,6 +12,7 @@ const contentSecurityPolicy=apiSource.match(/'Content-Security-Policy':"([^"]+)"
 const view=fileURLToPath(new URL('../view/',import.meta.url))
 export async function reviewCodexUi(output){
  await mkdir(output,{recursive:true})
+ execFileSync(process.execPath,[fileURLToPath(new URL('./review-resource-network.mjs',import.meta.url)),output],{stdio:'inherit',env:process.env})
  if(!process.env.TASK_MANAGER_ONLY)execFileSync(process.execPath,[fileURLToPath(new URL('./review-history-ui.mjs',import.meta.url)),output],{stdio:'inherit',env:process.env})
  const commands=[],results=[],researchRequests=[];let researchJobs=[];let failNext=false;let ownerConnected=true,statusUnauthorized=false
  const threads=[{id:'design',name:'Improve the remote control workspace',cwd:'/workspace/Organization',updated_at:1792880000,activity:'running'},{id:'release',name:'Review the release checks',cwd:'/workspace/OrgPortal',updated_at:1792876000,activity:'idle'}]

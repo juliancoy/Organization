@@ -52,7 +52,15 @@ def master_suites():
     from distributed_worker import SUITES
     return SUITES
 master_api = MasterAPI(distributed_tests, snapshot, master_suites)
-cpu_monitor = CpuMonitor(activity=distributed_tests.cpu_activity)
+def resource_network():
+    data=snapshot()
+    data['interface']=INTERFACE
+    try:data['link_traffic']=json.loads(STATE.joinpath('link-traffic.json').read_text())
+    except (OSError,ValueError):data['link_traffic']=None
+    return data
+
+
+cpu_monitor = CpuMonitor(activity=distributed_tests.cpu_activity, network=resource_network)
 connection_monitor = Connections()
 socket_owners = SocketOwners()
 docker_downloads = DockerDownloads()

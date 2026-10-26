@@ -22,12 +22,13 @@ def aggregate(hosts):
 
 
 class CpuMonitor:
-    def __init__(self, activity=None):
+    def __init__(self, activity=None, network=None):
         self.lock=threading.Lock()
         self.hosts=[]
         self.history=ResourceHistory()
         self.sampler=ResourceSampler()
         self.activity=activity
+        self.network=network
 
     def sample(self, target):
         local=target.get('local',False)
@@ -103,7 +104,8 @@ class CpuMonitor:
             hosts=[{'host':'compai.local','local':True}]+[h for h in inventory if h['host']!='compai.local']
             with concurrent.futures.ThreadPoolExecutor(max_workers=9) as pool:
                 samples=list(pool.map(self.sample,hosts))
+            network=self.network() if self.network else None
             with self.lock:
                 self.hosts=samples
-                self.history.append(samples,time.time())
+                self.history.append(samples,time.time(),network)
             time.sleep(max(0.1,5-(time.monotonic()-start)))

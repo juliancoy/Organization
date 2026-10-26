@@ -225,3 +225,9 @@ duration) by allocated CPUs; they are not measured utilization. Measurement and
 timing coverage are shown beside the totals. Missing measurements stay unknown.
 Genome batches now carry their worker process CPU seconds into operational
 state for future analyses; older records cannot supply that missing measurement.
+
+
+The background resource history also saves gateway send/receive counters and
+their observation timestamps. Directional network charts restore those actual
+measurements; older frames without gateway counters do not insert artificial
+nulls between live readings. Failed or stale capture samples still render gaps.
