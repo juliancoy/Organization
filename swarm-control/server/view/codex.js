@@ -8,7 +8,7 @@ const el = (tag, text, cls) => { const node = document.createElement(tag); if (t
 let token = '', selected = null, offset = 0, next = null, busy = false, generation = 0, renderedThread = '', renderedMessages = '', observedActivity = '';
 root.classList.add('codex-app');
 const heading = el('div', '', 'panel-heading');
-const title = el('div'); title.append(el('span', 'SWARM · REMOTE CONTROL', 'codex-eyebrow'), el('h1', secureRemote ? 'Swarm Control' : 'Codex workspace'), el('p', secureRemote ? 'Conversations and instructions on CompAI' : 'Conversations and instructions on this machine', 'muted'));
+const title = el('div'); title.append(el('h1', secureRemote ? 'Swarm Control' : 'Codex workspace'), el('p', secureRemote ? 'Codex on CompAI' : 'Codex on this machine', 'muted'));
 const deviceStatus=el('p','','muted');title.append(deviceStatus);
 const lock = el('button', 'Lock'); lock.hidden = true;
 const mapLink=el('a','Swarm status ↗','codex-map-link'); mapLink.href='/swarm-status'; mapLink.target='_blank'; mapLink.rel='noopener noreferrer'; mapLink.title='Open remote swarm status';
@@ -41,11 +41,11 @@ const latest=el('button','↓ Latest messages','codex-latest'); latest.type='but
 latest.onclick=()=>{transcript.scrollTop=transcript.scrollHeight;latest.hidden=true;};
 transcript.onscroll=()=>{latest.hidden=transcript.scrollHeight-transcript.scrollTop-transcript.clientHeight<80;};
 function showActivity(state,text){activity.hidden=false;activity.dataset.state=state;if(activityText.textContent!==text)activityText.textContent=text;}
-const form = el('form', '', 'codex-compose'), promptLabel = el('label', 'Instruction to the selected thread'), input = el('textarea'); input.rows = 3; input.maxLength = 16000; input.required = false; input.placeholder = 'Describe the next task or correction…'; input.setAttribute('aria-describedby','codex-compose-help'); promptLabel.append(input);
+const form = el('form', '', 'codex-compose'), promptLabel = el('label', '', 'codex-prompt'), input = el('textarea'); input.rows = 3; input.maxLength = 16000; input.required = false; input.placeholder = 'Ask Codex to do something…'; input.setAttribute('aria-label','Instruction to the selected thread'); input.setAttribute('aria-describedby','codex-compose-help'); promptLabel.append(input);
 const actions = el('div', '', 'codex-actions'), mode = el('select'); mode.setAttribute('aria-label', 'Instruction delivery');
-for (const [value, text] of [['send', 'Queue a message (wait for idle)'], ['steer', 'Steer the running turn']]) { const option = el('option', text); option.value = value; mode.append(option); }
-const send = el('button', 'Send instruction'); send.type = 'submit'; send.disabled=true; const open = el('button', 'Open in VS Code'); open.type = 'button'; actions.append(mode, send, open); const composeHelp=el('small', 'Stop keeps a draft in this browser tab. Send queues it for this thread; Steer interrupts the active turn. Ctrl/⌘ + Enter submits. Handle approvals in local VS Code.'); composeHelp.id='codex-compose-help'; form.append(promptLabel, actions, composeHelp);
-const screenshots=screenshotPicker(form,input,dirty=>{if(dirty)requestId=null;send.disabled=voiceBusy||busy||screenshots.processing||send.dataset.connected!=='true'||(!input.value.trim()&&!screenshots.count);});form.insertBefore(screenshots.root,actions);
+for (const [value, text] of [['send', 'Queue for next turn'], ['steer', 'Steer current turn']]) { const option = el('option', text); option.value = value; mode.append(option); }
+const send = el('button', 'Send instruction'); send.type = 'submit'; send.disabled=true; const open = el('button', 'Open in VS Code'); open.type = 'button'; send.setAttribute('aria-label','Send instruction');send.title='Send instruction · Ctrl/⌘ + Enter';send.textContent='↑';actions.append(mode, send);open.className='codex-open'; const composeHelp=el('small', 'Stop keeps a draft in this browser tab. Send queues it for this thread; Steer interrupts the active turn. Ctrl/⌘ + Enter submits. Handle approvals in local VS Code.'); composeHelp.id='codex-compose-help'; const help=el('details','','codex-compose-help');help.append(el('summary','Sending options'),composeHelp,open);form.append(promptLabel, actions, help);
+const screenshots=screenshotPicker(form,input,dirty=>{if(dirty)requestId=null;send.disabled=voiceBusy||busy||screenshots.processing||send.dataset.connected!=='true'||(!input.value.trim()&&!screenshots.count);});form.insertBefore(screenshots.root,actions);screenshots.root.querySelector('button').title='Choose screenshots, paste an image, or drop it here. Up to 4 images, 4 MB total.';
 input.addEventListener('keydown',event=>{if(event.key==='Enter' && (event.ctrlKey||event.metaKey) && !event.isComposing){event.preventDefault();if(!send.disabled)form.requestSubmit();}});
 form.hidden=true; transcript.hidden=true; info.className='codex-thread-info'; conversation.append(back,empty,info, transcript, latest, activity, form); workspace.append(sidebar, conversation); root.append(heading, unlock, status, workspace);
 let requestId = null, voiceBusy=false;
@@ -164,14 +164,14 @@ more.onclick = () => { if (next !== null) { offset = next; load().catch(failure)
 input.oninput = () => { requestId = null;saveDraft(); send.disabled=voiceBusy || busy || send.dataset.connected!=='true' || screenshots.processing || (!input.value.trim()&&!screenshots.count); };
 form.onsubmit = async event => {
   event.preventDefault(); if (voiceBusy || busy || screenshots.processing || !selected || (!input.value.trim()&&!screenshots.count)) return;
-  saveDraft();busy = true;voice.setDisabled(true); screenshots.setDisabled(true);send.disabled = true; lock.disabled = true; input.readOnly=true; mode.disabled=true; send.textContent='Sending…'; showActivity('sending','Sending your instruction…'); requestId ||= uuid();
+  saveDraft();busy = true;voice.setDisabled(true); screenshots.setDisabled(true);send.disabled = true; lock.disabled = true; input.readOnly=true; mode.disabled=true; send.textContent='…';send.setAttribute('aria-label','Sending…'); showActivity('sending','Sending your instruction…'); requestId ||= uuid();
   try {
     const payload={thread_id:selected,text:input.value,request_id:requestId,images:screenshots.snapshot()};
     const result = await api(mode.value==='send'?'queue':'commands',mode.value==='send'?payload:{...payload,action:'steer'});
     status.textContent = result.message;
     if (result.accepted) { screenshots.clear();input.value = '';saveDraft(); requestId = null;await queue.refresh(); }
   } catch (error) { failure(new Error(error.message + ' Check the conversation before retrying; delivery may be uncertain.')); }
-  finally { busy = false;voice.setDisabled(false); screenshots.setDisabled(false);lock.disabled = false; input.readOnly=false; mode.disabled=false; send.textContent='Send instruction'; await readThread().catch(failure); }
+  finally { busy = false;voice.setDisabled(false); screenshots.setDisabled(false);lock.disabled = false; input.readOnly=false; mode.disabled=false; send.textContent='↑';send.setAttribute('aria-label','Send instruction'); await readThread().catch(failure); }
 };
 open.onclick = async () => { if (!selected || busy) return; open.disabled = true; try { const result = await api('commands', { thread_id: selected, action: 'open' }); status.textContent = result.message; } catch (error) { failure(error); } finally { open.disabled = false; } };
 async function restoreDevice(){
