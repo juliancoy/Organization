@@ -574,7 +574,7 @@ class Agent:
                     if previous:previous['timer'].cancel();previous['lease'].close()
                     self.busy()
                     return {'released':True}
-                if set(args)!={'id','group','cpus','memory_mb','container'} or args['cpus']!=1 or args['memory_mb']!=512 or not re.fullmatch(r'genomics-[a-f0-9]{32}',args['container']):
+                if set(args)!={'id','group','cpus','memory_mb','container'} or type(args['cpus']) is not int or args['cpus']!=1 or type(args['memory_mb']) is not int or args['memory_mb'] not in (512,1024,2048) or not re.fullmatch(r'genomics-[a-f0-9]{32}',args['container']):
                     raise ValueError('Expected a bounded private batch resource request')
                 policy=worker_policy(self.config)
                 if not policy['accepting_jobs']:raise RuntimeError(policy['reason'])

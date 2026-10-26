@@ -11,6 +11,24 @@ spec=importlib.util.spec_from_file_location('genomics_agent_resource_path',Path(
 agent_module=importlib.util.module_from_spec(spec);spec.loader.exec_module(agent_module)
 
 class GenomicsResourcePathTests(unittest.TestCase):
+    def test_annotation_memory_is_reserved_atomically_and_remains_bounded(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            agent=agent_module.Agent.__new__(agent_module.Agent)
+            agent.root=Path(temporary);agent.lock=threading.RLock();agent.config=agent.root/'config.json';agent.busy=lambda:None
+            first={'id':'a'*32,'group':'genomics-vep','cpus':1,'memory_mb':2048,'container':'genomics-'+'b'*32}
+            second={'id':'c'*32,'group':'genomics-vep','cpus':1,'memory_mb':1024,'container':'genomics-'+'d'*32}
+            with patch.object(agent_module.ResourceLease,'capacity',return_value={'cpus':8,'memory_mb':2560,'available_mb':2560}),patch.object(agent_module,'worker_policy',return_value={'accepting_jobs':True}):
+                try:
+                    self.assertTrue(agent.dispatch('resource.acquire',first)['acquired'])
+                    self.assertFalse(agent.dispatch('resource.acquire',second)['acquired'])
+                    agent.dispatch('resource.release',{'id':first['id']})
+                    self.assertTrue(agent.dispatch('resource.acquire',second)['acquired'])
+                    for memory in (True,1024.0,768,4096):
+                        with self.assertRaisesRegex(ValueError,'bounded'):
+                            agent.dispatch('resource.acquire',{**first,'memory_mb':memory})
+                finally:
+                    for args in (first,second):agent.dispatch('resource.release',{'id':args['id']})
+
     def test_resource_pool_does_not_require_a_writable_container_home(self):
         with tempfile.TemporaryDirectory()as temporary:
             agent=agent_module.Agent.__new__(agent_module.Agent)
