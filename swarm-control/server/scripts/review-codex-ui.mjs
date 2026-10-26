@@ -29,6 +29,7 @@ export async function reviewCodexUi(output){
       researchJobs=value.cancel?researchJobs.map(j=>({...j,status:'stopped'})):[{id:value.request_id,kind:'research',status:'queued',submitted_at:'2026-10-25T19:00:00Z'}];res.end(JSON.stringify({accepted:true}));return}
     res.end(JSON.stringify({profiles:['baseline'],jobs:researchJobs}));return
    }
+   if(['/api/v1/swarm/connections','/api/v1/swarm/wgs'].includes(url.pathname)){res.setHeader('Content-Type','application/json');res.statusCode=statusUnauthorized?401:200;res.end(JSON.stringify(url.pathname.endsWith('/wgs')?{available:false}:{hosts:[]}));return}
    if(url.pathname==='/api/v1/swarm/task-manager'){
     res.setHeader('Content-Type','application/json');res.statusCode=statusUnauthorized?401:200;
     res.end(JSON.stringify({network:{devices:[{hostname:'worker.local',ip:'10.0.0.2',mac:'aa'}]},metrics:{history:[{sampled_at:Date.now()/1000-240,hosts:[{host:'worker.local',status:'live',sampled_at:Date.now()/1000-240,percent:20,cpus:8}]},{sampled_at:Date.now()/1000-235,hosts:[{host:'worker.local',status:'live',sampled_at:Date.now()/1000-235,percent:25,cpus:8}]}],total_percent:42,live_hosts:1,total_hosts:1,measured_logical_cpus:8,activity_status:'available',test_hosts:1,measured_test_hosts:1,active_test_percent:42,hosts:[{host:'worker.local',status:'live',sampled_at:Date.now()/1000,window_seconds:5,sample_age_seconds:1,percent:42,ram_percent:35,disk_busy_percent:12,network_mbps:7,cpus:8,workload_phase:'testing',hardware:{gpus:[{pci_id:'gpu-1',name:'Fixture GPU',utilization_percent:25,memory_total_mib:100,memory_free_mib:60}]}}]},run:{id:'fixture',status:'running',hosts:[{host:'worker.local',status:'running',jobs:[{name:'Browser checks',status:'running'}]}]}}));return
@@ -46,7 +47,7 @@ export async function reviewCodexUi(output){
     res.end(JSON.stringify(item?{...item,model:'Codex',owner_connected:ownerConnected,messages:[{role:'user',text:'Make the remote workspace easier to scan and use on a phone.'},{role:'assistant',text:'I’ll organize the conversation list, clarify connection status and keep the instruction composer stable while updates arrive.\n\nThe active conversation will stay visible, and your draft will be preserved.'}]}:{threads,next_offset:null,machine:'Fixture workstation',connected:true}));return
    }
    if(url.pathname==='/'){res.setHeader('Content-Type','text/html');res.end('<!doctype html><html lang="en"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Codex UI review</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/codex.css"><body><main><section id="codex-context"></section></main><script type="module" src="/codex.js"></script></body></html>');return}
-   if(!['/task-manager.js','/task-manager.css','/tests.css','/levels.js','/levels-model.js','/resource-history.js','/cpu-report.js','/snapshot-fetch.js','/docker-downloads.js','/research.css','/research.js','/style.css','/codex.css','/codex.js','/codex-screenshots.js','/codex-voice.js','/codex-queue.js','/swarm-status.css','/swarm-status.js','/swarm-machines.js'].includes(url.pathname)){res.writeHead(404).end();return}
+   if(!['/wgs-progress.js','/machine-connections.js','/task-manager.js','/task-manager.css','/tests.css','/levels.js','/levels-model.js','/resource-history.js','/cpu-report.js','/snapshot-fetch.js','/docker-downloads.js','/research.css','/research.js','/style.css','/codex.css','/codex.js','/codex-screenshots.js','/codex-voice.js','/codex-queue.js','/swarm-status.css','/swarm-status.js','/swarm-machines.js'].includes(url.pathname)){res.writeHead(404).end();return}
    res.setHeader('Content-Type',url.pathname.endsWith('.js')?'text/javascript':'text/css');res.end(await readFile(join(view,url.pathname.slice(1))))
   }catch(error){res.writeHead(500).end(error.message)}
  })
@@ -59,6 +60,7 @@ export async function reviewCodexUi(output){
   await page.goto(base+'/task-manager');
   await page.getByRole('heading',{name:'Swarm Task Manager',exact:true}).waitFor();
   await page.waitForFunction(()=>document.querySelector('#levels-status')?.textContent.startsWith('Updated'));
+  await page.waitForFunction(()=>document.querySelector('#task-summary')?.textContent.includes('Current run: running'));
   assert.match(await page.locator('#task-summary').textContent(),/Current run: running/);
   await page.getByRole('button',{name:'CPU',exact:true}).click();
   assert.match(await page.locator('#levels-plot path[fill="none"]').first().getAttribute('d'),/L/);
@@ -75,7 +77,7 @@ export async function reviewCodexUi(output){
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   }
   await page.screenshot({path:join(output,`task-manager-${width}.png`),fullPage:true});
-  assert(resourceRequests.every(url=>new URL(url).origin===base&&new URL(url).pathname==='/api/v1/swarm/task-manager'),'Resource view must use the authenticated same-origin feed');
+  assert(resourceRequests.every(url=>new URL(url).origin===base&&['/api/v1/swarm/task-manager','/api/v1/swarm/connections','/api/v1/swarm/wgs'].includes(new URL(url).pathname)),'Resource view must use the authenticated same-origin feed');
   statusUnauthorized=true;
   await page.waitForFunction(()=>document.querySelector('#levels-status')?.textContent.includes('Sign in to Swarm Control'),{},{timeout:10000});
   assert.equal(await page.locator('#levels-legend').textContent(),'');
