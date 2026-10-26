@@ -49,6 +49,7 @@ function networkLegend(legend){
    const caption=document.createElement('div');caption.className='levels-interface-heading';
    const label=document.createElement('span');label.textContent=/^(en|eth)/.test(name)?'Ethernet':/^(wl|wifi)/.test(name)?'Wi-Fi':/^(ww|ppp)/.test(name)?'Mobile':name;
    caption.append(label);if(first.interface){const code=document.createElement('code');code.textContent=name;code.title=name;caption.append(code);}card.append(caption);
+   if(first.interface){const link=document.createElement('p');link.className='levels-interface-link';link.textContent=first.linkLabel;link.title='Current negotiated Ethernet speed or reported Wi-Fi PHY rates. Payload throughput is lower; Wi-Fi rates change with radio conditions.';card.append(link);}
    const controls=document.createElement('div');controls.className='levels-interface-directions';
    rows.sort((a,b)=>(a.direction==='send'?0:1)-(b.direction==='send'?0:1));
    for(const row of rows)controls.append(legendButton(row,true));card.append(controls);group.append(card);

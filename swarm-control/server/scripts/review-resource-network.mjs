@@ -11,7 +11,7 @@ const server=createServer(async(req,res)=>{
  const url=new URL(req.url,'http://localhost');res.setHeader('Cache-Control','no-store')
  if(req.method!=='GET'){res.writeHead(405).end();return}
  if(url.pathname==='/api/v1/swarm/task-manager'){
-  const now=Date.now(),host={host:'worker.local',addresses:['10.42.0.2'],sampled_at:now/1000,status:'live',percent:20,cpus:4,network_interfaces:[{name:'eth0',ifindex:2,state:'up',status:'live',sampled_at:now/1000,rx_mbps:4,tx_mbps:10,network_mbps:14},{name:'wlan0',ifindex:3,state:'up',status:'live',sampled_at:now/1000,rx_mbps:2,tx_mbps:1,network_mbps:3}]};
+  const now=Date.now(),host={host:'worker.local',addresses:['10.42.0.2'],sampled_at:now/1000,status:'live',percent:20,cpus:4,network_interfaces:[{name:'eth0',ifindex:2,link_speed_mbps:100,link_duplex:'full',state:'up',status:'live',sampled_at:now/1000,rx_mbps:4,tx_mbps:10,network_mbps:14},{name:'wlan0',ifindex:3,link_rx_mbps:72.2,link_tx_mbps:65,state:'up',status:'live',sampled_at:now/1000,rx_mbps:2,tx_mbps:1,network_mbps:3}]};
   const hosts=[host,...['compai.local','codecollective.local','julian-latitude.local','julian-minipc.local','wolf-latitude.local'].map((name,n)=>({...host,host:name,addresses:['10.42.0.'+(n+10)],network_interfaces:host.network_interfaces.map(i=>({...i,tx_mbps:55.3+n,rx_mbps:50.3+n,network_mbps:105.6+2*n}))}))];
   host.network_interfaces.push({name:'enp9s0',ifindex:9,state:'down',status:'disconnected',sampled_at:now/1000,network_mbps:null,rx_mbps:null,tx_mbps:null});
   hosts.push({host:'no-interface.local',status:'live',sampled_at:now/1000,network_interfaces:[]});
@@ -39,6 +39,8 @@ try{
  
  await expect(page.locator('#levels-legend')).not.toContainText('interface unavailable')
  await expect(page.locator('#levels-legend')).not.toContainText('interface unknown')
+ await expect(page.locator('.levels-interface-link').first()).toHaveText('Link: 100 Mb/s · full duplex')
+ await expect(page.locator('.levels-interface-link').nth(1)).toHaveText('Wi-Fi PHY: RX 72.2 Mb/s · TX 65 Mb/s')
  await expect(page.locator('#levels-legend')).not.toContainText('no-interface')
  await expect(page.getByRole('button',{name:/worker.local · enp9s0/})).toHaveCount(2)
  await expect(page.getByRole('button',{name:/worker.local · enp9s0/}).first()).toContainText('Not connected')
@@ -52,6 +54,7 @@ try{
   await page.setViewportSize({width,height:1000})
   const legend=page.locator('#levels-legend')
   const buttons=legend.locator('button')
+  assert(await legend.locator('.levels-interface-link').evaluateAll(nodes=>nodes.every(el=>el.scrollWidth<=el.clientWidth)),`${width}: link speed text clipped`)
   assert(await legend.evaluate(el=>el.scrollWidth<=el.clientWidth),`${width}: machine groups overflow horizontally`)
   const groups=await legend.locator('.levels-network-machine').evaluateAll(nodes=>nodes.map(el=>{const r=el.getBoundingClientRect();return {top:r.top,bottom:r.bottom}}))
   assert(groups.every((r,n)=>n===0||r.top>=groups[n-1].bottom),`${width}: machine groups must stack vertically`)

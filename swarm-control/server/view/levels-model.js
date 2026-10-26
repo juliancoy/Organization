@@ -16,7 +16,7 @@ export function deviceLevels(data,metrics,mode,now=Date.now()) {
    const field=mode==='send'?'tx_mbps':mode==='receive'?'rx_mbps':'network_mbps';
    const recent=now/1000-iface.sampled_at<15,disconnected=recent&&(iface.status==='disconnected'||['down','lowerlayerdown','notpresent'].includes(iface.state));
    const fresh=recent&&iface.status==='live'&&!disconnected;
-   rows.push({id:`${host.host}:interface:${iface.ifindex}:${iface.name}`,name:`${host.host} · ${iface.name}`,machine:host.host,interface:iface.name,
+   rows.push({id:`${host.host}:interface:${iface.ifindex}:${iface.name}`,name:`${host.host} · ${iface.name}`,machine:host.host,interface:iface.name,linkLabel:networkLinkLabel(iface,recent,disconnected),
     value:fresh&&valid(iface[field])?iface[field]:null,throughput:fresh&&valid(iface.network_mbps)?iface.network_mbps:null,disconnected,unavailableLabel:disconnected?'Not connected':'No data',basis:`Physical interface ${iface.name} · ${iface.state||'unknown state'} · ${iface.window_seconds??'unknown'}s counter interval`});
   }
  }
@@ -46,4 +46,13 @@ export function deviceColor(id){let hash=0;for(const c of id)hash=(hash*31+c.cha
 
 export function compareNetworkRows(a,b){
  return (b.throughput??b.value??-1)-(a.throughput??a.value??-1)||(a.machine||a.name).localeCompare(b.machine||b.name)||a.name.localeCompare(b.name);
+}
+
+export function networkLinkLabel(iface,recent=true,disconnected=false){
+ if(!recent)return 'Link speed unavailable';
+ if(disconnected)return 'Link: Not connected';
+ const rate=value=>value>=1000?`${Number((value/1000).toFixed(2))} Gb/s`:`${Number(value.toFixed(1))} Mb/s`;
+ if(valid(iface.link_speed_mbps)&&iface.link_speed_mbps>0)return `Link: ${rate(iface.link_speed_mbps)}${['full','half'].includes(iface.link_duplex)?' · '+iface.link_duplex+' duplex':''}`;
+ const wifi=['rx','tx'].filter(direction=>valid(iface['link_'+direction+'_mbps'])&&iface['link_'+direction+'_mbps']>0).map(direction=>direction.toUpperCase()+' '+rate(iface['link_'+direction+'_mbps']));
+ return wifi.length?'Wi-Fi PHY: '+wifi.join(' · '):'Link speed unavailable';
 }

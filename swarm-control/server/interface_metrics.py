@@ -4,7 +4,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-SCRIPT = '''import json,time
+SCRIPT = r'''import json,time,re,subprocess
 from pathlib import Path
 interfaces={}
 for device in sorted(Path('/sys/class/net').iterdir()):
@@ -14,6 +14,23 @@ for device in sorted(Path('/sys/class/net').iterdir()):
   interfaces[device.name]={'ifindex':int((device/'ifindex').read_text()),'state':(device/'operstate').read_text().strip(),
    'rx_bytes':int((device/'statistics/rx_bytes').read_text()),'tx_bytes':int((device/'statistics/tx_bytes').read_text())}
  except (OSError,ValueError):continue
+ row=interfaces[device.name]
+ try:
+  speed=int((device/'speed').read_text())
+  if speed>0:row['link_speed_mbps']=speed
+ except (OSError,ValueError):pass
+ try:
+  duplex=(device/'duplex').read_text().strip()
+  if duplex in ('full','half'):row['link_duplex']=duplex
+ except OSError:pass
+ if (device/'wireless').exists() or (device/'phy80211').exists():
+  row.pop('link_speed_mbps',None);row.pop('link_duplex',None)
+  try:
+   result=subprocess.run(['iw','dev',device.name,'link'],capture_output=True,text=True,timeout=.5)
+   for direction,rate in re.findall(r'(rx|tx) bitrate:\s*([0-9.]+) MBit/s',result.stdout):
+    value=float(rate)
+    if value>0:row['link_'+direction+'_mbps']=value
+  except (OSError,ValueError,subprocess.SubprocessError):pass
 print(json.dumps({'monotonic':time.monotonic(),'sampled_at':time.time(),
  'boot_id':Path('/proc/sys/kernel/random/boot_id').read_text().strip(),'interfaces':interfaces}))
 '''
@@ -55,6 +72,10 @@ class InterfaceSampler:
             row={'name':name,'ifindex':counters.get('ifindex'),'state':counters.get('state'),
                  'status':'warming','sampled_at':current['sampled_at'],'window_seconds':elapsed if valid else None,
                  'rx_mbps':None,'tx_mbps':None,'network_mbps':None}
+            for field in ('link_speed_mbps','link_rx_mbps','link_tx_mbps'):
+                value=counters.get(field)
+                if isinstance(value,(int,float)) and not isinstance(value,bool) and 0<value<1000000:row[field]=value
+            if counters.get('link_duplex') in ('full','half'):row['link_duplex']=counters['link_duplex']
             before=(previous.get('interfaces') or {}).get(name) if previous else None
             if valid and before and before.get('ifindex')==counters.get('ifindex'):
                 changes=[counters[key]-before[key] for key in ('rx_bytes','tx_bytes')]
