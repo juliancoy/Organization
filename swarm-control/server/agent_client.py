@@ -26,7 +26,7 @@ def multipath_connection(address,timeout=30,source_address=None,**kwargs):
         try:
             try:sock=socket.socket(family,kind,getattr(socket,'IPPROTO_MPTCP',262))
             except OSError as error:
-                if error.errno not in (errno.EPROTONOSUPPORT,errno.EINVAL,errno.EAFNOSUPPORT,errno.EPERM):raise
+                if error.errno not in (errno.EPROTONOSUPPORT,errno.ENOPROTOOPT,errno.EINVAL,errno.EAFNOSUPPORT,errno.EPERM):raise
                 sock=socket.socket(family,kind,protocol)
             sock.settimeout(timeout)
             if source_address:sock.bind(source_address)

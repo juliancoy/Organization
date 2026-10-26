@@ -73,9 +73,21 @@ class PeerLayerCacheTests(unittest.TestCase):
     def test_mptcp_socket_falls_back_only_for_unsupported_protocol(self):
         import socket,errno
         module=self.module()
-        with patch.object(module.socket,'socket',side_effect=[OSError(errno.EPROTONOSUPPORT,'unsupported'),Mock()]) as factory:
+        with patch.object(module,'MultipathSocket',side_effect=OSError(errno.EPROTONOSUPPORT,'unsupported')) as factory,patch.object(module.socket,'socket') as fallback:
             module.transport_socket((socket.AF_INET,socket.SOCK_STREAM,0))
-            self.assertEqual(factory.call_args_list[0].args[2],262)
-            self.assertEqual(factory.call_args_list[1].args[2],0)
-        with patch.object(module.socket,'socket',side_effect=OSError(errno.EMFILE,'socket limit')):
+            self.assertEqual(factory.call_args.args[2],262)
+            self.assertEqual(fallback.call_args.args[2],0)
+        with patch.object(module,'MultipathSocket',side_effect=OSError(errno.EMFILE,'socket limit')):
             with self.assertRaises(OSError):module.transport_socket((socket.AF_INET,socket.SOCK_STREAM,0))
+
+    def test_asyncio_can_connect_numeric_mptcp_addresses(self):
+        import asyncio,socket
+        module=self.module()
+        async def connect():
+            server=socket.socket();server.bind(('127.0.0.1',0));server.listen();server.setblocking(False)
+            sock=module.transport_socket((socket.AF_INET,socket.SOCK_STREAM,0));sock.setblocking(False)
+            try:
+                await asyncio.wait_for(asyncio.get_running_loop().sock_connect(sock,server.getsockname()),2)
+                self.assertEqual(sock.proto,socket.IPPROTO_TCP)
+            finally:sock.close();server.close()
+        asyncio.run(connect())

@@ -24,13 +24,22 @@ CACHE_LOCK=threading.Lock()
 PATH=re.compile(r'/v2/tests/[a-f0-9]{24}/(?:manifests|blobs)/sha256:[a-f0-9]{64}')
 
 
+class MultipathSocket(socket.socket):
+    @property
+    def proto(self):
+        # asyncio resolves even numeric addresses with sock.proto. libc's
+        # getaddrinfo rejects protocol 262; DNS resolution still uses TCP.
+        # SO_PROTOCOL on the actual descriptor remains IPPROTO_MPTCP.
+        return socket.IPPROTO_TCP
+
+
 def transport_socket(address_info):
     """Negotiate MPTCP when supported; kernel transparently accepts TCP peers."""
     family,kind,protocol,*_=address_info
     if family in (socket.AF_INET,socket.AF_INET6):
-        try:return socket.socket(family,kind,getattr(socket,'IPPROTO_MPTCP',262))
+        try:return MultipathSocket(family,kind,getattr(socket,'IPPROTO_MPTCP',262))
         except OSError as error:
-            if error.errno not in (errno.EPROTONOSUPPORT,errno.EINVAL,errno.EAFNOSUPPORT,errno.EPERM):raise
+            if error.errno not in (errno.EPROTONOSUPPORT,errno.ENOPROTOOPT,errno.EINVAL,errno.EAFNOSUPPORT,errno.EPERM):raise
     return socket.socket(family,kind,protocol)
 
 
