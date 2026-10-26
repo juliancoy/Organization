@@ -20,6 +20,7 @@ class ImageRegistry:
         self.ready=False
         self.published={}
         self.seeders={}
+        self.bootstrap_locks={}
 
     def start(self):
         if self.ready:return
@@ -87,6 +88,19 @@ class ImageRegistry:
             raise RuntimeError('Layer delivery requires a coordinator image and enrolled agent destination')
         from agent_client import AgentClient,CONFIG
         repository,digest,fingerprint=self.publish(image,expected)
+        key=(image,fingerprint)
+        with self.lock:gate=self.bootstrap_locks.setdefault(key,threading.Lock())
+        # Seed one recipient first; concurrent cold workers then fetch from it
+        # instead of all starting duplicate coordinator transfers.
+        while not gate.acquire(timeout=1):
+            if self.service.cancelled():raise InterruptedError('Image preparation stopped')
+        try:
+            if not self.seeders.get(key):return self.deliver(destination,image,repository,digest,fingerprint)
+        finally:gate.release()
+        return self.deliver(destination,image,repository,digest,fingerprint)
+
+    def deliver(self,destination,image,repository,digest,fingerprint):
+        from agent_client import AgentClient,CONFIG
         coordinator=json.loads(CONFIG.read_text())['name']
         self.service.notify(image,'distributing_layers',coordinator,destination['host'])
         client=AgentClient(destination);progress_client=AgentClient(destination)

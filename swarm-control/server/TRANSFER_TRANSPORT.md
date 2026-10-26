@@ -11,7 +11,8 @@ Image recipients retain complete SHA-256-verified compressed layers and manifest
 in the private launcher configuration directory's `layer-cache`. Retention is
 bounded to 2 GiB. Incomplete objects are never served. Low free disk space skips
 caching. Image content is still verified by Docker and by the expected image
-fingerprint before tagging. Later recipients try enrolled cached peers first,
+fingerprint before tagging. On a cold start, one recipient is seeded before parallel delivery to the rest.
+Later recipients try enrolled cached peers first,
 then the coordinator. Cache misses or unavailable peers fall back per object.
 `image.pull` returns source byte counts; transfer progress includes those counts.
 
