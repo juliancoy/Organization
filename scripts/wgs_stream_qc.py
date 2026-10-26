@@ -8,6 +8,8 @@ import math
 import os
 from pathlib import Path
 import resource
+import socket
+from collections import Counter
 import signal
 import subprocess
 import threading
@@ -74,17 +76,99 @@ class OrderedChunks(io.RawIOBase):
         super().close()
 
 
-def aggregate_qc(folder,item,chunk_bytes=CHUNK_BYTES,progress=None,stop=None):
+BATCH_BASES=4*1024*1024
+BASE_KEYS=('A','C','G','T','N','other')
+
+
+def cpu_batch_counts(sequence,quality):
+    """Count one bounded batch; shared fallback keeps transactions exact."""
+    bases=Counter(sequence.upper());hist=Counter(quality)
+    counts={base:bases[ord(base)] for base in BASE_KEYS[:-1]}
+    counts['other']=len(sequence)-sum(counts.values())
+    histogram=[hist[value+33] for value in range(94)]
+    return {'counts':counts,'quality_histogram':histogram,
+            'quality_sum':sum(i*n for i,n in enumerate(histogram)),
+            'q20':sum(histogram[20:]),'q30':sum(histogram[30:])}
+
+
+def validate_gpu_counts(value,length,request_id=None):
+    """Reject partial, mismatched or software responses before committing anything."""
+    if not isinstance(value,dict) or value.get('version')!=1 or value.get('backend')!='vulkan' or value.get('software_fallback') is not False or value.get('device_type') not in (1,2):raise ValueError('Unverified GPU backend')
+    if request_id is not None and value.get('request_id')!=request_id:raise ValueError('GPU request identity differs')
+    if value.get('exact_match') is not True and value.get('validated_backend') is not True:raise ValueError('GPU backend fixtures not verified')
+    if value.get('exact_match') is False:raise ValueError('GPU CPU crosscheck failed')
+    counts=value.get('counts',{});hist=value.get('quality_histogram',[])
+    if set(counts)!=set(BASE_KEYS) or any(type(n) is not int or n<0 for n in counts.values()) or sum(counts.values())!=length:raise ValueError('GPU base totals differ')
+    if len(hist)!=94 or any(type(n) is not int or n<0 for n in hist) or sum(hist)!=length or value.get('bases')!=length:raise ValueError('GPU quality totals differ')
+    if value.get('quality_sum')!=sum(i*n for i,n in enumerate(hist)) or value.get('q20')!=sum(hist[20:]) or value.get('q30')!=sum(hist[30:]):raise ValueError('GPU quality summaries differ')
+    return value
+
+
+def request_gpu_batch(sequence,quality,config):
+    """Private files and one bounded RPC; a failed transaction is never committed."""
+    ident=uuid.uuid4().hex;local=Path(config['local_root']);batch=local/'batches';batch.mkdir(mode=0o700,parents=True,exist_ok=True)
+    paths=[batch/(ident+'.seq'),batch/(ident+'.qual')]
+    try:
+        for path,data in zip(paths,(sequence,quality)):
+            fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+            with os.fdopen(fd,'wb') as stream:stream.write(data)
+        request={'version':1,'request_id':ident,'sequence_path':config['host_root']+'/batches/'+paths[0].name,'quality_path':config['host_root']+'/batches/'+paths[1].name}
+        if config.get('verify'):request['verify']=True
+        with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
+            client.settimeout(config.get('timeout',10));client.connect(str(local/'service.sock'));client.sendall(json.dumps(request).encode()+b'\n')
+            with client.makefile('rb') as stream:line=stream.readline(65537)
+        if not line.endswith(b'\n') or len(line)>65536:raise ValueError('Invalid GPU response framing')
+        value=validate_gpu_counts(json.loads(line),len(sequence),ident)
+        if config.get('verify') and (value.get('exact_match') is not True or value.get('cpu_crosschecked') is not True):raise ValueError('Requested GPU CPU crosscheck was not performed')
+        return value
+    finally:
+        for path in paths:path.unlink(missing_ok=True)
+
+
+class BatchCounts:
+    """Commit each batch exactly once through GPU or CPU fallback."""
+    def __init__(self,counts,batch_bases=BATCH_BASES,gpu_request=None):
+        if batch_bases<1:raise ValueError('Batch size must be positive')
+        self.counts=counts;self.limit=batch_bases;self.gpu_request=gpu_request;self.sequence=bytearray();self.quality=bytearray()
+        counts.update(base_counts={k:0 for k in BASE_KEYS},quality_histogram=[0]*94,gpu_batches=0,gpu_bases=0,cpu_batches=0,cpu_bases=0,gpu_fallback_batches=0,gpu_cpu_crosschecked_batches=0,qc_backend='cpu',histogram_source='cpu',gpu_devices=[])
+    def add(self,sequence,quality):
+        # Split exceptionally long records too; parser owns the record boundary.
+        position=0
+        while position<len(sequence):
+            size=min(self.limit-len(self.sequence),len(sequence)-position)
+            self.sequence.extend(sequence[position:position+size]);self.quality.extend(quality[position:position+size]);position+=size
+            if len(self.sequence)==self.limit:self.flush()
+    def flush(self):
+        if not self.sequence:return
+        gpu=False;value=None;length=len(self.sequence)
+        if self.gpu_request:
+            try:value=validate_gpu_counts(self.gpu_request(self.sequence,self.quality),length);gpu=True
+            except (OSError,ValueError,RuntimeError,KeyError,TypeError,TimeoutError):self.counts['gpu_fallback_batches']+=1
+        if not gpu:value=cpu_batch_counts(self.sequence,self.quality)
+        # No totals change before the whole result has passed validation.
+        c=self.counts
+        for key in BASE_KEYS:c['base_counts'][key]+=value['counts'][key]
+        for i,n in enumerate(value['quality_histogram']):c['quality_histogram'][i]+=n
+        c['gc_bases']+=value['counts']['G']+value['counts']['C'];c['ambiguous_bases']+=value['counts']['N']+value['counts']['other']
+        c['quality_sum']+=value['quality_sum'];c['q20_bases']+=value['q20'];c['q30_bases']+=value['q30']
+        c['gpu_batches' if gpu else 'cpu_batches']+=1;c['gpu_bases' if gpu else 'cpu_bases']+=length
+        if gpu and value.get('cpu_crosschecked',value.get('exact_match') is True):c['gpu_cpu_crosschecked_batches']+=1
+        if gpu and value.get('device') not in c['gpu_devices']:c['gpu_devices'].append(str(value.get('device','unknown'))[:200])
+        c['qc_backend']='mixed' if c['gpu_bases'] and c['cpu_bases'] else 'vulkan' if c['gpu_bases'] else 'cpu';c['histogram_source']=c['qc_backend']
+        self.sequence.clear();self.quality.clear()
+
+
+def aggregate_qc(folder,item,chunk_bytes=CHUNK_BYTES,progress=None,stop=None,gpu=None,batch_bases=BATCH_BASES,gpu_request=None):
     """Four-line ENA FASTQ, Phred+33; sequences and identifiers never leave the parser."""
     progress=progress or (lambda value:None);stop=stop or STOP;last=[0.];started=time.monotonic()
     counts={'reads':0,'bases':0,'gc_bases':0,'ambiguous_bases':0,'quality_sum':0,'q20_bases':0,'q30_bases':0,'min_length':None,'max_length':0}
+    batch=BatchCounts(counts,batch_bases,gpu_request or ((lambda sequence,quality:request_gpu_batch(sequence,quality,gpu)) if gpu else None))
     reader=None
     def report(phase,force=False):
         now=time.monotonic()
         if force or now-last[0]>=2:
-            progress({'phase':phase,'provisional':phase!='verified','updated':time.time(),'elapsed_seconds':round(now-started,2),'compressed_bytes_read':reader.offset if reader else 0,'compressed_bytes_total':item['bytes'],'verified_chunks':reader.verified_chunks if reader else 0,**counts});last[0]=now
+            progress({'phase':phase,'provisional':phase!='verified','updated':time.time(),'elapsed_seconds':round(now-started,2),'compressed_bytes_read':reader.offset if reader else 0,'compressed_bytes_total':item['bytes'],'verified_chunks':reader.verified_chunks if reader else 0,'pending_batch_bases':len(batch.sequence),**counts});last[0]=now
     reader=OrderedChunks(folder,item,chunk_bytes,waiting=lambda:report('waiting_for_complete_chunk'),stop=stop)
-    q20=bytes(1 if value>=53 else 0 for value in range(256));q30=bytes(1 if value>=63 else 0 for value in range(256))
     report('starting',True)
     try:
         with io.BufferedReader(reader,buffer_size=1024*1024) as raw,gzip.GzipFile(fileobj=raw,mode='rb') as stream:
@@ -96,10 +180,11 @@ def aggregate_qc(folder,item,chunk_bytes=CHUNK_BYTES,progress=None,stop=None):
                 if len(header)>LINE_BYTES or len(sequence)>LINE_BYTES or len(plus)>LINE_BYTES or len(quality)>LINE_BYTES or not header.startswith(b'@') or not plus.startswith(b'+') or len(sequence)!=len(quality) or not sequence:
                     raise ValueError('Malformed or unsupported archive FASTQ record')
                 if min(quality)<33 or max(quality)>126:raise ValueError('Invalid Phred+33 quality encoding')
-                sequence=sequence.upper();length=len(sequence)
-                counts['reads']+=1;counts['bases']+=length;counts['gc_bases']+=sequence.count(b'G')+sequence.count(b'C');counts['ambiguous_bases']+=length-sum(sequence.count(base) for base in (b'A',b'C',b'G',b'T'))
-                counts['quality_sum']+=sum(quality)-33*length;counts['q20_bases']+=sum(quality.translate(q20));counts['q30_bases']+=sum(quality.translate(q30));counts['max_length']=max(counts['max_length'],length);counts['min_length']=length if counts['min_length'] is None else min(counts['min_length'],length)
+                length=len(sequence)
+                counts['reads']+=1;counts['bases']+=length;counts['max_length']=max(counts['max_length'],length);counts['min_length']=length if counts['min_length'] is None else min(counts['min_length'],length)
+                batch.add(sequence,quality)
                 report('streaming')
+            batch.flush()
             if reader.offset!=item['bytes'] or reader.md5.hexdigest()!=item['md5']:raise ValueError('Full streaming input failed publisher MD5')
             if counts['reads']!=int(item['read_count']):raise ValueError('FASTQ read count differs from ENA run metadata')
             while reader.receipt() is None:
@@ -110,15 +195,15 @@ def aggregate_qc(folder,item,chunk_bytes=CHUNK_BYTES,progress=None,stop=None):
     finally:reader.close()
 
 
-def qc_memory_mb(chunk_bytes=CHUNK_BYTES,rss_kib=None):
-    """Two chunk buffers + measured coordinator runtime + bounded parser buffers."""
+def qc_memory_mb(chunk_bytes=CHUNK_BYTES,rss_kib=None,batch_bases=BATCH_BASES):
+    """Two chunks, measured runtime, parser buffers, paired batches and CPU uppercase workspace."""
     rss_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss if rss_kib is None else rss_kib
-    return math.ceil((2*chunk_bytes+rss_kib*1024+4*LINE_BYTES)/(1024*1024))
+    return math.ceil((2*chunk_bytes+rss_kib*1024+4*LINE_BYTES+3*batch_bases)/(1024*1024))
 
 
-def run_remote(host,item,ident,output,mapping_reserve_mb=7000,changed=None,download_state=None):
+def run_remote(host,item,ident,output,mapping_reserve_mb=7000,changed=None,download_state=None,gpu_verify=False):
     from scripts import genomics_distributed as distributed
-    from scripts.wgs_swarm_download import AgentClient,atomic_json
+    from scripts.wgs_swarm_download import AgentClient,atomic_json,release_after_cleanup
     name='genomics-'+uuid.uuid4().hex;lease=uuid.uuid4().hex;client=AgentClient(host);done=threading.Event();process=None;errors=[]
     memory=qc_memory_mb(min(CHUNK_BYTES,item['bytes']));report_path=output/(ident+'.json')
     try:
@@ -152,8 +237,14 @@ def run_remote(host,item,ident,output,mapping_reserve_mb=7000,changed=None,downl
                     subprocess.run(distributed.shell_command(host,['docker','rm','-f',name]),capture_output=True,timeout=20);return
         threading.Thread(target=cancel,daemon=True).start()
         payload={'item':item,'folder':'/input/'+ident,'chunk_bytes':CHUNK_BYTES}
+        gpu_mount=[]
+        if host['host']=='julian-minipc.local':
+            gpu_root=str(Path(host['cache']).parent/'gpu-qc')
+            subprocess.run(distributed.shell_command(host,['mkdir','-p','--',gpu_root+'/batches']),check=True,timeout=20)
+            payload['gpu']={'local_root':'/gpu-qc','host_root':gpu_root,'verify':gpu_verify}
+            gpu_mount=['--mount','type=bind,src='+gpu_root+',dst=/gpu-qc']
         worker=Path(__file__).read_text()
-        argv=['docker','run','--rm','--pull=never','--name',name,'--label','org.lifetech.genomics=true','--label','org.lifetech.public-wgs-qc=true','--network','none','--read-only','--log-driver','none','--cpus','1','--memory',str(memory)+'m','--memory-swap',str(memory)+'m','--pids-limit','32','--cap-drop','ALL','--security-opt','no-new-privileges','--ulimit','core=0:0','--user',host.get('container_user','1000:1000'),'--mount','type=bind,src='+host['cache']+',dst=/input,readonly','-i',host['image'],'python','-c',worker,'--worker']
+        argv=['docker','run','--rm','--pull=never','--name',name,'--label','org.lifetech.genomics=true','--label','org.lifetech.public-wgs-qc=true','--network','none','--read-only','--log-driver','none','--cpus','1','--memory',str(memory)+'m','--memory-swap',str(memory)+'m','--pids-limit','32','--cap-drop','ALL','--security-opt','no-new-privileges','--ulimit','core=0:0','--user',host.get('container_user','1000:1000'),'--mount','type=bind,src='+host['cache']+',dst=/input,readonly',*gpu_mount,'-i',host['image'],'python','-c',worker,'--worker']
         process=subprocess.Popen(distributed.shell_command(host,argv),stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,bufsize=1)
         process.stdin.write(json.dumps(payload));process.stdin.close()
         last={}
@@ -167,10 +258,7 @@ def run_remote(host,item,ident,output,mapping_reserve_mb=7000,changed=None,downl
         return last
     finally:
         done.set()
-        if process is not None:
-            try:subprocess.run(distributed.shell_command(host,['docker','rm','-f',name]),capture_output=True,timeout=20)
-            except (OSError,subprocess.TimeoutExpired):pass
-        try:client.call('resource.release',{'id':lease})
+        try:release_after_cleanup(host,name,client,lease)
         finally:client.close()
 
 
@@ -266,7 +354,7 @@ def main():
     if args.worker:
         import sys
         job=json.load(sys.stdin)
-        result=aggregate_qc(job['folder'],job['item'],job.get('chunk_bytes',CHUNK_BYTES),progress=lambda value:print(json.dumps(value),flush=True))
+        result=aggregate_qc(job['folder'],job['item'],job.get('chunk_bytes',CHUNK_BYTES),progress=lambda value:print(json.dumps(value),flush=True),gpu=job.get('gpu'),batch_bases=job.get('batch_bases',BATCH_BASES))
         print(json.dumps(result),flush=True);return
     for sig in (signal.SIGTERM,signal.SIGINT):signal.signal(sig,lambda *_:STOP.set())
     if any(value is None for value in (args.manifest,args.hosts,args.download_state,args.output)):parser.error('Coordinator requires manifest, hosts, download-state and output')
