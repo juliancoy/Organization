@@ -1,3 +1,4 @@
+import {execFileSync} from 'node:child_process'
 import {createServer} from 'node:http'
 import {readFile,mkdir,writeFile} from 'node:fs/promises'
 import {fileURLToPath} from 'node:url'
@@ -11,6 +12,7 @@ const contentSecurityPolicy=apiSource.match(/'Content-Security-Policy':"([^"]+)"
 const view=fileURLToPath(new URL('../view/',import.meta.url))
 export async function reviewCodexUi(output){
  await mkdir(output,{recursive:true})
+ if(!process.env.TASK_MANAGER_ONLY)execFileSync(process.execPath,[fileURLToPath(new URL('./review-history-ui.mjs',import.meta.url)),output],{stdio:'inherit',env:process.env})
  const commands=[],results=[],researchRequests=[];let researchJobs=[];let failNext=false;let ownerConnected=true,statusUnauthorized=false
  const threads=[{id:'design',name:'Improve the remote control workspace',cwd:'/workspace/Organization',updated_at:1792880000,activity:'running'},{id:'release',name:'Review the release checks',cwd:'/workspace/OrgPortal',updated_at:1792876000,activity:'idle'}]
  threads.push(...Array.from({length:18},(_,index)=>({id:'history-'+index,name:'Earlier workspace task '+(index+1),cwd:'/workspace/Organization',updated_at:1792800000-index*300,activity:'idle'})))
@@ -28,7 +30,7 @@ export async function reviewCodexUi(output){
    }
    if(url.pathname==='/api/v1/swarm/task-manager'){
     res.setHeader('Content-Type','application/json');res.statusCode=statusUnauthorized?401:200;
-    res.end(JSON.stringify({network:{devices:[{hostname:'worker.local',ip:'10.0.0.2',mac:'aa'}]},metrics:{total_percent:42,live_hosts:1,total_hosts:1,measured_logical_cpus:8,activity_status:'available',test_hosts:1,measured_test_hosts:1,active_test_percent:42,hosts:[{host:'worker.local',status:'live',sampled_at:Date.now()/1000,window_seconds:5,sample_age_seconds:1,percent:42,ram_percent:35,disk_busy_percent:12,network_mbps:7,cpus:8,workload_phase:'testing',hardware:{gpus:[{pci_id:'gpu-1',name:'Fixture GPU',utilization_percent:25,memory_total_mib:100,memory_free_mib:60}]}}]},run:{id:'fixture',status:'running',hosts:[{host:'worker.local',status:'running',jobs:[{name:'Browser checks',status:'running'}]}]}}));return
+    res.end(JSON.stringify({network:{devices:[{hostname:'worker.local',ip:'10.0.0.2',mac:'aa'}]},metrics:{history:[{sampled_at:Date.now()/1000-240,hosts:[{host:'worker.local',status:'live',sampled_at:Date.now()/1000-240,percent:20,cpus:8}]},{sampled_at:Date.now()/1000-235,hosts:[{host:'worker.local',status:'live',sampled_at:Date.now()/1000-235,percent:25,cpus:8}]}],total_percent:42,live_hosts:1,total_hosts:1,measured_logical_cpus:8,activity_status:'available',test_hosts:1,measured_test_hosts:1,active_test_percent:42,hosts:[{host:'worker.local',status:'live',sampled_at:Date.now()/1000,window_seconds:5,sample_age_seconds:1,percent:42,ram_percent:35,disk_busy_percent:12,network_mbps:7,cpus:8,workload_phase:'testing',hardware:{gpus:[{pci_id:'gpu-1',name:'Fixture GPU',utilization_percent:25,memory_total_mib:100,memory_free_mib:60}]}}]},run:{id:'fixture',status:'running',hosts:[{host:'worker.local',status:'running',jobs:[{name:'Browser checks',status:'running'}]}]}}));return
    }
    if(url.pathname==='/task-manager'){res.setHeader('Content-Type','text/html');res.end(await readFile(join(view,'task-manager.html')));return}
    if(url.pathname==='/api/v1/swarm/research'){res.setHeader('Content-Type','application/json');res.statusCode=statusUnauthorized?401:200;res.end(JSON.stringify({observed_at:'2026-10-25T19:00:00Z',run:{status:'passed',completed:214,total:214,failed:0,workers:6,verified:true,updated_at:'2026-10-25T18:30:00Z'},public_downloads:[{name:'Watson',status:'partial download; completion unconfirmed'}]}));return}
@@ -43,7 +45,7 @@ export async function reviewCodexUi(output){
     res.end(JSON.stringify(item?{...item,model:'Codex',owner_connected:ownerConnected,messages:[{role:'user',text:'Make the remote workspace easier to scan and use on a phone.'},{role:'assistant',text:'I’ll organize the conversation list, clarify connection status and keep the instruction composer stable while updates arrive.\n\nThe active conversation will stay visible, and your draft will be preserved.'}]}:{threads,next_offset:null,machine:'Fixture workstation',connected:true}));return
    }
    if(url.pathname==='/'){res.setHeader('Content-Type','text/html');res.end('<!doctype html><html lang="en"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Codex UI review</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/codex.css"><body><main><section id="codex-context"></section></main><script type="module" src="/codex.js"></script></body></html>');return}
-   if(!['/task-manager.js','/task-manager.css','/tests.css','/levels.js','/levels-model.js','/cpu-report.js','/snapshot-fetch.js','/docker-downloads.js','/research.css','/research.js','/style.css','/codex.css','/codex.js','/codex-screenshots.js','/codex-voice.js','/codex-queue.js','/swarm-status.css','/swarm-status.js','/swarm-machines.js'].includes(url.pathname)){res.writeHead(404).end();return}
+   if(!['/task-manager.js','/task-manager.css','/tests.css','/levels.js','/levels-model.js','/resource-history.js','/cpu-report.js','/snapshot-fetch.js','/docker-downloads.js','/research.css','/research.js','/style.css','/codex.css','/codex.js','/codex-screenshots.js','/codex-voice.js','/codex-queue.js','/swarm-status.css','/swarm-status.js','/swarm-machines.js'].includes(url.pathname)){res.writeHead(404).end();return}
    res.setHeader('Content-Type',url.pathname.endsWith('.js')?'text/javascript':'text/css');res.end(await readFile(join(view,url.pathname.slice(1))))
   }catch(error){res.writeHead(500).end(error.message)}
  })
@@ -57,6 +59,12 @@ export async function reviewCodexUi(output){
   await page.getByRole('heading',{name:'Swarm Task Manager',exact:true}).waitFor();
   await page.waitForFunction(()=>document.querySelector('#levels-status')?.textContent.startsWith('Updated'));
   assert.match(await page.locator('#task-summary').textContent(),/Current run: running/);
+  await page.getByRole('button',{name:'CPU',exact:true}).click();
+  assert.match(await page.locator('#levels-plot path[fill="none"]').first().getAttribute('d'),/L/);
+  await page.reload();
+  await page.waitForFunction(()=>document.querySelector('#levels-status')?.textContent.startsWith('Updated'));
+  await page.getByRole('button',{name:'CPU',exact:true}).click();
+  assert.match(await page.locator('#levels-plot path[fill="none"]').first().getAttribute('d'),/L/);
   await page.locator('#task-hosts summary').click();
   assert.match(await page.locator('#task-hosts').textContent(),/Browser checks · running/);
   for(const [name,value] of [['CPU','42.0%'],['GPU','25.0%'],['GPU memory','40.0%'],['Memory','35.0%'],['Disk','12.0%'],['Network','7.0 Mb/s']]){
@@ -75,6 +83,7 @@ export async function reviewCodexUi(output){
   statusUnauthorized=false;
   await page.waitForFunction(()=>document.querySelector('#levels-status')?.textContent.startsWith('Updated'),{},{timeout:10000});
   assert.match(await page.locator('#levels-legend').textContent(),/7.0 Mb/);
+  if(process.env.TASK_MANAGER_ONLY){assert.deepEqual(errors,[]);results.push({width,status:'passed',checks:['history-restored-after-reload','six-resources','session-expiry','same-origin-feed','no-overflow']});await context.close();continue;}
   resourceRequests.length=0;
   await page.goto(base+'/research.html');await page.getByText('214 / 214',{exact:true}).waitFor()
   assert.equal(await page.locator('.pipeline button').count(),6)

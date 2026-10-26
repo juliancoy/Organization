@@ -21,8 +21,9 @@ ASSETS={'/':'codex.html','/codex.html':'codex.html','/codex.js':'codex.js','/cod
         '/test-deployment.css':'test-deployment.css','/swarm-control':'swarm-control.html','/swarm-control.svg':'swarm-control.svg'}
 ASSETS.update({'/swarm-status':'swarm-status.html','/swarm-status.js':'swarm-status.js','/swarm-status.css':'swarm-status.css','/swarm-machines.js':'swarm-machines.js'})
 ASSETS.update({'/research': 'research.html', '/research.html': 'research.html', '/research.js': 'research.js', '/research.css': 'research.css'})
-ASSETS.update({'/'+name: name for name in ('task-manager.html','task-manager.js','task-manager.css','tests.css','levels.js','levels-model.js','cpu-report.js','snapshot-fetch.js','docker-downloads.js')})
+ASSETS.update({'/'+name: name for name in ('task-manager.html','task-manager.js','task-manager.css','tests.css','levels.js','levels-model.js','resource-history.js','cpu-report.js','snapshot-fetch.js','docker-downloads.js')})
 ASSETS['/task-manager']='task-manager.html'
+ASSETS.update({'/history':'history.html','/history.html':'history.html','/history.js':'history.js','/history.css':'history.css'})
 ASSETS['/machine-connections.js']='machine-connections.js'
 ASSETS.update({'/'+name: name for name in ('genome-explorer.html','genome-explorer.js','genome-explorer.css','genome-data.js')})
 ASSETS.update({'/'+name:name for name in ('codex-voice.js','codex-queue.js')})
@@ -91,7 +92,7 @@ class Handler(BaseHTTPRequestHandler):
             name=ASSETS[path];return self.reply(200,(VIEW/name).read_bytes(),mimetypes.guess_type(name)[0] or 'application/octet-stream')
         pairing=self.command=='POST' and path in ('/pair','/logout')
         deployment=path in ('/api/v1/test-app/status','/api/v1/test-app/offer','/api/v1/test-app/download')
-        valid_read=self.command=='GET' and (path in ('/api/v1/swarm/connections','/api/v1/swarm/task-manager','/api/v1/swarm/status','/api/v1/swarm/session','/api/v1/swarm/research','/api/v1/swarm/research/jobs') or path==API+'queue' or path==API+'threads' or path.startswith(API+'threads/') or path in ('/api/v1/test-app/status','/api/v1/test-app/download'))
+        valid_read=self.command=='GET' and (path in ('/api/v1/swarm/history','/api/v1/swarm/connections','/api/v1/swarm/task-manager','/api/v1/swarm/status','/api/v1/swarm/session','/api/v1/swarm/research','/api/v1/swarm/research/jobs') or path==API+'queue' or path==API+'threads' or path.startswith(API+'threads/') or path in ('/api/v1/test-app/status','/api/v1/test-app/download'))
         valid_write=self.command=='POST' and path in (API+'commands',API+'queue',API+'queue/cancel',API+'transcribe','/api/v1/swarm/research/jobs','/api/v1/test-app/offer','/api/v1/swarm/tests/request')
         if not (valid_read or valid_write or pairing):return self.reply(404,{'error':{'message':'Not found'}})
         if path not in ('/pair','/logout') and not devices.valid(self.device()):return self.reply(401,{'error':{'message':'Sign in with PIdP to reconnect to CompAI'}})
@@ -130,6 +131,10 @@ class Handler(BaseHTTPRequestHandler):
                 from status import connections
                 try:return self.reply(200,connections())
                 except (OSError,ValueError):return self.reply(503,{'error':{'message':'Machine connection feed unavailable'}})
+            if path=='/api/v1/swarm/history':
+                from work_history import snapshot as history_snapshot
+                try:return self.reply(200,history_snapshot())
+                except (OSError,ValueError):return self.reply(503,{'error':{'message':'Workload history unavailable'}})
             if path=='/api/v1/swarm/task-manager':
                 from status import task_manager
                 try:return self.reply(200,task_manager())

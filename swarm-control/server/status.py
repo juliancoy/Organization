@@ -1,4 +1,5 @@
 """Bounded, read-only projection of the local coordinator for paired owners."""
+from resource_history import project_host, WINDOW_SECONDS, MAX_SAMPLES
 import json
 import os
 from pathlib import Path
@@ -100,6 +101,10 @@ def task_manager():
         host['hardware'] = pick(hardware, 'stale')
         host['hardware']['gpus'] = [pick(gpu, 'pci_id vendor name backend utilization_percent memory_total_mib memory_free_mib') for gpu in hardware.get('gpus', [])[:16]]
         summary['hosts'].append(host)
+    # Reapply the same field allowlist at the authenticated boundary.
+    summary['history'] = [{'sampled_at': frame['sampled_at'], 'hosts': [project_host(host) for host in frame.get('hosts', [])[:64]]}
+                          for frame in metrics.get('history', [])[-MAX_SAMPLES:]]
+    summary['history_window_seconds'] = WINDOW_SECONDS
     run = project_status(network, tests)['run']
     progress = (tests.get('run') or {}).get('image_progress')
     if isinstance(progress, dict):

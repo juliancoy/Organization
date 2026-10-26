@@ -195,3 +195,23 @@ are picked up automatically. Samples older than five seconds become unknown.
 The visible page polls the feed every second and rechecks immediately after
 network recovery or returning to the tab. A paused worker remains connected;
 browser/API outages show unknown status rather than claiming machines are offline.
+
+
+## Workload History
+
+Open `/history` from Conversations, Machines, or Research. The History view lists
+up to 30 recent genome analyses and test runs from existing coordinator records,
+prioritizing active work before applying the limit. Each entry identifies its
+profile or test scope and shows status, timestamps, available progress counts,
+and participating machines and task titles. Filters cover workload type, active
+or finished state, and title/run-ID search. The owner session is required for the
+read-only `/api/v1/swarm/history` feed. It excludes private paths, genomic report
+contents, credentials, and logs; it creates no new persistent history store.
+
+The focused UI check uses synthetic local data:
+
+```sh
+CHROME_PATH=/usr/bin/google-chrome node swarm-control/server/scripts/review-history-ui.mjs /tmp/swarm-history-review
+```
+
+This check also runs in the existing distributed Swarm Control browser suite.

@@ -46,6 +46,7 @@ class TaskManagerProjectionTests(unittest.TestCase):
         metrics={'total_percent':42,'live_hosts':1,'hosts':[{'host':'worker.local','status':'live','percent':42,
                  'sampled_at':123,'ram_percent':40,'disk_busy_percent':25,'network_mbps':5,
                  'session':{'token':'private'},'hardware':{'storage':{'path':'private'},'gpus':[{'name':'GPU','utilization_percent':12,'memory_total_mib':100,'memory_free_mib':50,'secret':'private'}]}}]}
+        metrics['history']=[{'sampled_at':123,'hosts':[metrics['hosts'][0]]}]
         tests={'run':{'id':'fixture','status':'running','hosts':[],'credentials':'private'}}
         with patch('status.urlopen',side_effect=[io.BytesIO(json.dumps(v).encode()) for v in [network,metrics,tests]]) as fetch:
             result=status.task_manager()
@@ -55,6 +56,7 @@ class TaskManagerProjectionTests(unittest.TestCase):
             self.assertEqual(host[key],metrics['hosts'][0][key])
         self.assertEqual(host['hardware']['gpus'][0]['utilization_percent'],12)
         self.assertEqual(result['network']['link_traffic']['peers']['aa']['rx_mbps'],3)
+        self.assertEqual(result['metrics']['history'][0]['hosts'][0]['percent'],42)
         self.assertNotIn('private',json.dumps(result))
 
     def test_resource_feed_is_bounded(self):

@@ -1,3 +1,4 @@
+import {recordResourceHistory} from './resource-history.js';
 import {cpuCoverage,testCpuSummary,percent} from './cpu-report.js';
 import {snapshotFetch} from './snapshot-fetch.js';
 import {deviceLevels,deviceColor} from './levels-model.js';
@@ -16,7 +17,7 @@ try{split=localStorage.getItem('lan-map.levels.split')==='true';}catch{}
 splitControl.checked=split;
 splitControl.onchange=()=>{split=splitControl.checked;try{localStorage.setItem('lan-map.levels.split',String(split));}catch{}if(lastData)update(...lastData,false);};
 const historyMode=()=>mode==='network'&&split?'split':mode;
-function rowsFor(data,metrics,metric){return metric==='split'?['send','receive'].flatMap(direction=>deviceLevels(data,metrics,direction).map(row=>({...row,deviceId:row.id,id:row.id+':'+direction,direction,name:row.name+' · '+direction}))):deviceLevels(data,metrics,metric);}
+function rowsFor(data,metrics,metric,now=Date.now()){return metric==='split'?['send','receive'].flatMap(direction=>deviceLevels(data,metrics,direction,now).map(row=>({...row,deviceId:row.id,id:row.id+':'+direction,direction,name:row.name+' · '+direction}))):deviceLevels(data,metrics,metric,now);}
 function displayPoints(points){
  if(!smoothing)return points;
  let average=null,previous=null;
@@ -63,7 +64,7 @@ function update(data,metrics,record=true){
  document.getElementById('levels-split-label').hidden=mode!=='network';
  renderDockerDownloads(document.getElementById('levels-docker'),data,mode);
  lastData=[data,metrics];latest=rowsFor(data,metrics,historyMode());const now=Date.now();
- if(record)for(const metric of ['network','disk','ram','cpu','gpu','vram','split'])for(const row of rowsFor(data,metrics,metric)){const h=histories[metric];if(!h.has(row.id))h.set(row.id,[]);const points=h.get(row.id);points.push({time:now,value:row.value});while(points.length&&points[0].time<now-300000)points.shift();}
+ if(record)recordResourceHistory(histories,data,metrics,now,rowsFor);
  document.getElementById('levels-description').textContent=mode==='gpu'||mode==='vram'?'Live GPU counters by device. Missing GPU backends remain unmeasured. Compute validation and runtime readiness are shown under Devices & tools.':mode==='network'?'Every measured device on one time axis. Yellow bars show current throughput on the same scale as the line graph. Each color follows the same device across all resource views.':mode==='disk'?'Physical disk activity over time. 100% means a disk was busy for the entire sampling interval.':mode==='cpu'?'Executing CPU time across all logical CPUs, averaged over full sampling intervals. Fleet and test-active averages include all host processes. I/O wait and stolen time are separate; hover over a device for details.':'Memory in use over time. Available memory, including reclaimable cache, is excluded.';
  if(smoothing){latest=latest.map(row=>({...row,value:row.value===null?null:(displayPoints(histories[historyMode()].get(row.id)||[]).at(-1)?.value??row.value)}));document.getElementById('levels-description').textContent+=' Smoothing uses a 10-second exponential average; brief peaks are reduced.';}
  latest.sort((a,b)=>(b.value??-1)-(a.value??-1)||a.name.localeCompare(b.name));
@@ -71,7 +72,7 @@ function update(data,metrics,record=true){
  for(const row of latest){const b=document.createElement('button');b.className='levels-device';b.style.setProperty('--device-color',deviceColor(row.deviceId||row.id));b.setAttribute('aria-pressed',String(!hidden.has(row.id)));b.title=row.basis+' · hover to highlight · click to hide or show';b.onmouseenter=b.onfocus=()=>{highlighted=row.id;draw();};b.onmouseleave=b.onblur=()=>{if(highlighted===row.id){highlighted=null;draw();}};const name=document.createElement('span');name.textContent=row.name;const value=document.createElement('strong');value.textContent=row.value===null?(row.unavailableLabel||'No data'):row.value.toFixed(1)+(mode==='network'?' Mb/s':'%');b.append(name,value);if(mode==='network'){b.classList.add('levels-device-network');const track=document.createElement('span');track.className='levels-throughput-track';track.setAttribute('aria-hidden','true');if(row.value!==null){const fill=document.createElement('span');fill.className='levels-throughput-fill';fill.dataset.value=String(row.value);track.append(fill);}b.append(track);}b.onclick=()=>{hidden.has(row.id)?hidden.delete(row.id):hidden.add(row.id);update(...lastData,false);};legend.append(b);}
  if(mode==='network'&&split)document.getElementById('levels-description').textContent+=' Each machine keeps its color: send is solid, receive dashed. Directional fallback covers gateway-visible traffic only; see each entry for scope.';
  const count=latest.filter(r=>r.value!==null).length;
- document.getElementById('levels-coverage').textContent=count+' / '+latest.length+(mode==='network'&&split?' directional series measured. ':' devices measured. ')+(mode==='network'?'Hosts with telemetry report physical-interface totals; other devices use gateway-visible traffic, which excludes switched traffic. These scopes differ; values are not additive.':'CPU, GPU, disk, and RAM require live host telemetry. Devices without telemetry remain listed as “No data”.')+' History is kept in this tab for five minutes.';
+ document.getElementById('levels-coverage').textContent=count+' / '+latest.length+(mode==='network'&&split?' directional series measured. ':' devices measured. ')+(mode==='network'?'Hosts with telemetry report physical-interface totals; other devices use gateway-visible traffic, which excludes switched traffic. These scopes differ; values are not additive.':'CPU, GPU, disk, and RAM require live host telemetry. Devices without telemetry remain listed as “No data”.')+' Host history is collected by the coordinator for five minutes, even while this page is closed.';
  document.getElementById('levels-status').textContent='Updated '+new Date().toLocaleTimeString();draw();
 }
 async function refresh(){

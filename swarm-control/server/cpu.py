@@ -6,6 +6,7 @@ import threading
 import time
 import sys
 import math
+from resource_history import ResourceHistory
 from paths import WORKSPACE
 sys.path.insert(0,str(WORKSPACE/'scripts'))
 from launcher_agent import hardware_sample, ResourceSampler
@@ -24,6 +25,7 @@ class CpuMonitor:
     def __init__(self, activity=None):
         self.lock=threading.Lock()
         self.hosts=[]
+        self.history=ResourceHistory()
         self.sampler=ResourceSampler()
         self.activity=activity
 
@@ -57,6 +59,7 @@ class CpuMonitor:
     def view(self):
         with self.lock:
             hosts=[dict(h) for h in self.hosts]
+            history=self.history.view(time.time())
         activity={};activity_status='available' if self.activity else 'unavailable'
         if self.activity:
             try:
@@ -82,7 +85,7 @@ class CpuMonitor:
                 if host.get('hardware'):host['hardware']={**host['hardware'],'stale':True}
         live=[h for h in hosts if h['status']=='live' and h.get('percent') is not None]
         active=[h for h in hosts if h['running_test_jobs']>0] if activity_status=='available' else []
-        return {'hosts':hosts,'total_percent':aggregate(hosts),'live_hosts':len(live),
+        return {'hosts':hosts,'history':history,'history_window_seconds':300,'total_percent':aggregate(hosts),'live_hosts':len(live),
                 'measured_logical_cpus':sum(h['cpus'] for h in live),
                 'active_test_percent':aggregate(active),'test_hosts':len(active),'measured_test_hosts':sum(h['status']=='live' for h in active),
                 'activity_status':activity_status,
@@ -102,4 +105,5 @@ class CpuMonitor:
                 samples=list(pool.map(self.sample,hosts))
             with self.lock:
                 self.hosts=samples
+                self.history.append(samples,time.time())
             time.sleep(max(0.1,5-(time.monotonic()-start)))
