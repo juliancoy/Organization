@@ -195,3 +195,52 @@ samples receive satellite overlap counts. The reference satellite landscape is
 not a personal repeat-length measurement; expansions require separate analysis.
 The generated module contains only reviewed aggregate fields and records the
 repeat-source SHA-256. These are dated snapshots, not live analysis progress.
+
+
+## Streaming public whole-genome analysis
+
+The public Watson original LS454 runs and Venter SRR7097858 paired reads are
+catalogued by `scripts/wgs_catalog.py`. Publisher file sizes and MD5 values,
+source identities, and the private storage plan live beneath
+`/mnt/PILEDRIVE/genomics-workbench/wgs/`; this directory is outside Git.
+Venter's two large mates are placed on the Inspiron and Latitude SSDs. Derived
+BAMs remain distributed until a host passes a fresh scratch-space check.
+
+`wgs_swarm_download.py` assigns downloads to six enrolled machines using signed,
+renewable resource leases. A shared adaptive WAN budget backs off on archive
+errors. Committed chunks have SHA-256 receipts; incomplete `.part` files are not
+consumed. `wgs_stream_qc.py` processes committed chunks immediately and requires
+whole-file publisher MD5, gzip integrity, and exact read counts before final QC.
+A malformed input is quarantined rather than skipped.
+
+`wgs_recall_swarm.py` maps verified Watson runs as they arrive, retaining both
+short and long reads. `wgs_venter_stream.py` synchronizes mates and creates
+500,000-pair shards while the larger files are still arriving. Its outputs stay
+provisional until both complete sources pass checksums. A changed or invalid
+source starts a new generation; old shard receipts cannot satisfy the new run.
+Reference and tool images are verified before remote execution. Mapper CPU and
+RAM allocations derive from available signed capacity; whole-human BWA mapping
+requires at least 7,000 MiB. Smaller machines still perform downloads, QC, and
+chromosome calling.
+
+The persistent user services are `lifetech-wgs-download`, `lifetech-wgs-stream-qc`,
+`lifetech-wgs-index`, `lifetech-wgs-pilot`, `lifetech-wgs-recall`,
+`lifetech-wgs-finalize`, `lifetech-wgs-venter-stream`, and
+`lifetech-wgs-venter-finalize`. Inspect them with `systemctl --user status` and
+private progress JSON under `wgs/recall`, `wgs/downloads`, and `wgs/qc`. The
+authenticated Task Manager `/task-manager` streams an operational projection
+every five seconds through `/api/v1/swarm/wgs`; it exports counts and storage
+allocation, without raw reads, genotypes, source URLs, or filesystem paths.
+
+Finalization waits for all required sources, QC, and alignments, then removes
+duplicates across runs and calls canonical chromosomes. Confirmed reference
+positions require depth >=20 and explicit reference confidence RCQ >=20,
+computed from genotype likelihoods with equal genotype priors. Variant calls
+require caller GQ >=20. Missing confidence, ambiguous reference bases, and
+uncertain calls remain unknown. All recorded alternate REF spans are excluded
+from confirmed matches. Watson chromosome 19 is excluded from inference to
+respect the original withheld APOE region; it remains in the genome denominator
+as unknown.
+
+Completed WGS results are private research aggregates pending review. These
+services do not automatically replace the public Genome Explorer snapshot.

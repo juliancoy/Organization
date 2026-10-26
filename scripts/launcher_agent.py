@@ -107,6 +107,7 @@ class ResourceLease:
             # RAM already consumed by active workers but never pledges it twice.
             available=max(0,min(limits['memory_mb'],limits.get('available_mb',limits['memory_mb']))-reserved)
             return {**limits,'available_mb':available,'reserved_mb':reserved,
+                    'available_cpus':max(0,limits['cpus']-sum(row['cpus'] for row in active)),
                     'active_jobs':len(active),'group_active_jobs':sum(row['group']==group for row in active),
                     'waiting_jobs':sum(not row['active'] for row in rows)}
 
@@ -583,10 +584,10 @@ class Agent:
             raise ValueError('Invalid run ID')
         return self.root/ident
 
-    def expire_resource(self,ident):
+    def expire_resource(self,ident,token=None):
         with self.lock:
             entry=getattr(self,'resource_leases',{}).get(ident)
-            if not entry:return
+            if not entry or token is not None and entry.get('token')!=token:return
             name=entry['lease'].row.get('container')
             if entry['lease'].row['active'] and name:
                 # Remove the bounded, owned batch before returning its capacity.
@@ -594,7 +595,7 @@ class Agent:
                 if result.returncode:
                     check=subprocess.run(['docker','inspect',name],capture_output=True,timeout=5)
                     if check.returncode==0:
-                        timer=threading.Timer(20,lambda:self.expire_resource(ident));timer.daemon=True
+                        timer=threading.Timer(20,lambda expiry_token=token:self.expire_resource(ident,expiry_token));timer.daemon=True
                         entry['timer']=timer;timer.start();return
             self.dispatch('resource.release',{'id':ident})
 
@@ -602,7 +603,7 @@ class Agent:
         if op=='resource.capacity':
             if set(args)-{'group'}:raise ValueError('Invalid capacity request')
             return ResourceLease.pool_capacity(directory=os.getenv('SWARM_RESOURCE_DIR',str(self.root/'.resources')),group=args.get('group'))
-        if op in ('resource.acquire','resource.release'):
+        if op in ('resource.acquire','resource.release','resource.renew'):
             with self.lock:
                 leases=getattr(self,'resource_leases',None)
                 if leases is None:self.resource_leases={};leases=self.resource_leases
@@ -613,7 +614,15 @@ class Agent:
                     if previous:previous['timer'].cancel();previous['lease'].close()
                     self.busy()
                     return {'released':True}
-                if set(args)!={'id','group','cpus','memory_mb','container'} or type(args['cpus']) is not int or args['cpus']!=1 or type(args['memory_mb']) is not int or args['memory_mb']<1 or not re.fullmatch(r'genomics-[a-f0-9]{32}',args['container']):
+                if op=='resource.renew':
+                    if set(args)!={'id'}:raise ValueError('Invalid resource renewal')
+                    previous=leases.get(ident)
+                    if not previous or not previous['lease'].row['active']:raise ValueError('Resource lease is not active')
+                    previous['timer'].cancel();token=secrets.token_hex(16)
+                    timer=threading.Timer(240,lambda expiry_token=token:self.expire_resource(ident,expiry_token));timer.daemon=True
+                    previous.update(timer=timer,token=token);timer.start()
+                    return {'renewed':True,'expires_in_seconds':240}
+                if set(args)!={'id','group','cpus','memory_mb','container'} or type(args['cpus']) is not int or args['cpus']<1 or type(args['memory_mb']) is not int or args['memory_mb']<1 or not re.fullmatch(r'genomics-[a-f0-9]{32}',args['container']):
                     raise ValueError('Expected a bounded private batch resource request')
                 policy=worker_policy(self.config)
                 if not policy['accepting_jobs']:raise RuntimeError(policy['reason'])
@@ -622,8 +631,9 @@ class Agent:
                     if len(leases)>=128:raise RuntimeError('Resource request queue full')
                     lease=ResourceLease(args.get('group'),args.get('cpus'),args.get('memory_mb'),args.get('container',''),
                                         directory=os.getenv('SWARM_RESOURCE_DIR',str(self.root/'.resources')),pids=32)
-                    timer=threading.Timer(300,lambda:self.expire_resource(ident));timer.daemon=True
-                    leases[ident]={'lease':lease,'timer':timer};timer.start();self.busy()
+                    token=secrets.token_hex(16)
+                    timer=threading.Timer(300,lambda expiry_token=token:self.expire_resource(ident,expiry_token));timer.daemon=True
+                    leases[ident]={'lease':lease,'timer':timer,'token':token};timer.start();self.busy()
                 else:
                     lease=previous['lease']
                     if any(lease.row[k]!=args[k] for k in ('group','cpus','memory_mb','container')):raise ValueError('Resource request ID already used')
@@ -632,8 +642,9 @@ class Agent:
                     leases.pop(ident)['timer'].cancel();lease.close();self.busy();raise
                 if acquired and not leases[ident].get('started'):
                     leases[ident]['timer'].cancel()
-                    timer=threading.Timer(240,lambda:self.expire_resource(ident));timer.daemon=True
-                    leases[ident].update(timer=timer,started=True);timer.start()
+                    token=secrets.token_hex(16)
+                    timer=threading.Timer(240,lambda expiry_token=token:self.expire_resource(ident,expiry_token));timer.daemon=True
+                    leases[ident].update(timer=timer,token=token,started=True);timer.start()
                 return {'acquired':acquired}
         if op=='worker.policy':return worker_policy(self.config)
         if op in ('job.start','source.stage','p2p.start','image.pull','resource.acquire') or (op=='job.feed' and args.get('tasks')):
@@ -706,7 +717,7 @@ class Agent:
             return {'protocol':VERSION,'source_revision':self.source_revision,'node':config['name'],'ready':bool(shutil.which('docker')) and not Path('/tmp/launcher-agent-draining').exists(),'time':time.time(),
                     'machine':hashlib.sha256(machine.read_bytes()).hexdigest(),'hostname':socket.gethostname(),
                     'addresses':addresses,'platform':info['OSType']+'/'+info['Architecture'],
-                    'worker_policy':policy,'capabilities':['controller-signature','github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','file-queue','snapshot-stage','event-wait','shared-resources','encrypted-backup','gpu-kernel'],
+                    'worker_policy':policy,'capabilities':['controller-signature','github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','file-queue','snapshot-stage','event-wait','shared-resources','renewable-resources','encrypted-backup','gpu-kernel'],
                     'storage':self.storage_status,
                     'hardware':self.hardware(info),
                     'preparations':[key for key,j in self.jobs.items() if j['status']=='running' and j.get('prepare_only')],
