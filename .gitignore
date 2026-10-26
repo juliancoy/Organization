@@ -100,3 +100,6 @@
 !/tests/test_genome_demo.py
 !/scripts/genomics_followup.py
 !/tests/test_genomics_followup.py
+!/genomics/
+/genomics/*
+!/genomics/README.md
