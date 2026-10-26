@@ -18,6 +18,14 @@ if settings['name']!=payload['node']:
  raise RuntimeError('SSH account is not the enrolled launcher owner')
 public_key=payload['controller_public_key']
 if len(bytes.fromhex(public_key))!=32:raise RuntimeError('Invalid controller public key')
+import ipaddress,re
+peers=payload['peers']
+if not 1<=len(peers)<=24 or settings['name'] not in peers:raise RuntimeError('Invalid enrolled fleet')
+for name,address in peers.items():
+ if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,252}',name):raise RuntimeError('Invalid enrolled node')
+ ip=ipaddress.ip_address(address)
+ if not ip.is_private or ip.is_loopback or ip.is_unspecified:raise RuntimeError('Enrolled LAN address required')
+settings['peers']=dict(peers)
 settings['controller_public_key']=public_key
 pending=config.with_suffix('.controller.tmp');pending.write_text(json.dumps(settings,indent=2)+'\\n');pending.chmod(0o600);pending.replace(config)
 # The launcher hosts coordinator threads and Docker clients for multiple runs.
@@ -57,7 +65,7 @@ class LauncherUpdates:
         from agent_client import CONFIG
         public_key=json.loads(CONFIG.read_text())['controller_public_key']
         if len(bytes.fromhex(public_key))!=32:raise ValueError('Invalid pinned controller key')
-        payload={'machine':status['machine'],'node':status['node'],'revision':self.revision,'files':self.files,'controller_public_key':public_key}
+        payload={'machine':status['machine'],'node':status['node'],'revision':self.revision,'files':self.files,'controller_public_key':public_key,'peers':json.loads(CONFIG.read_text())['peers']}
         if host.get('local'):
             command=[sys.executable,'-c',INSTALL]
         else:
