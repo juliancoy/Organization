@@ -8,7 +8,9 @@ const stages = [
 ];
 const el=(tag,text,cls)=>{const node=document.createElement(tag);if(text)node.textContent=text;if(cls)node.className=cls;return node;};
 const list=document.querySelector('#pipeline');
+let selectedStage=3;
 function select(index){
+ selectedStage=index;
  list.querySelectorAll('button').forEach((b,i)=>b.setAttribute('aria-pressed',String(i===index)));
  const s=stages[index],detail=document.querySelector('#detail');
  const heading=el('div',null,'detail-heading');heading.append(el('span',s.icon,'stage-icon'),el('h3',s.name),el('span',s.status,'badge'));
@@ -26,6 +28,13 @@ async function refresh(){
   const response=await fetch('/api/v1/swarm/research',{cache:'no-store'});
   if(!response.ok)throw new Error(response.status===401?'Sign in to Swarm Control to read private execution progress.':'Execution status unavailable. Historical milestone above remains dated Oct 25.');
   const data=await response.json();comparisons(data.public_downloads);const run=data.run;
+  if(data.followup){
+   const names={bam_coverage:'BAM coverage',gvcf_span_audit:'gVCF span audit',fresh_offline_vep:'Fresh offline VEP'};
+   stages[4].status=data.followup.status==='passed'?'Completed':data.followup.status==='failed'?'Needs review':'In progress';
+   stages[4].evidence=Object.entries(names).map(([key,label])=>`${label}: ${data.followup.jobs[key]?.status||'unknown'}`).join(' · ')+'. Reports remain private. Coverage and reference-confidence summaries do not establish clinical callability.';
+   list.children[4].querySelector('small').textContent=stages[4].status;
+   if(selectedStage===4)select(4);
+  }
   metrics.hidden=!run;
   if(run){metrics.replaceChildren(...[[`${run.completed} / ${run.total}`,'batches completed'],[String(run.workers),'workers with completed batches'],[run.verified?'Matched':'Unconfirmed','baseline verification']].map(([value,label])=>{const card=el('div');card.append(el('strong',value),el('span',label));return card;}));message.textContent=`Latest recorded run: ${run.status} · ${run.failed} failed batches · report updated ${new Date(run.updated_at).toLocaleString()}. Checked ${new Date(data.observed_at).toLocaleTimeString()}.`;}
   else message.textContent='No readable run state on this controller. The dated milestone above is historical evidence.';

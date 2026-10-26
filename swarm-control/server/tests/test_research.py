@@ -6,6 +6,19 @@ from research import snapshot
 
 
 class ResearchTests(unittest.TestCase):
+    def test_followup_exports_only_named_operational_status(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            folder = root / 'followup/run-example'
+            folder.mkdir(parents=True)
+            (folder / 'state.json').write_text(json.dumps({'status': 'running', 'source': '/PRIVATE',
+                'jobs': {'bam_coverage': {'status': 'running', 'path': '/PRIVATE'},
+                         'gvcf_span_audit': {'status': 'PRIVATE'}, 'PRIVATE': {'status': 'passed'}}}))
+            result = snapshot(root)['followup']
+            self.assertEqual(result['jobs']['bam_coverage']['status'], 'running')
+            self.assertEqual(result['jobs']['gvcf_span_audit']['status'], 'unknown')
+            self.assertNotIn('PRIVATE', json.dumps(result))
+
     def test_only_operational_allowlist_leaves_private_report(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

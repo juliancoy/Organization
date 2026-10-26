@@ -98,3 +98,5 @@
 
 !/scripts/genome_demo.py
 !/tests/test_genome_demo.py
+!/scripts/genomics_followup.py
+!/tests/test_genomics_followup.py

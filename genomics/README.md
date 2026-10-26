@@ -31,6 +31,18 @@ does not classify variants as pathogenic.
 
 ## Tool and data placement
 
+`python3 -m scripts.genomics_followup --help` describes the private follow-up
+pipeline. It runs quality-filtered BAM coverage, a reference-block-aware gVCF
+span audit, and fresh offline VEP 115.2 annotation concurrently. Pin the local
+VEP image by SHA-256 and pass the local launcher's `.resources` directory so
+these jobs share CPU/RAM admission with ordinary tests. BAM and cache remain
+local; after annotation, bounded encrypted streams use eligible enrolled workers
+for QC and consequence summaries. Run under a user service for long analyses.
+Private state and reports live in a new output run directory. Annotation identity
+checks require unchanged ordered alleles and genotypes. Coverage includes
+reference gaps; missing block GQ remains unknown. Neither report is a validated
+clinical callable-region mask or a pathogenicity classification.
+
 - bcftools and samtools: CPU tools for input validation, variant QC, BAM coverage.
 - Ensembl VEP: offline functional annotation; match tool and cache release as well
   as the reference assembly. The existing dataset has a release-115 GRCh38 cache

@@ -8,7 +8,19 @@ ROOT = Path('/mnt/PILEDRIVE/genomics-workbench')
 
 def snapshot(root=ROOT):
     result = {'observed_at': datetime.now(timezone.utc).isoformat(), 'run': None,
-              'public_downloads': []}
+              'public_downloads': [], 'followup': None}
+    followups = sorted((root / 'followup').glob('run-*/state.json'), key=lambda p: p.stat().st_mtime, reverse=True)
+    if followups:
+        try:
+            state = json.loads(followups[0].read_text())
+            allowed = ('waiting_for_capacity', 'running', 'passed', 'failed')
+            result['followup'] = {'status': state.get('status') if state.get('status') in allowed else 'unknown',
+                'jobs': {name: {'status': state.get('jobs', {}).get(name, {}).get('status', 'unknown')}
+                         for name in ('bam_coverage', 'gvcf_span_audit', 'fresh_offline_vep')}}
+            for job in result['followup']['jobs'].values():
+                if job['status'] not in allowed:job['status'] = 'unknown'
+        except (OSError, ValueError, TypeError, AttributeError):
+            result['followup'] = None
     runs = sorted((root / 'distributed').glob('run-*/state.json'), key=lambda p: p.stat().st_mtime, reverse=True)
     if runs:
         try:
