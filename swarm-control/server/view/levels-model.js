@@ -34,6 +34,7 @@ export function deviceLevels(data,metrics,mode,now=Date.now()) {
    value=available&&valid(p[field])?p[field]:null;
    basis=d.self?'Coordinator LAN interface only':'Gateway-observed device traffic; switched traffic may be missing';
   }
+  if(d.hostname_source==='cached_mdns')basis+=' · Name from the last mDNS observation; connectivity is measured separately';
   rows.push({id:d.mac||d.ip,name:(d.hostname||d.ip)+(['network','send','receive'].includes(mode)?(h?' · interface unavailable':' · gateway only'):''),value,basis,...cpuInfo(h)});
  }
  for(const h of hosts)if(!used.has(h.host))rows.push({id:h.host,name:h.host+(['network','send','receive'].includes(mode)?' · interface unavailable':''),value:hostValue(h),basis:'Host telemetry',...cpuInfo(h)});

@@ -49,3 +49,12 @@ test('named computer interfaces precede IP-only gateway devices in the sidebar',
  assert.equal(rows[1].name,'10.42.0.3 · gateway only');
  assert(!rows.some(row=>row.name.includes('interface unknown')));
 });
+
+
+test('cached mDNS labels disclose their source without changing measured network values',()=>{
+ const stamp=Date.now();
+ const data={devices:[{ip:'10.42.0.3',mac:'aa',hostname:'device.local',hostname_source:'cached_mdns'}],link_traffic:{updated:new Date(stamp).toISOString(),peers:{aa:{rx_mbps:3,tx_mbps:2}}}};
+ const row=deviceLevels(data,{hosts:[]},'network',stamp)[0];
+ assert.equal(row.name,'device.local · gateway only');
+ assert.equal(row.value,5);assert.match(row.basis,/last mDNS observation/);
+});

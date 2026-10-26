@@ -82,7 +82,7 @@ def task_manager():
     def pick(value, fields):
         return {key: value[key] for key in fields.split() if key in value}
     data = pick(network, 'updated interface')
-    data['devices'] = [pick(row, 'hostname ip mac self') for row in network.get('devices', [])[:256]]
+    data['devices'] = [pick(row, 'hostname ip mac self hostname_source hostname_last_seen') for row in network.get('devices', [])[:256]]
     data['interface_traffic'] = {name: pick(row, 'rx_mbps tx_mbps updated')
                                for name, row in list(network.get('interface_traffic', {}).items())[:32]}
     capture = network.get('link_traffic') or {}

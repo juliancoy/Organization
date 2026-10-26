@@ -27,6 +27,7 @@ from remote_map import collect
 from measurements import link_info, route_trace
 from router import Router
 from history import DeviceHistory
+from device_names import retain_device_names
 from geography import Geography
 from remote_ips import RemoteIPs
 from capture_config import publish as publish_capture_config
@@ -243,7 +244,9 @@ def worker():
             state['scanning'] = True
         try:
             result = scan()
+            # Record only fresh observations, so a cache hit cannot renew its own TTL.
             history.observe(result['devices'], result['updated'], 'Ethernet discovery')
+            result['devices']=retain_device_names(result['devices'],history.view(),result['updated'])
             publish_capture_config(INTERFACE)
             with lock:
                 state.update(result)

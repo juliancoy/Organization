@@ -27,7 +27,7 @@ def project_network(value):
     def pick(row,fields):return {key:deepcopy(row[key]) for key in fields.split() if key in row}
     capture=value.get('link_traffic') or {}
     return {'interface':value.get('interface'),
-            'devices':[pick(row,'hostname ip mac self') for row in value.get('devices',[])[:256]],
+            'devices':[pick(row,'hostname ip mac self hostname_source hostname_last_seen') for row in value.get('devices',[])[:256]],
             'interface_traffic':{key:pick(row,'rx_mbps tx_mbps updated') for key,row in list(value.get('interface_traffic',{}).items())[:32]},
             'link_traffic':{'updated':capture.get('updated'),'capture_error':bool(capture.get('capture_error')),
                             'peers':{key:pick(row,'rx_mbps tx_mbps') for key,row in list(capture.get('peers',{}).items())[:256]}}}

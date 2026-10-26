@@ -240,3 +240,10 @@ The coordinator reads bounded Linux interface counters using existing enrolled
 addresses and verified saved SSH access; workers are not restarted or reconfigured.
 New, replaced or reset interfaces warm up before reporting rates. Unavailable
 interface telemetry is labeled unknown rather than assigned to a guessed device.
+
+
+Device labels retain a MAC-matched mDNS name for up to 24 hours after its last
+actual discovery reply. Cached names are labeled with their source and observation
+time in the feed; they do not change measured connectivity or renew themselves on
+failed lookups. Fresh replies replace cached names immediately. IP reuse by a
+different MAC never inherits the previous device's name.
