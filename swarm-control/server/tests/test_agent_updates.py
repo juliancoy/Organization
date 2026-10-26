@@ -20,11 +20,13 @@ class LauncherUpdateTests(unittest.TestCase):
 
     def test_verified_ipv4_endpoint_overrides_an_ambient_ipv6_only_ssh_setting(self):
         with patch('agent_updates.subprocess.run',return_value=Mock(returncode=0)) as run, patch('agent_client.CONFIG') as config:
-            config.read_text.return_value='{"controller_public_key":"'+'ab'*32+'"}'
+            config.read_text.return_value='{"controller_public_key":"'+'ab'*32+'","peers":{"worker":"10.42.0.2"}}'
             self.updates.stage(self.host,self.status)
         command=run.call_args.args[0]
         self.assertIn('AddressFamily=any',command)
         self.assertIn('HostKeyAlias=worker.local',command)
+        import json
+        self.assertEqual(json.loads(run.call_args.kwargs['input'])['peers'],{'worker':'10.42.0.2'})
 
     def test_outdated_launcher_waits_through_restart_and_checks_revision(self):
         ready={**self.status,'source_revision':self.updates.revision}

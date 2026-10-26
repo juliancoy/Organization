@@ -109,4 +109,6 @@ class ImageRegistry:
         if not result.get('id'):raise RuntimeError('Agent did not confirm its layer-verified image')
         self.seeders.setdefault((image,fingerprint),[])
         if destination['host'] not in self.seeders[(image,fingerprint)]:self.seeders[(image,fingerprint)].append(destination['host'])
-        self.service.notify(image,'transferred',coordinator,destination['host'],{'source_bytes':result.get('source_bytes',{})})
+        sources=result.get('source_bytes',{})
+        actual_source=max(sources,key=sources.get) if sources else coordinator
+        self.service.notify(image,'transferred',actual_source,destination['host'],{'source_bytes':sources})

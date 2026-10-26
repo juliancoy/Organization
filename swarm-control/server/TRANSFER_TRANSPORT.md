@@ -15,6 +15,8 @@ fingerprint before tagging. Later recipients try enrolled cached peers first,
 then the coordinator. Cache misses or unavailable peers fall back per object.
 `image.pull` returns source byte counts; transfer progress includes those counts.
 
+Explicit agent updates synchronize the coordinator's already-enrolled peer list
+so recipients can authenticate one another. No discovered device is added.
 Agent updates use the existing atomic release supervisor. Busy agents retain
 their running workloads and switch releases when idle. Old agents remain TCP
 compatible; new distributed work requires the peer-cache and MPTCP transport
