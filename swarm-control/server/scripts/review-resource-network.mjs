@@ -12,7 +12,9 @@ const server=createServer(async(req,res)=>{
  if(req.method!=='GET'){res.writeHead(405).end();return}
  if(url.pathname==='/api/v1/swarm/task-manager'){
   const now=Date.now(),host={host:'worker.local',addresses:['10.42.0.2'],sampled_at:now/1000,status:'live',percent:20,cpus:4,network_interfaces:[{name:'eth0',ifindex:2,state:'up',status:'live',sampled_at:now/1000,rx_mbps:4,tx_mbps:10,network_mbps:14},{name:'wlan0',ifindex:3,state:'up',status:'live',sampled_at:now/1000,rx_mbps:2,tx_mbps:1,network_mbps:3}]};
-  const hosts=[host,...['compai.local','codecollective.local','julian-latitude.local','julian-minipc.local','wolf-latitude.local'].map((name,n)=>({...host,host:name,addresses:['10.42.0.'+(n+10)],network_interfaces:host.network_interfaces.map(i=>({...i,tx_mbps:55.3+n,rx_mbps:50.3+n}))}))];
+  const hosts=[host,...['compai.local','codecollective.local','julian-latitude.local','julian-minipc.local','wolf-latitude.local'].map((name,n)=>({...host,host:name,addresses:['10.42.0.'+(n+10)],network_interfaces:host.network_interfaces.map(i=>({...i,tx_mbps:55.3+n,rx_mbps:50.3+n,network_mbps:105.6+2*n}))}))];
+  host.network_interfaces.push({name:'enp9s0',ifindex:9,state:'down',status:'disconnected',sampled_at:now/1000,network_mbps:null,rx_mbps:null,tx_mbps:null});
+  hosts.push({host:'no-interface.local',status:'live',sampled_at:now/1000,network_interfaces:[]});
   const history=Array.from({length:13},(_,n)=>{const time=now-60000+n*5000;return {sampled_at:time/1000,hosts:hosts.map(host=>({...host,sampled_at:time/1000,network_interfaces:host.network_interfaces.map(iface=>({...iface,sampled_at:time/1000}))})),network:network(time)}});
   res.setHeader('Content-Type','application/json');res.end(JSON.stringify({network:network(now),metrics:{hosts,history},run:{hosts:[]}}));return
  }
@@ -33,10 +35,13 @@ try{
  await page.clock.pauseAt(new Date(Date.now()+1000))
  const paths=await page.locator('#levels-plot path[fill="none"]').evaluateAll(paths=>paths.map(path=>path.getAttribute('d')))
  assert.equal(paths.length,24,'Six machines with two interfaces should each have send and receive series')
- await expect(page.locator('.levels-machine-group')).toContainText(['codecollective','compai','julian-latitude','julian-minipc','wolf-latitude','worker','Gateway-only devices'])
+ await expect(page.locator('.levels-machine-group')).toContainText(['wolf-latitude','julian-minipc','julian-latitude','codecollective','compai','worker'])
  
- await expect(page.locator('.levels-machine-group').last()).toHaveText('Gateway-only devices')
+ await expect(page.locator('#levels-legend')).not.toContainText('interface unavailable')
  await expect(page.locator('#levels-legend')).not.toContainText('interface unknown')
+ await expect(page.locator('#levels-legend')).not.toContainText('no-interface')
+ await expect(page.getByRole('button',{name:/worker.local · enp9s0/})).toHaveCount(2)
+ await expect(page.getByRole('button',{name:/worker.local · enp9s0/}).first()).toContainText('Not connected')
  await expect(page.getByRole('button',{name:/worker.local · eth0/})).toHaveCount(2)
  await expect(page.getByRole('button',{name:/worker.local · wlan0/})).toHaveCount(2)
  assert(paths.every(path=>(path.match(/L/g)||[]).length>=12),'Restored network history should contain all background samples')

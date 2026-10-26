@@ -10,13 +10,14 @@ export function deviceLevels(data,metrics,mode,now=Date.now()) {
  }));
 
  if(['network','send','receive'].includes(mode))for(const host of hosts){
-  if(!host.network_interfaces?.length)continue;
   used.add(host.host);
+  if(!host.network_interfaces?.length)continue;
   for(const iface of host.network_interfaces){
    const field=mode==='send'?'tx_mbps':mode==='receive'?'rx_mbps':'network_mbps';
-   const fresh=iface.status==='live'&&now/1000-iface.sampled_at<15;
+   const recent=now/1000-iface.sampled_at<15,disconnected=recent&&(iface.status==='disconnected'||['down','lowerlayerdown','notpresent'].includes(iface.state));
+   const fresh=recent&&iface.status==='live'&&!disconnected;
    rows.push({id:`${host.host}:interface:${iface.ifindex}:${iface.name}`,name:`${host.host} · ${iface.name}`,machine:host.host,interface:iface.name,
-    value:fresh&&valid(iface[field])?iface[field]:null,basis:`Physical interface ${iface.name} · ${iface.state||'unknown state'} · ${iface.window_seconds??'unknown'}s counter interval`});
+    value:fresh&&valid(iface[field])?iface[field]:null,throughput:fresh&&valid(iface.network_mbps)?iface.network_mbps:null,disconnected,unavailableLabel:disconnected?'Not connected':'No data',basis:`Physical interface ${iface.name} · ${iface.state||'unknown state'} · ${iface.window_seconds??'unknown'}s counter interval`});
   }
  }
  const field={network:'network_mbps',disk:'disk_busy_percent',ram:'ram_percent',cpu:'percent',send:'network_tx_mbps',receive:'network_rx_mbps'}[mode];
@@ -35,13 +36,14 @@ export function deviceLevels(data,metrics,mode,now=Date.now()) {
    basis=d.self?'Coordinator LAN interface only':'Gateway-observed device traffic; switched traffic may be missing';
   }
   if(d.hostname_source==='cached_mdns')basis+=' · Name from the last mDNS observation; connectivity is measured separately';
+  if(['network','send','receive'].includes(mode)&&value===null)continue;
   rows.push({id:d.mac||d.ip,name:(d.hostname||d.ip)+(['network','send','receive'].includes(mode)?(h?' · interface unavailable':' · gateway only'):''),value,basis,...cpuInfo(h)});
  }
- for(const h of hosts)if(!used.has(h.host))rows.push({id:h.host,name:h.host+(['network','send','receive'].includes(mode)?' · interface unavailable':''),value:hostValue(h),basis:'Host telemetry',...cpuInfo(h)});
+ for(const h of hosts)if(!used.has(h.host)&&!['network','send','receive'].includes(mode))rows.push({id:h.host,name:h.host+(['network','send','receive'].includes(mode)?' · interface unavailable':''),value:hostValue(h),basis:'Host telemetry',...cpuInfo(h)});
  return rows;
 }
 export function deviceColor(id){let hash=0;for(const c of id)hash=(hash*31+c.charCodeAt(0))|0;return `hsl(${(hash>>>0)%360} 78% 68%)`;}
 
 export function compareNetworkRows(a,b){
- return Number(Boolean(b.interface))-Number(Boolean(a.interface))||(a.machine||a.name).localeCompare(b.machine||b.name)||(b.value??-1)-(a.value??-1)||a.name.localeCompare(b.name);
+ return (b.throughput??b.value??-1)-(a.throughput??a.value??-1)||(a.machine||a.name).localeCompare(b.machine||b.name)||a.name.localeCompare(b.name);
 }

@@ -42,7 +42,7 @@ def capture(target,script=SCRIPT):
 
 class InterfaceSampler:
     def __init__(self,reader=capture):
-        self.reader=reader;self.previous=None
+        self.reader=reader;self.previous=None;self.seen={}
 
     def sample(self,target):
         try:current=self.reader(target)
@@ -61,5 +61,14 @@ class InterfaceSampler:
                 if min(changes)>=0:
                     rx,tx=[round(change*8/elapsed/1000000,4) for change in changes]
                     row.update(status='live',rx_mbps=rx,tx_mbps=tx,network_mbps=round(rx+tx,4))
+            if row['state'] in ('down','lowerlayerdown','notpresent'):
+                row.update(status='disconnected',rx_mbps=None,tx_mbps=None,network_mbps=None)
             rows.append(row)
+            self.seen[name]=dict(row)
+        present={row['name'] for row in rows}
+        for name,row in self.seen.items():
+            if name not in present and len(rows)<32:
+                rows.append({**row,'state':'notpresent','status':'disconnected','sampled_at':current['sampled_at'],
+                             'rx_mbps':None,'tx_mbps':None,'network_mbps':None})
+        self.seen={row['name']:dict(row) for row in rows}
         return rows
