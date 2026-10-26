@@ -348,8 +348,69 @@ def coordinator(args):
                 save()
 
 
+def gpu_backfill(args):
+    """Continuously enrich already verified miniPC archives without replacing prior QC."""
+    import fcntl
+    from scripts.wgs_swarm_download import atomic_json,file_id
+    from scripts.genomics_distributed import CapacityWait
+    args.output=args.output.absolute();args.output.mkdir(mode=0o700,parents=True,exist_ok=True)
+    if any((p/'.git').exists() or p.is_symlink() for p in [args.output,*args.output.parents]):raise ValueError('Backfill state must remain private outside Git')
+    lock=(args.output/'backfill.lock').open('a');fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    catalog={file_id(item):item for item in json.loads(args.manifest.read_text())['files'] if item['sample']=='Watson'}
+    host=next(h for h in json.loads(args.hosts.read_text()) if h['host']=='julian-minipc.local')
+    state_path=args.output/'state.json'
+    try:state=json.loads(state_path.read_text())
+    except (FileNotFoundError,ValueError):state={'jobs':{}}
+    state.update(status='running',scope='GPU histogram backfill of publisher-verified public source reads; separate from primary QC and scientific publication',provisional=True)
+    for ident,row in state['jobs'].items():
+        if ident in catalog:row.update(sample='Watson',run=catalog[ident]['run'],filename=catalog[ident]['filename'],host=host['host'])
+        if row.get('phase')=='verified' and row.get('gpu_bases')==row.get('bases') and row.get('matches_original_cpu_qc'):
+            row.update(status='verified',validation='native_cpu_every_bin' if row.get('gpu_cpu_crosschecked_batches')==row.get('gpu_batches') else 'prior_aggregate_and_startup_fixtures')
+    def save():state['updated']=time.time();atomic_json(state_path,state)
+    save()
+    try:
+        while not STOP.is_set():
+            downloads=json.loads(args.download_state.read_text());host={**host,'cache':next((w['cache'] for w in downloads.get('workers',[]) if w['host']==host['host']),host['cache'])}
+            eligible=[]
+            for ident,source in downloads.get('jobs',{}).items():
+                if ident not in catalog or source.get('host')!=host['host'] or source.get('status')!='verified':continue
+                previous=state['jobs'].get(ident,{})
+                if previous.get('retry_after',0)>time.time():continue
+                if previous.get('status')=='verified' and previous.get('input_md5')==catalog[ident]['md5']:continue
+                try:baseline=json.loads((args.qc_baseline/(ident+'.json')).read_text())
+                except (FileNotFoundError,ValueError):continue
+                if baseline.get('phase')=='verified' and baseline.get('input_md5')==catalog[ident]['md5']:eligible.append((catalog[ident]['bytes'],ident,baseline))
+            for _,ident,baseline in sorted(eligible):
+                if STOP.is_set():break
+                item=catalog[ident];metadata={'sample':item['sample'],'run':item['run'],'filename':item['filename'],'host':host['host']}
+                def changed(row):state['jobs'][ident]={**row,**metadata,'status':row['phase']};save()
+                try:
+                    result=run_remote(host,item,ident,args.output,0,changed,args.download_state)
+                    validate_backfill(result,baseline)
+                    if result['gpu_bases']!=result['bases']:
+                        state['jobs'][ident]={**result,**metadata,'status':'waiting_gpu','provisional':True,'reason':'CPU fallback preserved counts; awaiting full GPU histogram enrichment','retry_after':time.time()+60};save();break
+                    result.update(**metadata,status='verified',matches_prior_qc=True,matches_original_cpu_qc=baseline.get('qc_backend','cpu')=='cpu',gpu_batch_cpu_crosscheck_requested=False,validation='prior_aggregate_and_startup_fixtures')
+                    state['jobs'][ident]=result;save()
+                except CapacityWait:
+                    state['jobs'][ident]={**metadata,'status':'waiting_capacity','provisional':True};save();break
+                except InterruptedError:
+                    state['jobs'][ident]={**metadata,'status':'stopped' if STOP.is_set() else 'waiting_input','provisional':True};save();break
+                except Exception as error:
+                    state['jobs'][ident]={**metadata,'status':'waiting_or_failed','provisional':True,'retry_after':time.time()+60,'error':type(error).__name__+': '+str(error)[:240]};save();break
+            state['status']='running' if eligible else 'watching_for_verified_sources';save();STOP.wait(5)
+    finally:
+        state['status']='stopped';save();lock.close()
+
+
+def validate_backfill(result,baseline):
+    """A new histogram never overrides disagreement with original source QC."""
+    keys=('reads','bases','gc_bases','ambiguous_bases','quality_sum','q20_bases','q30_bases','min_length','max_length','input_md5')
+    if result.get('phase')!='verified' or result.get('provisional') is not False or any(result.get(k)!=baseline.get(k) for k in keys):raise ValueError('GPU histogram backfill differs from prior verified QC')
+    if len(result.get('quality_histogram',[]))!=94 or sum(result['quality_histogram'])!=result['bases']:raise ValueError('Backfill histogram does not cover all source bases')
+
+
 def main():
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--worker',action='store_true');parser.add_argument('--sample',action='append');parser.add_argument('--manifest',type=Path);parser.add_argument('--hosts',type=Path);parser.add_argument('--download-state',type=Path);parser.add_argument('--output',type=Path)
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--worker',action='store_true');parser.add_argument('--gpu-backfill',action='store_true');parser.add_argument('--qc-baseline',type=Path);parser.add_argument('--sample',action='append');parser.add_argument('--manifest',type=Path);parser.add_argument('--hosts',type=Path);parser.add_argument('--download-state',type=Path);parser.add_argument('--output',type=Path)
     args=parser.parse_args();os.umask(0o077)
     if args.worker:
         import sys
@@ -358,6 +419,9 @@ def main():
         print(json.dumps(result),flush=True);return
     for sig in (signal.SIGTERM,signal.SIGINT):signal.signal(sig,lambda *_:STOP.set())
     if any(value is None for value in (args.manifest,args.hosts,args.download_state,args.output)):parser.error('Coordinator requires manifest, hosts, download-state and output')
+    if args.gpu_backfill:
+        if args.qc_baseline is None:parser.error('GPU backfill requires --qc-baseline')
+        gpu_backfill(args);return
     coordinator(args)
 
 

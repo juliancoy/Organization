@@ -211,3 +211,12 @@ def test_requested_per_batch_cpu_crosscheck_cannot_be_replaced_by_startup_fixtur
     thread=threading.Thread(target=serve);thread.start()
     with pytest.raises(ValueError,match='crosscheck'):request_gpu_batch(b'AC',b'II',{'local_root':str(local),'host_root':'/owner/gpu','verify':True})
     thread.join(1)
+
+
+def test_backfill_rejects_prior_qc_disagreement_and_incomplete_histogram(tmp_path):
+    from scripts.wgs_stream_qc import validate_backfill
+    data,item=source(tmp_path);receipt(tmp_path,item,data);baseline=aggregate_qc(tmp_path,item)
+    result=aggregate_qc(tmp_path,item,gpu_request=gpu_response,batch_bases=2)
+    validate_backfill(result,baseline)
+    with pytest.raises(ValueError,match='prior verified'):validate_backfill({**result,'gc_bases':999},baseline)
+    with pytest.raises(ValueError,match='histogram'):validate_backfill({**result,'quality_histogram':[0]*94},baseline)
