@@ -20,7 +20,7 @@ const historyMode=()=>mode==='network'&&split?'split':mode;
 function rowsFor(data,metrics,metric,now=Date.now()){return metric==='split'?['send','receive'].flatMap(direction=>deviceLevels(data,metrics,direction,now).map(row=>({...row,deviceId:row.id,id:row.id+':'+direction,direction,name:row.name+' · '+direction}))):deviceLevels(data,metrics,metric,now);}
 function legendButton(row,network=false){
  const button=document.createElement('button');button.type='button';button.className=network?'levels-network-toggle':'levels-device';
- button.style.setProperty('--device-color',deviceColor(row.deviceId||row.id));button.setAttribute('aria-pressed',String(!hidden.has(row.id)));
+ button.dataset.seriesId=row.id;button.style.setProperty('--device-color',deviceColor(row.deviceId||row.id));button.setAttribute('aria-pressed',String(!hidden.has(row.id)));
  const amount=row.value===null?(row.unavailableLabel||'No data'):row.value.toFixed(1)+(mode==='network'?' Mb/s':'%');
  button.setAttribute('aria-label',`${row.name}: ${amount}`);button.title=row.basis;
  button.onmouseenter=button.onfocus=()=>{highlighted=row.id;draw();};
@@ -106,8 +106,9 @@ function update(data,metrics,record=true){
  document.getElementById('levels-description').textContent=mode==='gpu'||mode==='vram'?'Live GPU counters by device. Missing GPU backends remain unmeasured. Compute validation and runtime readiness are shown under Devices & tools.':mode==='network'?'Physical interfaces grouped by computer. Each color identifies one interface; loopback and virtual interfaces are excluded.':mode==='disk'?'Physical disk activity over time. 100% means a disk was busy for the entire sampling interval.':mode==='cpu'?'Executing CPU time across all logical CPUs, averaged over full sampling intervals. Fleet and test-active averages include all host processes. I/O wait and stolen time are separate; hover over a device for details.':'Memory in use over time. Available memory, including reclaimable cache, is excluded.';
  if(smoothing){latest=latest.map(row=>({...row,value:row.value===null?null:(displayPoints(histories[historyMode()].get(row.id)||[]).at(-1)?.value??row.value)}));document.getElementById('levels-description').textContent+=' Smoothing uses a 10-second exponential average; brief peaks are reduced.';}
  latest.sort((a,b)=>mode==='network'?compareNetworkRows(a,b):(b.value??-1)-(a.value??-1)||a.name.localeCompare(b.name));
- const legend=document.getElementById('levels-legend');legend.replaceChildren();
+ const legend=document.getElementById('levels-legend'),focused=document.activeElement?.dataset.seriesId,scrollTop=legend.scrollTop;legend.replaceChildren();
  if(mode==='network')networkLegend(legend);else for(const row of latest)legend.append(legendButton(row));
+ legend.scrollTop=scrollTop;if(focused)Array.from(legend.querySelectorAll('button')).find(button=>button.dataset.seriesId===focused)?.focus({preventScroll:true});
  if(mode==='network'&&split)document.getElementById('levels-description').textContent+=' Send is solid; receive is dashed. Toggle either direction in the sidebar.';
  const count=latest.filter(r=>r.value!==null).length;
  document.getElementById('levels-coverage').textContent=mode==='network'?`${count} / ${latest.length} ${split?'directions':'interfaces'} measured · Five-minute background history. Gateway-only measurements may omit switched traffic.`:count+' / '+latest.length+(mode==='network'&&split?' directional series measured. ':' devices measured. ')+(mode==='network'?'Hosts with telemetry report physical-interface totals; other devices use gateway-visible traffic, which excludes switched traffic. These scopes differ; values are not additive.':'CPU, GPU, disk, and RAM require live host telemetry. Devices without telemetry remain listed as “No data”.')+' Host history is collected by the coordinator for five minutes, even while this page is closed.';
