@@ -33,7 +33,7 @@ class PIdPRecoveryTests(unittest.TestCase):
                     'owner_canonical_user_id':'owner-person'}
         config = self.path / 'config.json'; config.write_text(json.dumps(self.cfg)); config.chmod(0o600)
         for item in [patch.object(auth, 'CONFIG', config), patch.object(devices, 'FILE', self.path / 'devices.json'),
-                     patch.dict(auth.PENDING, {}, clear=True), patch.dict(auth.RECOVERIES, {}, clear=True)]:
+                     patch.dict(auth.PENDING, {}, clear=True)]:
             item.start(); self.addCleanup(item.stop)
         self.private = ec.generate_private_key(ec.SECP256R1())
         numbers = self.private.public_key().public_numbers()
@@ -66,23 +66,20 @@ class PIdPRecoveryTests(unittest.TestCase):
         auth.CONFIG.chmod(0o644)
         with self.assertRaises(auth.Denied):auth.start(ORIGIN)
 
-    def test_verified_owner_replaces_old_session_and_invalidates_outstanding_qr(self):
+    def test_verified_owner_adds_controller_and_preserves_pairing_link(self):
         old = devices.session(devices.issue()); unused = devices.issue()
         query, browser, _ = self.login()
         token = self.token()
         with patch.object(auth, 'fetch', side_effect=[{'access_token': token}, {'keys': [self.jwk]},self.introspection()]) as fetch:
-            with self.assertRaises(auth.ReplacementRequired) as confirmation:
-                auth.complete(ORIGIN, query, browser)
-            self.assertTrue(devices.valid(old))
-            session = auth.replace_controller(confirmation.exception.receipt)
+            session = auth.complete(ORIGIN, query, browser)
             exchange = parse_qs(fetch.call_args_list[0].args[1].decode())
             self.assertEqual(exchange['resource'], [self.cfg['resource']])
             self.assertIn('code_verifier', exchange)
-        self.assertTrue(devices.valid(session)); self.assertFalse(devices.valid(old))
-        with self.assertRaises(ValueError):devices.session(unused)
+        self.assertTrue(devices.valid(session)); self.assertTrue(devices.valid(old))
+        self.assertTrue(devices.valid(devices.session(unused)))
         stored = devices.FILE.read_text()
         self.assertNotIn(token, stored); self.assertNotIn(session, stored)
-        self.assertEqual(len(json.loads(stored)['sessions']), 1)
+        self.assertEqual(len(json.loads(stored)['sessions']), 3)
 
     def test_other_account_cannot_disconnect_owner(self):
         old = devices.session(devices.issue()); query, browser, _ = self.login()
@@ -128,16 +125,16 @@ class PIdPRecoveryTests(unittest.TestCase):
             fetch.assert_not_called()
         self.assertIn(query['state'][0], auth.PENDING)
 
-    def test_replacement_receipt_expires_and_is_single_use(self):
-        old=devices.session(devices.issue())
-        receipt='r'*43
-        auth.RECOVERIES[devices.digest(receipt)]={'expires':time.time()+120,'label':'Galaxy'}
-        replacement=auth.replace_controller(receipt)
-        self.assertFalse(devices.valid(old));self.assertTrue(devices.valid(replacement))
-        with self.assertRaises(auth.Denied):auth.replace_controller(receipt)
-        auth.RECOVERIES[devices.digest(receipt)]={'expires':time.time()-1,'label':'Galaxy'}
-        with self.assertRaises(auth.Denied):auth.replace_controller(receipt)
-        self.assertTrue(devices.valid(replacement))
+    def test_reauthentication_rotates_only_current_browser(self):
+        current=devices.session(devices.issue());other=devices.session(devices.issue())
+        url,cookie=auth.start(ORIGIN,current,'Phone')
+        state=parse_qs(urlsplit(url).query)['state']
+        query={'state':state,'code':['one-use-code'],'iss':[self.cfg['issuer']]}
+        browser=cookie.split('=',1)[1].split(';',1)[0]
+        with patch.object(auth,'fetch',side_effect=[{'access_token':self.token()},{'keys':[self.jwk]},self.introspection()]):
+            renewed=auth.complete(ORIGIN,query,browser)
+        self.assertFalse(devices.valid(current));self.assertTrue(devices.valid(other));self.assertTrue(devices.valid(renewed))
+        self.assertEqual(devices.describe(renewed)['label'],'Phone')
 
     def test_only_pidp_verified_linked_identity_can_use_the_owner_account(self):
         subject='owner:owner-person'

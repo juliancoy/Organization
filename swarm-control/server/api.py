@@ -69,24 +69,6 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get('Origin') not in (None,origin):return self.reply(403,{'error':{'message':'Origin denied'}})
         path=urlsplit(self.path).path
         if self.command=='GET' and path=='/health':return self.reply(200,{'service':'swarm-control','status':'ok'})
-        if path=='/auth/replace' and self.command in ('GET','POST'):
-            try:
-                import identity
-                cookie=SimpleCookie(self.headers.get('Cookie',''))
-                receipt=cookie['__Host-swarm_recovery'].value if '__Host-swarm_recovery' in cookie else None
-                if self.command=='GET':
-                    if not receipt:raise ValueError('Owner sign-in required')
-                    page=b'<!doctype html><meta name="viewport" content="width=device-width"><title>Swarm Control</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/codex.css"><main><section class="codex-app"><h1>Replace the active controller?</h1><p>Another device currently controls this swarm. Continuing disconnects that device and authorizes this browser instead.</p><form method="post" action="/auth/replace"><button>Replace active controller</button></form><p><a href="/">Cancel</a></p></section></main>'
-                    return self.reply(200,page,'text/html')
-                if self.headers.get('Origin')!=origin or self.headers.get('Transfer-Encoding') or self.headers.get('Content-Length')!='0':
-                    raise ValueError('Same-origin confirmation required')
-                token=identity.replace_controller(receipt)
-                return self.reply(303,{},cookie=[
-                    '__Host-compai_device='+token+'; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age='+str(devices.LIFETIME),
-                    '__Host-swarm_recovery=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0'],location='/')
-            except Exception as error:
-                audit_auth_failure(error,'replacement')
-                return self.reply(403,{'error':{'message':'Replacement expired or was not authorized. Sign in again.'}})
         if self.command=='GET' and path in ('/auth/login','/auth/callback'):
             try:
                 import identity
@@ -102,8 +84,6 @@ class Handler(BaseHTTPRequestHandler):
                     '__Host-compai_device='+token+'; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age='+str(devices.LIFETIME),
                     identity.LOGIN_COOKIE+'=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0'],location='/')
             except Exception as error:
-                if isinstance(error,identity.ReplacementRequired):
-                    return self.reply(303,{},cookie='__Host-swarm_recovery='+error.receipt+'; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=120',location='/auth/replace')
                 audit_auth_failure(error,'login' if path=='/auth/login' else 'callback')
                 return self.reply(403,{'error':{'message':'PIdP sign-in failed. Use the CompAI owner account and restart at /auth/login.'}})
         if self.command=='GET' and path in ASSETS:

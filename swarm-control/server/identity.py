@@ -17,19 +17,12 @@ import devices
 
 CONFIG = Path.home() / '.config/swarm-control/identity.json'
 PENDING = {}
-RECOVERIES = {}
 LOCK = threading.Lock()
 LOGIN_COOKIE = '__Host-compai_login'
 
 
 class Denied(ValueError):
     pass
-
-class ReplacementRequired(Exception):
-    def __init__(self,receipt):
-        self.receipt=receipt
-        super().__init__('Explicit controller replacement required.')
-
 
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
@@ -149,24 +142,6 @@ def complete(origin, query, browser):
     verify(tokens['access_token'], cfg)
     # No PIdP token is sent to the browser or retained as a remote credential.
     with devices.state() as value:
-        if value['sessions'] and pending['device'] not in value['sessions']:
-            receipt=secrets.token_urlsafe(32)
-            with LOCK:
-                for key in list(RECOVERIES):
-                    if RECOVERIES[key]['expires']<=time.time():del RECOVERIES[key]
-                if len(RECOVERIES)>=128:raise Denied('Too many pending replacements.')
-                RECOVERIES[devices.digest(receipt)]={'expires':time.time()+120,'label':pending['label']}
-            raise ReplacementRequired(receipt)
-        value['pairs'] = {}
+        # Reauthentication rotates this browser only; other controllers remain valid.
+        if pending['device']:value['sessions'].pop(pending['device'],None)
         return devices.new_session(value,pending['label'])
-
-
-def replace_controller(receipt):
-    if not isinstance(receipt,str) or not 20<=len(receipt)<=128:
-        raise Denied('Replacement requires a fresh owner sign-in.')
-    with LOCK:
-        record=RECOVERIES.pop(devices.digest(receipt),None)
-    if not record or record['expires']<=time.time():raise Denied('Replacement expired. Sign in again.')
-    with devices.state() as value:
-        value['pairs']={}
-        return devices.new_session(value,record['label'])

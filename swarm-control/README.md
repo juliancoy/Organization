@@ -53,9 +53,9 @@ python3 swarm-control/server/setup-identity.py \
 ```
 
 Client credentials and controller records are owner-private under
-`~/.config/swarm-control/`. A successful owner sign-in creates a controller only
-when none is active. Replacing another active controller requires an explicit,
-short-lived confirmation. Revocation also invalidates transfer authorization.
+`~/.config/swarm-control/`. Each successful owner sign-in adds an independent controller. Multiple browsers
+can remain signed in; reauthentication rotates only that browser’s session.
+Lock revokes only the current browser, including its transfer authorization.
 Controller records retain their label, creation, expiry, and last-seen times.
 Local QR enrollment remains available through the owner launcher.
 

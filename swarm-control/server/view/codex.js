@@ -20,7 +20,7 @@ const label = el('label', 'Codex owner token '), password = el('input'); passwor
 const connect = el('button', 'Connect'); connect.type = 'submit'; unlock.append(label, connect, el('small', secureRemote ? 'Open a one-time pairing link from CompAI, or use your owner token once. This browser stays paired for 30 days; Lock revokes it.' : 'Use localhost or an SSH tunnel. This separate owner token is never shared with test workers.'));
 if(!allowedBrowser){password.disabled=true;connect.disabled=true;}
 const deviceLabel=el('input');deviceLabel.value='Galaxy';deviceLabel.maxLength=64;deviceLabel.required=true;
-if(secureRemote){const deviceName=el('label','Device name ');deviceName.append(deviceLabel);const signIn=el('button','Sign in with PIdP');signIn.type='submit';unlock.replaceChildren(deviceName,signIn,el('p','Use your authorized PIdP account. Replacing an active controller requires confirmation.'));}
+if(secureRemote){const deviceName=el('label','Device name ');deviceName.append(deviceLabel);const signIn=el('button','Sign in with PIdP');signIn.type='submit';unlock.replaceChildren(deviceName,signIn,el('p','Use your authorized PIdP account. Multiple devices can stay signed in. Lock signs out this browser only.'));}
 const status = el('p', 'Connect to view your conversations.', 'codex-status'); status.setAttribute('role', 'status');
 const workspace = el('div', '', 'codex-workspace'); workspace.hidden = true;
 const sidebar = el('div', '', 'codex-sidebar'), list = el('div', '', 'codex-list'), controls = el('div', '', 'codex-pagination');
@@ -85,7 +85,7 @@ async function load() {
   filterThreads();
   status.dataset.state=value.connected?'connected':'disconnected';
   status.textContent = value.machine + (value.connected ? ' · VS Code socket available' : ' · VS Code disconnected');
-  if(secureRemote){const r=await fetch('/api/v1/swarm/session',{cache:'no-store'});if(r.ok){const d=await r.json();deviceStatus.textContent=d?`Active controller: ${d.label} · Last seen ${new Date(d.last_seen*1000).toLocaleString()}`:'';}}
+  if(secureRemote){const r=await fetch('/api/v1/swarm/session',{cache:'no-store'});if(r.ok){const d=await r.json();deviceStatus.textContent=d?`This controller: ${d.label} · Last seen ${new Date(d.last_seen*1000).toLocaleString()}`:'';}}
 }
 async function choose(id) {
   if (busy || voiceBusy) return;

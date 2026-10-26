@@ -123,7 +123,7 @@ class RemoteBoundaryTests(unittest.TestCase):
             self.assertEqual(self.request('/session','POST',token='owner'*16,origin='https://compai.example',body={}),404)
             rest.assert_not_called()
 
-    def test_repairing_rejects_old_browser_and_revokes_live_transfer(self):
+    def test_pairing_keeps_both_browsers_and_logout_revokes_only_its_transfer(self):
         broker=Mock();broker.offer.return_value={'type':'answer','sdp':'fixture'}
         with patch('apk_delivery.manager',return_value=broker):
             self.assertEqual(self.request('/api/v1/test-app/offer','POST',origin='https://compai.example',body={'type':'offer','sdp':'fixture'},cookie=self.cookie),200)
@@ -132,7 +132,13 @@ class RemoteBoundaryTests(unittest.TestCase):
             pair=devices.issue()
             self.assertEqual(self.request('/pair','POST',origin='https://compai.example',body={'token':pair}),200)
             replacement=self.last_cookie.split(';',1)[0]
-            self.assertFalse(authorized_transfer())
+            self.assertTrue(authorized_transfer())
+        with patch('api.codex.rest',return_value=(200,{'threads':[]})):
+            self.assertEqual(self.request('/api/v1/master/codex/threads',cookie=self.cookie),200)
+            self.assertEqual(self.request('/api/v1/master/codex/threads',cookie=replacement),200)
+
+        self.assertEqual(self.request('/logout','POST',origin='https://compai.example',body={},cookie=self.cookie),200)
+        self.assertFalse(authorized_transfer())
         with patch('api.codex.rest',return_value=(200,{'threads':[]})):
             self.assertEqual(self.request('/api/v1/master/codex/threads',cookie=self.cookie),401)
             self.assertEqual(self.request('/api/v1/master/codex/threads',cookie=replacement),200)
@@ -149,18 +155,6 @@ class RemoteBoundaryTests(unittest.TestCase):
             self.assertEqual(complete.call_args.args[2],'browser')
         with patch('identity.complete',side_effect=ValueError('private token details')):
             self.assertEqual(self.request('/auth/callback?state=bad&code=bad'),403)
-
-    def test_controller_replacement_requires_owner_receipt_and_same_origin_confirmation(self):
-        import time,identity
-        receipt='r'*43
-        cookie='__Host-swarm_recovery='+receipt
-        self.assertEqual(self.request('/auth/replace','POST',origin='https://compai.example',cookie=cookie),403)
-        with patch.dict(identity.RECOVERIES,{devices.digest(receipt):{'expires':time.time()+120,'label':'Galaxy'}},clear=True):
-            self.assertEqual(self.request('/auth/replace','POST',origin='https://evil.example',cookie=cookie),403)
-            self.assertTrue(devices.valid(self.cookie.split('=',1)[1]))
-            self.assertEqual(self.request('/auth/replace','POST',origin='https://compai.example',cookie=cookie),303)
-            self.assertFalse(devices.valid(self.cookie.split('=',1)[1]))
-            self.assertEqual(self.request('/auth/replace','POST',origin='https://compai.example',cookie=cookie),403)
 
     def test_remote_test_request_requires_pairing_and_rejects_parameters(self):
         path='/api/v1/swarm/tests/request'

@@ -293,8 +293,8 @@ same person to use linked credentials; emails never assign controller ownership.
 
 See `swarm-control/README.md` for initial owner registration. Private identity
 configuration and device records live under `~/.config/swarm-control/`. No PIdP
-access or refresh token is given to the remote browser. Sign-in preserves an
-existing controller until the owner explicitly confirms replacement. Device
+access or refresh token is given to the remote browser. Sign-in adds an independent controller without disconnecting other browsers.
+Reauthentication rotates only the current browser; Lock revokes only that session. Device
 records retain a label and creation, expiry, and last-seen times. Local QR pairing
 remains an OS-owner-authorized alternative. Revocation invalidates transfer
 permissions. Read history, choose a thread, then Send a new

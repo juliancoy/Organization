@@ -39,11 +39,21 @@ class DevicePairingTests(unittest.TestCase):
             with self.subTest(token_type=type(value).__name__),self.assertRaises(ValueError):devices.session(value)
         self.assertFalse(self.path.exists())
 
-    def test_new_pairing_atomically_replaces_the_only_remote_session(self):
+    def test_new_pairing_preserves_other_controllers_and_revocation_is_independent(self):
         first=devices.session(devices.issue())
         next_pair=devices.issue()
         self.assertTrue(devices.valid(first))
         second=devices.session(next_pair)
-        self.assertFalse(devices.valid(first))
+        self.assertTrue(devices.valid(first))
         self.assertTrue(devices.valid(second))
-        self.assertEqual(len(json.loads(self.path.read_text())['sessions']),1)
+        self.assertEqual(len(json.loads(self.path.read_text())['sessions']),2)
+        devices.revoke(first)
+        self.assertFalse(devices.valid(first));self.assertTrue(devices.valid(second))
+
+    def test_concurrent_sessions_are_preserved(self):
+        def create(_):
+            with devices.state() as value:return devices.new_session(value)
+        with concurrent.futures.ThreadPoolExecutor(4) as pool:tokens=list(pool.map(create,range(4)))
+        self.assertTrue(all(devices.valid(token) for token in tokens))
+        devices.revoke()
+        self.assertFalse(any(devices.valid(token) for token in tokens))
