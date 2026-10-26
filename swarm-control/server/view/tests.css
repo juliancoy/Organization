@@ -133,8 +133,8 @@ main{max-width:1440px;margin:auto;padding:28px}a{color:#b7e4cf}.intro,.panel-hea
 .levels-machine-group{grid-column:1 / -1;flex-basis:100%;font-size:14px;font-weight:650;margin:14px 0 2px;color:#dbe5ec;overflow-wrap:anywhere}
 
 /* Compact network legend: one interface card, two independent directions. */
-#levels-legend:has(.levels-network-machine){display:flex;flex-direction:column;gap:18px;align-items:stretch;max-height:480px;overflow-y:auto;overflow-x:hidden;scrollbar-gutter:stable}
-.levels-network-machine{display:flex;flex-direction:column;gap:10px;min-width:0;flex:none}
+#levels-legend:has(.levels-network-machine){display:flex;flex-direction:column;flex-wrap:nowrap;gap:18px;align-items:stretch;max-height:480px;overflow-y:auto;overflow-x:hidden;scrollbar-gutter:stable}
+.levels-network-machine{width:100%;max-width:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:10px;min-width:0;flex:none}
 #levels-legend .levels-network-machine .levels-machine-group{font-size:14px;line-height:1.4;letter-spacing:0;margin:0 0 2px;flex-basis:auto;color:#e4edf3;overflow-wrap:anywhere}
 .levels-interface{padding:10px;background:#0c1720;border:1px solid #ffffff12;border-radius:9px;min-width:0;flex:none}
 .levels-interface-heading{display:flex;align-items:center;gap:8px;min-width:0;margin-bottom:9px;font-size:13px;line-height:1.5;color:#dce8ef}
@@ -148,5 +148,4 @@ main{max-width:1440px;margin:auto;padding:28px}a{color:#b7e4cf}.intro,.panel-hea
 #levels-legend .levels-network-toggle[aria-pressed=false]{opacity:1;background:#101c25;border-color:#293c47}
 #levels-legend .levels-network-toggle[aria-pressed=false] span,#levels-legend .levels-network-toggle[aria-pressed=false] strong{color:#8093a1}
 #levels-legend .levels-network-toggle:hover{border-color:var(--device-color);background:#20373d}
-@media(max-width:1000px) and (min-width:561px){#levels-legend:has(.levels-network-machine){display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}}
 @media(max-width:560px){#levels-legend:has(.levels-network-machine){max-height:none!important}.levels-interface-heading{font-size:14px}}
