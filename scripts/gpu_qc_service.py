@@ -11,7 +11,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--host',required=True);parser.add_argument('--hosts',type=Path);parser.add_argument('--state',type=Path,required=True);args=parser.parse_args()
     for sig in (signal.SIGINT,signal.SIGTERM):signal.signal(sig,lambda *_:STOP.set())
     args.state.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
-    assets=Path(__file__).parent/'gpu-tools';names=['qc_engine.c','qc_engine.comp','qc_server.py'];version=hashlib.sha256(b''.join((assets/n).read_bytes() for n in names)).hexdigest()
+    assets=Path(__file__).parent/'gpu-tools';names=['qc_engine.c','qc_engine.comp','qc_server.py','genome_masks.comp'];version=hashlib.sha256(b''.join((assets/n).read_bytes() for n in names)).hexdigest()
     state={'status':'starting','host':args.host,'runtime_version':version,'batches':0,'bases':0}
     def save(**updates):state.update(updates,updated=time.time());atomic_json(args.state,state)
     hosts=json.loads(args.hosts.read_text()) if args.hosts else distributed.discover();host=next(h for h in hosts if h['host']==args.host and h.get('eligible'))
@@ -37,7 +37,7 @@ def main():
                     except Exception as error:renew_errors.append(str(error));STOP.set();return
             finally:other.close()
         threading.Thread(target=renew,daemon=True).start()
-        command='glslangValidator -V qc_engine.comp -o qc_engine.spv && gcc -O3 -march=native qc_engine.c -lvulkan -o qc_engine && exec python3 qc_server.py'
+        command='glslangValidator -V qc_engine.comp -o qc_engine.spv && glslangValidator -V genome_masks.comp -o genome_masks.spv && gcc -O3 -march=native qc_engine.c -lvulkan -o qc_engine && exec python3 qc_server.py'
         argv=['docker','run','--rm','--pull=never','--name',name,'--label','org.lifetech.gpu-qc-service=true','--network','none','--read-only','--cpus','1','--memory',str(memory)+'m','--memory-swap',str(memory)+'m','--pids-limit','32','--cap-drop','ALL','--security-opt','no-new-privileges','--user',str(runtime['uid'])+':'+str(runtime['gid']),'--group-add',str(runtime['render_gid']),'--device',runtime['render'],'-e','TMPDIR=/work/tmp','-e','XDG_CACHE_HOME=/work/tmp','-e','GPU_QC_ROOT=/gpu-qc','-e','GPU_QC_HOST_ROOT='+root,'-e','GPU_QC_VERSION='+version,'-e','GPU_QC_MAX_BATCH='+str(max_batch),'--mount','type=bind,src=/usr,dst=/usr,readonly','--mount','type=bind,src='+root+',dst=/work','--mount','type=bind,src='+root+',dst=/gpu-qc','-w','/work',host['image'],'bash','-o','pipefail','-c',command]
         save(status='starting',memory_mb=memory,cpus=1,container=name,socket=root+'/service.sock',max_batch_bytes=max_batch)
         process=subprocess.Popen(distributed.shell_command(host,argv));next_scan=0
@@ -47,7 +47,7 @@ def main():
             try:
                 command=['python3','-c','import pathlib,sys; p=pathlib.Path(sys.argv[1]); print(p.read_text() if p.exists() else "{}")',root+'/daemon.json']
                 row=json.loads(subprocess.check_output(distributed.shell_command(host,command),text=True,timeout=10))
-                if row.get('runtime_version')==version:save(**{k:row[k] for k in ('status','batches','bases','device','startup_fixtures') if k in row})
+                if row.get('runtime_version')==version:save(**{k:row[k] for k in ('status','batches','bases','device','startup_fixtures','mask_startup_fixtures','mask_batches','mask_positions') if k in row})
             except (subprocess.SubprocessError,ValueError):pass
         if process.poll() is not None or renew_errors:raise RuntimeError('Persistent GPU QC worker stopped: '+str(process.returncode))
     finally:
