@@ -91,3 +91,23 @@ class PeerLayerCacheTests(unittest.TestCase):
                 self.assertEqual(sock.proto,socket.IPPROTO_TCP)
             finally:sock.close();server.close()
         asyncio.run(connect())
+
+
+class PeerBootstrapTests(unittest.TestCase):
+    def test_cold_workers_seed_once_before_parallel_peer_delivery(self):
+        from image_registry import ImageRegistry
+        import time,threading
+        registry=ImageRegistry(Mock(cancelled=Mock(return_value=False)))
+        registry.publish=Mock(return_value=('repository','digest','fingerprint'))
+        origin=[];delivered=[];guard=threading.Lock()
+        def deliver(destination,image,repository,digest,fingerprint):
+            with guard:
+                if not registry.seeders.get((image,fingerprint)):origin.append(destination['host'])
+            time.sleep(.02)
+            with guard:
+                registry.seeders.setdefault((image,fingerprint),[]).append(destination['host']);delivered.append(destination['host'])
+        registry.deliver=deliver
+        hosts=[{'host':str(n),'agent_endpoint':'http://peer'} for n in range(4)]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(lambda h:registry.transfer(None,h,'image','expected'),hosts))
+        self.assertEqual(len(origin),1);self.assertEqual(len(delivered),4)
