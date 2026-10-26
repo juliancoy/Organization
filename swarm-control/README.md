@@ -231,3 +231,12 @@ The background resource history also saves gateway send/receive counters and
 their observation timestamps. Directional network charts restore those actual
 measurements; older frames without gateway counters do not insert artificial
 nulls between live readings. Failed or stale capture samples still render gaps.
+
+
+Network charts group each machine's physical interfaces separately (for example,
+Ethernet, Wi-Fi, and WWAN), with independent send/receive counters and five-minute
+history. Loopback and virtual interfaces are excluded to avoid double-counting.
+The coordinator reads bounded Linux interface counters using existing enrolled
+addresses and verified saved SSH access; workers are not restarted or reconfigured.
+New, replaced or reset interfaces warm up before reporting rates. Unavailable
+interface telemetry is labeled unknown rather than assigned to a guessed device.

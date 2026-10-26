@@ -10,8 +10,8 @@ const server=createServer(async(req,res)=>{
  const url=new URL(req.url,'http://localhost');res.setHeader('Cache-Control','no-store')
  if(req.method!=='GET'){res.writeHead(405).end();return}
  if(url.pathname==='/api/v1/swarm/task-manager'){
-  const now=Date.now(),host={host:'worker.local',addresses:['10.42.0.2'],sampled_at:now/1000,status:'live',percent:20,cpus:4};
-  const history=Array.from({length:13},(_,n)=>{const time=now-60000+n*5000;return {sampled_at:time/1000,hosts:[{...host,sampled_at:time/1000}],network:network(time)}});
+  const now=Date.now(),host={host:'worker.local',addresses:['10.42.0.2'],sampled_at:now/1000,status:'live',percent:20,cpus:4,network_interfaces:[{name:'eth0',ifindex:2,state:'up',status:'live',sampled_at:now/1000,rx_mbps:4,tx_mbps:10,network_mbps:14},{name:'wlan0',ifindex:3,state:'up',status:'live',sampled_at:now/1000,rx_mbps:2,tx_mbps:1,network_mbps:3}]};
+  const history=Array.from({length:13},(_,n)=>{const time=now-60000+n*5000;return {sampled_at:time/1000,hosts:[{...host,sampled_at:time/1000,network_interfaces:host.network_interfaces.map(iface=>({...iface,sampled_at:time/1000}))}],network:network(time)}});
   res.setHeader('Content-Type','application/json');res.end(JSON.stringify({network:network(now),metrics:{hosts:[host],history},run:{hosts:[]}}));return
  }
  if(url.pathname==='/api/v1/swarm/connections'){res.setHeader('Content-Type','application/json');res.end('{"hosts":[]}');return}
@@ -28,9 +28,13 @@ try{
  await page.getByRole('button',{name:'Network',exact:true}).click()
  await page.getByLabel('Separate send / receive').check()
  const paths=await page.locator('#levels-plot path[fill="none"]').evaluateAll(paths=>paths.map(path=>path.getAttribute('d')))
- assert.equal(paths.length,2,'Each directional series should be one continuous segment')
+ assert.equal(paths.length,4,'Two interfaces should each have continuous send and receive series')
+ await expect(page.locator('.levels-machine-group')).toHaveText('worker.local')
+ await expect(page.locator('#levels-legend button').filter({hasText:'eth0'})).toHaveCount(2)
+ await expect(page.locator('#levels-legend button').filter({hasText:'wlan0'})).toHaveCount(2)
  assert(paths.every(path=>(path.match(/L/g)||[]).length>=12),'Restored network history should contain all background samples')
  await page.screenshot({path:join(output,'network-history.png'),fullPage:true})
+ await page.setViewportSize({width:390,height:1000});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false)
  assert.deepEqual(errors,[])
  console.log('PASS: directional network history renders continuous measured samples')
 }finally{await browser.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve))}

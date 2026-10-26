@@ -8,8 +8,14 @@ HOST_FIELDS = 'host observed_hostname addresses status sampled_at window_seconds
 GPU_FIELDS = 'pci_id vendor name backend utilization_percent memory_total_mib memory_free_mib'
 
 
+def project_interfaces(rows):
+    fields='name ifindex state status sampled_at window_seconds rx_mbps tx_mbps network_mbps'
+    return [{key:deepcopy(row[key]) for key in fields.split() if key in row} for row in rows[:32]]
+
+
 def project_host(row):
     host = {key: deepcopy(row[key]) for key in HOST_FIELDS.split() if key in row}
+    host['network_interfaces']=project_interfaces(row.get('network_interfaces',[]))
     hardware = row.get('hardware') or {}
     host['hardware'] = {key: hardware[key] for key in ('stale',) if key in hardware}
     host['hardware']['gpus'] = [{key: gpu[key] for key in GPU_FIELDS.split() if key in gpu}

@@ -44,7 +44,7 @@ class TaskManagerProjectionTests(unittest.TestCase):
                  'docker_downloads':{'status':'available','active':[{'image':'node:22','pid':42,'command':'private'}]},
                  'process_resources':{'command':'private'}}
         metrics={'total_percent':42,'live_hosts':1,'hosts':[{'host':'worker.local','status':'live','percent':42,
-                 'sampled_at':123,'ram_percent':40,'disk_busy_percent':25,'network_mbps':5,
+                 'sampled_at':123,'network_interfaces':[{'name':'eth0','rx_mbps':2,'tx_mbps':3,'secret':'private'}],'ram_percent':40,'disk_busy_percent':25,'network_mbps':5,
                  'session':{'token':'private'},'hardware':{'storage':{'path':'private'},'gpus':[{'name':'GPU','utilization_percent':12,'memory_total_mib':100,'memory_free_mib':50,'secret':'private'}]}}]}
         metrics['history']=[{'sampled_at':123,'hosts':[metrics['hosts'][0]],'network':network}]
         tests={'run':{'id':'fixture','status':'running','hosts':[],'credentials':'private'}}
@@ -57,6 +57,8 @@ class TaskManagerProjectionTests(unittest.TestCase):
         self.assertEqual(host['hardware']['gpus'][0]['utilization_percent'],12)
         self.assertEqual(result['network']['link_traffic']['peers']['aa']['rx_mbps'],3)
         self.assertEqual(result['metrics']['history'][0]['hosts'][0]['percent'],42)
+        self.assertEqual(host['network_interfaces'][0]['name'],'eth0')
+        self.assertEqual(result['metrics']['history'][0]['hosts'][0]['network_interfaces'][0]['rx_mbps'],2)
         self.assertEqual(result['metrics']['history'][0]['network']['link_traffic']['peers']['aa']['rx_mbps'],3)
         self.assertNotIn('private',json.dumps(result))
 

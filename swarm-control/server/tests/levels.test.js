@@ -22,3 +22,19 @@ test('CPU chart explains measurement failures and supplies interval provenance',
  const live=deviceLevels({}, {hosts:[{...h,status:'live',percent:25,window_seconds:5}]},'cpu',now)[0];
  assert.equal(live.value,25);assert.match(live.basis,/5.0s average/);
 });
+
+test('each machine exposes distinct interface and directional series without a duplicate host total',()=>{
+ const stamp=Date.now();
+ const h={host:'worker.local',status:'live',sampled_at:stamp/1000,addresses:['10.42.0.2'],network_mbps:99,network_interfaces:[
+  {name:'eth0',ifindex:2,state:'up',status:'live',sampled_at:stamp/1000,rx_mbps:4,tx_mbps:2,network_mbps:6},
+  {name:'wlan0',ifindex:3,state:'up',status:'live',sampled_at:stamp/1000,rx_mbps:1,tx_mbps:3,network_mbps:4},
+ ]};
+ const network={devices:[{ip:'10.42.0.2',hostname:'worker.local',mac:'aa'}]};
+ const rows=deviceLevels(network,{hosts:[h]},'network',stamp);
+ assert.equal(rows.length,2);assert.deepEqual(rows.map(row=>row.value),[6,4]);
+ assert.deepEqual(rows.map(row=>row.name),['worker.local · eth0','worker.local · wlan0']);
+ assert.notEqual(rows[0].id,rows[1].id);
+ assert.deepEqual(deviceLevels(network,{hosts:[h]},'send',stamp).map(row=>row.value),[2,3]);
+ assert.deepEqual(deviceLevels(network,{hosts:[h]},'receive',stamp).map(row=>row.value),[4,1]);
+ assert.deepEqual(deviceLevels(network,{hosts:[h]},'network',stamp+16000).map(row=>row.value),[null,null]);
+});

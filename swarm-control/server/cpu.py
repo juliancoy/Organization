@@ -6,6 +6,7 @@ import threading
 import time
 import sys
 import math
+from interface_metrics import InterfaceSampler
 from resource_history import ResourceHistory
 from paths import WORKSPACE
 sys.path.insert(0,str(WORKSPACE/'scripts'))
@@ -26,6 +27,7 @@ class CpuMonitor:
         self.lock=threading.Lock()
         self.hosts=[]
         self.history=ResourceHistory()
+        self.interfaces={}
         self.sampler=ResourceSampler()
         self.activity=activity
         self.network=network
@@ -50,6 +52,8 @@ class CpuMonitor:
                 client=AgentClient({**target,'agent_endpoint':'http://'+address+':8790'})
                 try:values=client.call('metrics',timeout=8)
                 finally:client.close()
+            sampler=self.interfaces.setdefault(target['host'],InterfaceSampler())
+            values['network_interfaces']=sampler.sample(target)
             if values.get('measurement_version')!=2:
                 return {'host':target['host'],'percent':None,'cpus':values.get('cpus'),'status':'update_required','sampled_at':time.time()}
             return {'host':target['host'],**values}

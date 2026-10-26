@@ -8,6 +8,17 @@ export function deviceLevels(data,metrics,mode,now=Date.now()) {
   if(!fresh||!valid(value))value=null;
   return {id:h.host+':gpu:'+(gpu.pci_id||index),name:h.host+' · '+gpu.name,value,basis:mode==='gpu'?'Live GPU utilization; unavailable backends remain unmeasured':'Dedicated GPU memory used; unavailable memory counters remain unmeasured'};
  }));
+
+ if(['network','send','receive'].includes(mode))for(const host of hosts){
+  if(!host.network_interfaces?.length)continue;
+  used.add(host.host);
+  for(const iface of host.network_interfaces){
+   const field=mode==='send'?'tx_mbps':mode==='receive'?'rx_mbps':'network_mbps';
+   const fresh=iface.status==='live'&&now/1000-iface.sampled_at<15;
+   rows.push({id:`${host.host}:interface:${iface.ifindex}:${iface.name}`,name:`${host.host} · ${iface.name}`,machine:host.host,interface:iface.name,
+    value:fresh&&valid(iface[field])?iface[field]:null,basis:`Physical interface ${iface.name} · ${iface.state||'unknown state'} · ${iface.window_seconds??'unknown'}s counter interval`});
+  }
+ }
  const field={network:'network_mbps',disk:'disk_busy_percent',ram:'ram_percent',cpu:'percent',send:'network_tx_mbps',receive:'network_rx_mbps'}[mode];
  const hostValue=h=>h?.status==='live'&&now/1000-h.sampled_at<15&&valid(h[field])?h[field]:null;
  const cpuInfo=h=>mode==='cpu'?{basis:h?hostCpuDetail(h)+' · '+hostCpuContext(h):'No host telemetry',unavailableLabel:h?cpuStatusLabel(now/1000-h.sampled_at>=15?'stale':h.status):'No telemetry'}:{};
@@ -23,9 +34,9 @@ export function deviceLevels(data,metrics,mode,now=Date.now()) {
    value=available&&valid(p[field])?p[field]:null;
    basis=d.self?'Coordinator LAN interface only':'Gateway-observed device traffic; switched traffic may be missing';
   }
-  rows.push({id:d.mac||d.ip,name:d.hostname||d.ip,value,basis,...cpuInfo(h)});
+  rows.push({id:d.mac||d.ip,name:(d.hostname||d.ip)+(['network','send','receive'].includes(mode)?' · interface unknown':''),value,basis,...cpuInfo(h)});
  }
- for(const h of hosts)if(!used.has(h.host))rows.push({id:h.host,name:h.host,value:hostValue(h),basis:'Host telemetry',...cpuInfo(h)});
+ for(const h of hosts)if(!used.has(h.host))rows.push({id:h.host,name:h.host+(['network','send','receive'].includes(mode)?' · interface unknown':''),value:hostValue(h),basis:'Host telemetry',...cpuInfo(h)});
  return rows;
 }
 export function deviceColor(id){let hash=0;for(const c of id)hash=(hash*31+c.charCodeAt(0))|0;return `hsl(${(hash>>>0)%360} 78% 68%)`;}

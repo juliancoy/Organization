@@ -129,3 +129,5 @@ main{max-width:1440px;margin:auto;padding:28px}a{color:#b7e4cf}.intro,.panel-hea
 .task-manager main{padding-top:12px}.task-manager #device-levels{margin-top:0}.task-manager #levels-plot{height:clamp(280px,43vh,540px)}.task-manager #levels-legend{max-height:clamp(320px,49vh,620px)}
 .task-manager #levels-docker{display:none}.task-manager #levels-description{max-width:80ch}.task-manager #overall-progress{padding:16px 20px}.task-manager #overall-progress p{margin:8px 0}.task-manager #status{font-size:14px}.task-manager .levels-controls>label:first-child{display:none}
 @media(max-width:760px){.resource-tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:5px}.resource-tabs button{min-width:0;padding:10px 5px}.task-manager #levels-plot{height:280px}.task-manager #levels-legend{max-height:320px}}
+
+.levels-machine-group{grid-column:1 / -1;flex-basis:100%;font-size:14px;font-weight:650;margin:14px 0 2px;color:#dbe5ec;overflow-wrap:anywhere}
