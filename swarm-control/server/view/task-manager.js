@@ -1,3 +1,4 @@
+import './wgs-progress.js';
 import './machine-connections.js';
 const summary=document.getElementById('task-summary'),hosts=document.getElementById('task-hosts');
 const element=(tag,text)=>{const node=document.createElement(tag);node.textContent=text;return node;};
