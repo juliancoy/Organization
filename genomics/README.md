@@ -261,3 +261,27 @@ WGS BAM. A private manifest is built by `lifetech-julian-archive-prepare.service
 `wgs_archive.py --private-manifest` incorporates it. Originals are retained. These
 files and their detailed archive receipts are owner-only and never included in
 the public operational projection or Genome Explorer.
+
+
+## GPU compute and telemetry
+
+CompAI has a 12 GiB RTX 3060; Inspiron also has a 2 GiB MX230. Both passed the
+controller-signed CUDA dispatch/readback check. The mini-PC has an AMD Renoir
+integrated GPU with 8 GiB reserved UMA memory. Its login user cannot open the
+render node directly; GPU jobs must pass the exact render device and supplemental
+render GID to a non-root container. A restricted, leased Vulkan dispatch/readback
+probe verified hardware execution without changing host permissions. GPU memory
+reservation is independent of active utilization.
+
+Task Manager samples NVIDIA counters and integrated GPU activity. AMD reports its
+driver busy counter and reserved GPU-memory usage. Intel percentages reflect the
+busiest engine across visible DRM clients; other users' clients may be excluded.
+Missing counters remain unmeasured, rather than being reported as zero. Software
+renderers such as llvmpipe never count as hardware GPU execution.
+
+The production BWA/samtools/bcftools commands remain CPU programs. Device exposure
+does not accelerate them. GPU candidates are bounded batched read QC, histograms,
+and tiled confidence-mask intersections. A candidate needs exact CPU agreement
+and an end-to-end benchmark including transfers and setup before activation.
+Keep a persistent GPU context if it materially improves throughput, respect live
+resource leases, and preserve other applications' GPU-memory headroom.
