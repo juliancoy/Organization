@@ -4,10 +4,11 @@ export function hardwareLines(hardware={}){
  if(hardware.storage)lines.push('Disk: '+gib(hardware.storage.free_bytes)+' free / '+gib(hardware.storage.total_bytes));
  for(const gpu of hardware.gpus||[]){
   const parts=[gpu.name];
-  if(gpu.memory_total_mib!=null)parts.push((gpu.memory_total_mib/1024).toFixed(1)+' GiB VRAM');
+  if(gpu.memory_total_mib!=null)parts.push((gpu.memory_total_mib/1024).toFixed(1)+' GiB GPU memory');
   if(!hardware.stale&&gpu.utilization_percent!=null)parts.push(gpu.utilization_percent+'% GPU');
   if(!hardware.stale&&gpu.memory_free_mib!=null)parts.push((gpu.memory_free_mib/1024).toFixed(1)+' GiB VRAM free');
-  parts.push(gpu.vendor==='NVIDIA'?(hardware.cuda_container_runtime===true?'CUDA container runtime':hardware.cuda_container_runtime===false?'CUDA runtime missing':'CUDA runtime unverified'):'CUDA unavailable');
+  parts.push(gpu.vendor==='NVIDIA'?(hardware.cuda_container_runtime===true?'CUDA container runtime':hardware.cuda_container_runtime===false?'CUDA runtime missing':'CUDA runtime unverified'):gpu.backend||'Compute backend unverified');
+  if(gpu.utilization_basis)parts.push(gpu.utilization_basis);
   lines.push(parts.join(' · '));
  }
  if(hardware.gpu_validation?.status==='passed')lines.push('CUDA kernel verified · '+new Date(hardware.gpu_validation.verified_at*1000).toLocaleTimeString());

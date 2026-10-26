@@ -19,9 +19,9 @@ print(json.dumps({'monotonic':time.monotonic(),'sampled_at':time.time(),
 '''
 
 
-def capture(target):
+def capture(target,script=SCRIPT):
     if target.get('local'):
-        command=[sys.executable,'-c',SCRIPT];payload=None
+        command=[sys.executable,'-c',script];payload=None
     else:
         from agent_client import CONFIG
         config=json.loads(CONFIG.read_text())
@@ -34,7 +34,7 @@ def capture(target):
         key=Path.home()/'.ssh/orgportal_lan_ed25519'
         if key.exists():command+=['-i',str(key)]
         if accounts.get(alias):command+=['-l',accounts[alias]]
-        command += [alias,'python3 -'];payload=SCRIPT
+        command += [alias,'python3 -'];payload=script
     result=subprocess.run(command,input=payload,capture_output=True,text=True,timeout=5,check=True)
     if len(result.stdout)>65536:raise ValueError('Interface response exceeds limit')
     return json.loads(result.stdout)

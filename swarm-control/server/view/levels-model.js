@@ -6,7 +6,7 @@ export function deviceLevels(data,metrics,mode,now=Date.now()) {
   const fresh=h.status==='live'&&now/1000-h.sampled_at<15&&!h.hardware.stale;
   let value=mode==='gpu'?gpu.utilization_percent:valid(gpu.memory_total_mib)&&gpu.memory_total_mib>0&&valid(gpu.memory_free_mib)?100*(1-gpu.memory_free_mib/gpu.memory_total_mib):null;
   if(!fresh||!valid(value))value=null;
-  return {id:h.host+':gpu:'+(gpu.pci_id||index),name:h.host+' · '+gpu.name,value,basis:mode==='gpu'?'Live GPU utilization; unavailable backends remain unmeasured':'Dedicated GPU memory used; unavailable memory counters remain unmeasured'};
+  return {id:h.host+':gpu:'+(gpu.pci_id||index),name:h.host+' · '+gpu.name,value,basis:mode==='gpu'?(gpu.utilization_basis||'Live GPU utilization; unavailable backends remain unmeasured'):'GPU memory used, including reserved UMA where reported; unavailable counters remain unmeasured'};
  }));
 
  if(['network','send','receive'].includes(mode))for(const host of hosts){

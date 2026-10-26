@@ -8,6 +8,7 @@ import sys
 import math
 from interface_metrics import InterfaceSampler
 from resource_history import ResourceHistory
+from gpu_metrics import GpuSampler
 from paths import WORKSPACE
 sys.path.insert(0,str(WORKSPACE/'scripts'))
 from launcher_agent import hardware_sample, ResourceSampler
@@ -28,6 +29,7 @@ class CpuMonitor:
         self.hosts=[]
         self.history=ResourceHistory()
         self.interfaces={}
+        self.gpu_samplers={}
         self.sampler=ResourceSampler()
         self.activity=activity
         self.network=network
@@ -54,6 +56,8 @@ class CpuMonitor:
                 finally:client.close()
             sampler=self.interfaces.setdefault(target['host'],InterfaceSampler())
             values['network_interfaces']=sampler.sample(target)
+            gpu_sampler=self.gpu_samplers.setdefault(target['host'],GpuSampler())
+            values['hardware']=gpu_sampler.sample(target,values.get('hardware',{}))
             if values.get('measurement_version')!=2:
                 return {'host':target['host'],'percent':None,'cpus':values.get('cpus'),'status':'update_required','sampled_at':time.time()}
             return {'host':target['host'],**values}
