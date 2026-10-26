@@ -103,7 +103,9 @@ class ResearchRun(DistributedTests):
                     status=status if status in ('running','passed','failed','stopped') else 'queued'
                     key='batch-'+str(index)
                     phase='waiting_for_capacity' if job.get('status')=='waiting_capacity' else 'test'
-                    host['jobs'][key]={'name':'DNA batch','status':status,'phase':phase,'cpus':1,'memory_mb':512}
+                    host['jobs'][key]={'name':'DNA batch','status':status,'phase':phase,'cpus':1,'memory_mb':512,
+                                       'reused':bool(job.get('reused')),'cpu_seconds':job.get('cpu_seconds'),
+                                       'duration_seconds':job.get('elapsed_seconds')}
                     if status in ('running','queued'):host['status']='running';host['active_tasks'].append(key)
                     elif status=='failed' and host['status']!='running':host['status']='failed'
                 self.run['hosts']=list(hosts.values())

@@ -23,7 +23,7 @@ ASSETS.update({'/swarm-status':'swarm-status.html','/swarm-status.js':'swarm-sta
 ASSETS.update({'/research': 'research.html', '/research.html': 'research.html', '/research.js': 'research.js', '/research.css': 'research.css'})
 ASSETS.update({'/'+name: name for name in ('task-manager.html','task-manager.js','task-manager.css','tests.css','levels.js','levels-model.js','resource-history.js','cpu-report.js','snapshot-fetch.js','docker-downloads.js')})
 ASSETS['/task-manager']='task-manager.html'
-ASSETS.update({'/history':'history.html','/history.html':'history.html','/history.js':'history.js','/history.css':'history.css'})
+ASSETS.update({'/history':'history.html','/history.html':'history.html','/history.js':'history.js','/history-contributions.js':'history-contributions.js','/history.css':'history.css'})
 ASSETS['/machine-connections.js']='machine-connections.js'
 ASSETS.update({'/'+name: name for name in ('genome-explorer.html','genome-explorer.js','genome-explorer.css','genome-data.js')})
 ASSETS.update({'/'+name:name for name in ('codex-voice.js','codex-queue.js')})

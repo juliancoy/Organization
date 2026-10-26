@@ -215,3 +215,13 @@ CHROME_PATH=/usr/bin/google-chrome node swarm-control/server/scripts/review-hist
 ```
 
 This check also runs in the existing distributed Swarm Control browser suite.
+
+
+History includes a Computer contributions table for the filtered runs, with
+rankings by newly completed tasks, recorded process CPU time, or estimated
+CPU-slot time. Reused and skipped work contributes no new tasks or CPU time.
+Estimates multiply recorded task execution duration (falling back to total task
+duration) by allocated CPUs; they are not measured utilization. Measurement and
+timing coverage are shown beside the totals. Missing measurements stay unknown.
+Genome batches now carry their worker process CPU seconds into operational
+state for future analyses; older records cannot supply that missing measurement.

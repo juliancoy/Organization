@@ -240,7 +240,7 @@ class Run:
                 item['_on_start']=accepted
                 result=execute(host,item);write_json(self.folder/(item['id']+'.json'),result)
                 with self.lock:
-                    self.results.append(result);self.state['jobs'][item['id']].update(status='passed',elapsed_seconds=result['elapsed_seconds'],input_bytes=result['input_bytes']);self.save()
+                    self.results.append(result);self.state['jobs'][item['id']].update(status='passed',elapsed_seconds=result['elapsed_seconds'],input_bytes=result['input_bytes'],cpu_seconds=result.get('cpu_seconds'));self.save()
                 finished=True
             except CapacityWait:
                 with self.lock:self.state['jobs'][item['id']].update(status='waiting_capacity');self.save()

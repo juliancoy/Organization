@@ -124,11 +124,15 @@ class ResearchProjectionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)
             (path/'state.json').write_text(json.dumps({'sources':{'qc':{'path':'/secret/sample.vcf'}},'jobs':{
-                'private-dataset-qc-1':{'host':'worker','status':'passed','records':123,'sample':'PRIVATE'},
+                'private-dataset-qc-1':{'host':'worker','status':'passed','records':123,'sample':'PRIVATE','cpu_seconds':2.5,'elapsed_seconds':4,'reused':True},
                 'private-dataset-qc-2':{'host':'worker','status':'waiting_capacity'}}}))
             service.read_progress(path)
         self.assertEqual(service.run['progress'],{'total':2,'completed':1,'failed':0})
         self.assertEqual(service.run['hosts'][0]['status'],'running')
+        batch=service.run['hosts'][0]['jobs']['batch-0']
+        self.assertEqual(batch['cpu_seconds'],2.5)
+        self.assertEqual(batch['duration_seconds'],4)
+        self.assertTrue(batch['reused'])
         self.assertEqual(service.run['hosts'][0]['jobs']['batch-1']['phase'],'waiting_for_capacity')
         for secret in ('private-dataset','/secret','PRIVATE','records'):self.assertNotIn(secret,json.dumps(service.run))
 

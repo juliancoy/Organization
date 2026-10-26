@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import patch
-from work_history import project,snapshot
+from work_history import project,snapshot,machine_contribution
 import test_api as remote_tests
 
 
@@ -14,6 +14,24 @@ class HistoryProjectionTests(unittest.TestCase):
         self.assertEqual(row['progress'],{'total':8,'completed':3,'failed':1})
         self.assertEqual(row['machines'][0]['tasks'],['DNA batch'])
         self.assertNotIn('private',str(row))
+
+    def test_contributions_distinguish_measured_cpu_estimates_and_reused_work(self):
+        host={'jobs':{
+            'fresh':{'status':'passed','cpus':2,'duration_seconds':100,'phase_seconds':{'test':4},'cpu_seconds':5},
+            'failed':{'status':'failed','cpus':1,'duration_seconds':3},
+            'reused':{'status':'reused','cpus':8,'duration_seconds':900,'cpu_seconds':800},
+            'cached':{'status':'passed','reused':True,'cpu_seconds':700,'duration_seconds':800,'cpus':1},
+            'skipped':{'status':'passed','not_executed':True,'cpu_seconds':600},
+            'invalid':{'status':'running','cpu_seconds':float('nan')},
+        }}
+        row=machine_contribution(host)
+        self.assertEqual(row['completed_tasks'],1)
+        self.assertEqual(row['reused_tasks'],2)
+        self.assertEqual(row['cpu_seconds'],5)
+        self.assertEqual(row['estimated_cpu_slot_seconds'],11)
+        self.assertEqual(row['cpu_measured_tasks'],1)
+        self.assertEqual(row['cpu_estimated_tasks'],2)
+        self.assertIsNone(machine_contribution({'jobs':{'old':{'status':'passed'}}})['cpu_seconds'])
 
     def test_web_and_mixed_scopes_have_distinct_titles(self):
         self.assertEqual(project({'selection':{'suites':['web']}},{})['title'],'Web tests')

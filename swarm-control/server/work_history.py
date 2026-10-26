@@ -1,4 +1,5 @@
 """Owner-only workload history projected from existing coordinator records."""
+import math
 import json
 import os
 import re
@@ -18,6 +19,25 @@ def requests():
     with urlopen(request,timeout=4) as response:raw=response.read(4*1024*1024+1)
     if len(raw)>4*1024*1024:raise ValueError('History exceeded the size limit')
     return json.loads(raw)['requests']
+
+
+def machine_contribution(host):
+    jobs=list((host.get('jobs') or {}).values())
+    fresh=[job for job in jobs if job.get('status')!='reused' and not job.get('reused') and not job.get('not_executed')]
+    def number(value):return value if type(value) in (int,float) and math.isfinite(value) and value>=0 else None
+    measured=[number(job.get('cpu_seconds')) for job in fresh]
+    estimates=[]
+    for job in fresh:
+        duration=number((job.get('phase_seconds') or {}).get('test'))
+        if duration is None:duration=number(job.get('duration_seconds'))
+        cpus=number(job.get('cpus'))
+        if duration is not None and cpus is not None and cpus>0:estimates.append(duration*cpus)
+    values=[value for value in measured if value is not None]
+    return {'completed_tasks':sum(job.get('status')=='passed' for job in fresh),
+            'executed_tasks':sum(job.get('status') in ('passed','failed','timed_out','interrupted','stopped') for job in fresh),
+            'reused_tasks':sum(job.get('status')=='reused' or bool(job.get('reused')) for job in jobs),
+            'cpu_seconds':sum(values) if values else None,'cpu_measured_tasks':len(values),
+            'estimated_cpu_slot_seconds':sum(estimates) if estimates else None,'cpu_estimated_tasks':len(estimates)}
 
 
 def project(record,run):
@@ -49,7 +69,7 @@ def project(record,run):
             'submitted_at':record.get('submitted_at') or run.get('started'),
             'started_at':run.get('started') or record.get('started_at'),'finished_at':run.get('finished') or record.get('finished_at'),
             'progress':{key:progress.get(key) for key in ('total','completed','failed')},
-            'machines':[{'name':host.get('host'),'status':host.get('status'),
+            'machines':[{'name':host.get('host'),'status':host.get('status'),**machine_contribution(host),
                          'tasks':list(dict.fromkeys(str(job.get('name') or key)[:200] for key,job in (host.get('jobs') or {}).items()))[:20]}
                         for host in hosts[:64]]}
 
@@ -62,13 +82,18 @@ def snapshot():
     rows=[];seen=set()
     for record in records:
         ident=record.get('run_id');run=runs.get(ident,{})
-        if ident and re.fullmatch(r'[0-9TZ-]+-[a-f0-9]{8}',ident) and (record.get('status') in ACTIVE or not run):
+        if ident and re.fullmatch(r'[0-9TZ-]+-[a-f0-9]{8}',ident) and (record.get('status') in ACTIVE or 'hosts' not in run):
             try:run=read_coordinator('/api/distributed-tests?id='+ident).get('run') or run
             except HTTPError as error:
                 if error.code!=400 and error.code!=404:raise
         rows.append(project(record,run))
         if ident:seen.add(ident)
     for ident,run in runs.items():
-        if ident not in seen:rows.append(project({},run))
+        if ident not in seen:
+            if 'hosts' not in run and re.fullmatch(r'[0-9TZ-]+-[a-f0-9]{8}',ident):
+                try:run=read_coordinator('/api/distributed-tests?id='+ident).get('run') or run
+                except HTTPError as error:
+                    if error.code not in (400,404):raise
+            rows.append(project({},run))
     rows.sort(key=lambda row:(row['status'] in ACTIVE,row.get('submitted_at') or ''),reverse=True)
     return {'jobs':rows[:30],'limit':30}
