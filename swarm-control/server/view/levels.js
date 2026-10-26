@@ -18,6 +18,43 @@ splitControl.checked=split;
 splitControl.onchange=()=>{split=splitControl.checked;try{localStorage.setItem('lan-map.levels.split',String(split));}catch{}if(lastData)update(...lastData,false);};
 const historyMode=()=>mode==='network'&&split?'split':mode;
 function rowsFor(data,metrics,metric,now=Date.now()){return metric==='split'?['send','receive'].flatMap(direction=>deviceLevels(data,metrics,direction,now).map(row=>({...row,deviceId:row.id,id:row.id+':'+direction,direction,name:row.name+' · '+direction}))):deviceLevels(data,metrics,metric,now);}
+function legendButton(row,network=false){
+ const button=document.createElement('button');button.type='button';button.className=network?'levels-network-toggle':'levels-device';
+ button.style.setProperty('--device-color',deviceColor(row.deviceId||row.id));button.setAttribute('aria-pressed',String(!hidden.has(row.id)));
+ const amount=row.value===null?(row.unavailableLabel||'No data'):row.value.toFixed(1)+(mode==='network'?' Mb/s':'%');
+ button.setAttribute('aria-label',`${row.name}: ${amount}`);button.title=row.basis;
+ button.onmouseenter=button.onfocus=()=>{highlighted=row.id;draw();};
+ button.onmouseleave=button.onblur=()=>{if(highlighted===row.id){highlighted=null;draw();}};
+ const label=document.createElement('span');label.textContent=network?(row.direction==='send'?'↑ Send':row.direction==='receive'?'↓ Receive':'Total'):row.name;
+ const value=document.createElement('strong');value.textContent=amount;button.append(label,value);
+ button.onclick=()=>{hidden.has(row.id)?hidden.delete(row.id):hidden.add(row.id);update(...lastData,false);};
+ return button;
+}
+function networkLegend(legend){
+ const machines=new Map();
+ for(const row of latest){
+  const machine=row.machine||'Gateway-only devices';
+  if(!machines.has(machine))machines.set(machine,new Map());
+  const key=row.deviceId||row.id,interfaces=machines.get(machine);
+  if(!interfaces.has(key))interfaces.set(key,[]);interfaces.get(key).push(row);
+ }
+ for(const [machine,interfaces] of machines){
+  const group=document.createElement('section');group.className='levels-network-machine';
+  const heading=document.createElement('h4');heading.className='levels-machine-group';heading.textContent=machine.replace(/\.local$/i,'');heading.title=machine;group.append(heading);
+  for(const rows of interfaces.values()){
+   const first=rows[0],card=document.createElement('div');card.className='levels-interface';card.style.setProperty('--device-color',deviceColor(first.deviceId||first.id));
+   const name=first.interface||first.name.replace(/ · (send|receive)$/,'').replace(/ · gateway only$/,'');
+   const caption=document.createElement('div');caption.className='levels-interface-heading';
+   const label=document.createElement('span');label.textContent=/^(en|eth)/.test(name)?'Ethernet':/^(wl|wifi)/.test(name)?'Wi-Fi':/^(ww|ppp)/.test(name)?'Mobile':name;
+   caption.append(label);if(first.interface){const code=document.createElement('code');code.textContent=name;code.title=name;caption.append(code);}card.append(caption);
+   const controls=document.createElement('div');controls.className='levels-interface-directions';
+   rows.sort((a,b)=>(a.direction==='send'?0:1)-(b.direction==='send'?0:1));
+   for(const row of rows)controls.append(legendButton(row,true));card.append(controls);group.append(card);
+  }
+  legend.append(group);
+ }
+}
+
 function displayPoints(points){
  if(!smoothing)return points;
  let average=null,previous=null;
@@ -47,7 +84,7 @@ function draw(){
  const add=(tag,attrs,text)=>{const e=document.createElementNS(ns,tag);for(const [k,v]of Object.entries(attrs))e.setAttribute(k,v);if(text)e.textContent=text;svg.append(e);return e;};
  for(let i=0;i<=4;i++){const y=15+i*58;add('line',{x1:58,x2:chartWidth-10,y1:y,y2:y,stroke:'#ffffff10'});add('text',{x:48,y:y+4,'text-anchor':'end',fill:'#91a4b2','font-size':14},(peak*(4-i)/4).toFixed(peak>10?0:1));}
  for(const row of visible){const points=(history.get(row.id)||[]).filter(p=>p.time>=now-300000);let segment=[];
- const flush=()=>{if(!segment.length)return;const line=segment.map((p,i)=>(i?'L':'M')+p).join(' '),color=deviceColor(row.deviceId||row.id),active=row.id===highlighted;if(segment.length>1)add('path',{d:line+' L'+segment.at(-1).split(',')[0]+',247 L'+segment[0].split(',')[0]+',247 Z',fill:color,'fill-opacity':active ? .45 : highlighted ? .03 : .10});const path=add('path',{d:line,fill:'none',stroke:color,'stroke-width':active?3.5:2,'stroke-opacity':highlighted && !active ? .25 : 1,'stroke-dasharray':row.direction==='receive'?'6 4':'none','vector-effect':'non-scaling-stroke'});const title=document.createElementNS(ns,'title');title.textContent=row.name;path.append(title);segment=[];};
+ const flush=()=>{if(!segment.length)return;const line=segment.map((p,i)=>(i?'L':'M')+p).join(' '),color=deviceColor(row.deviceId||row.id),active=row.id===highlighted;if(segment.length>1&&(mode!=='network'||active))add('path',{d:line+' L'+segment.at(-1).split(',')[0]+',247 L'+segment[0].split(',')[0]+',247 Z',fill:color,'fill-opacity':active ? .45 : highlighted ? .03 : .10});const path=add('path',{d:line,fill:'none',stroke:color,'stroke-width':active?3.5:2,'stroke-opacity':highlighted && !active ? .25 : 1,'stroke-dasharray':row.direction==='receive'?'6 4':'none','vector-effect':'non-scaling-stroke'});const title=document.createElementNS(ns,'title');title.textContent=row.name;path.append(title);segment=[];};
  let prev=null;for(const p of points){if(p.value===null||prev!==null&&p.time-prev>10000)flush();if(p.value!==null)segment.push((58+plotWidth*(p.time-now+span)/span).toFixed(2)+','+(247-232*p.value/peak).toFixed(2));prev=p.time;}flush();
  const last=points.at(-1);if(last?.value!==null&&last&&now-last.time<10000)add('circle',{cx:58+plotWidth*(last.time-now+span)/span,cy:247-232*last.value/peak,r:3,fill:deviceColor(row.deviceId||row.id)});
  }
@@ -62,19 +99,18 @@ function update(data,metrics,record=true){
  for(const button of resources.children)button.setAttribute('aria-pressed',String(button.dataset.measure===mode));
  document.getElementById('usage-title').textContent={gpu:'GPU usage',vram:'GPU memory usage',cpu:'CPU usage',ram:'Memory usage',disk:'Disk activity',network:'Network throughput'}[mode];
  document.getElementById('levels-split-label').hidden=mode!=='network';
- root.querySelector('.levels-devices h3').firstChild.nodeValue=mode==='network'?'Machines & interfaces ':'Devices ';
+ root.querySelector('.levels-devices h3').firstChild.nodeValue=mode==='network'?'Network interfaces ':'Devices ';
  renderDockerDownloads(document.getElementById('levels-docker'),data,mode);
  lastData=[data,metrics];latest=rowsFor(data,metrics,historyMode());const now=Date.now();
  if(record)recordResourceHistory(histories,data,metrics,now,rowsFor);
- document.getElementById('levels-description').textContent=mode==='gpu'||mode==='vram'?'Live GPU counters by device. Missing GPU backends remain unmeasured. Compute validation and runtime readiness are shown under Devices & tools.':mode==='network'?'Each physical interface is listed under its machine name. Ethernet and Wi-Fi have separate histories and colors. Loopback and virtual interfaces are excluded. Yellow bars show current throughput.':mode==='disk'?'Physical disk activity over time. 100% means a disk was busy for the entire sampling interval.':mode==='cpu'?'Executing CPU time across all logical CPUs, averaged over full sampling intervals. Fleet and test-active averages include all host processes. I/O wait and stolen time are separate; hover over a device for details.':'Memory in use over time. Available memory, including reclaimable cache, is excluded.';
+ document.getElementById('levels-description').textContent=mode==='gpu'||mode==='vram'?'Live GPU counters by device. Missing GPU backends remain unmeasured. Compute validation and runtime readiness are shown under Devices & tools.':mode==='network'?'Physical interfaces grouped by computer. Each color identifies one interface; loopback and virtual interfaces are excluded.':mode==='disk'?'Physical disk activity over time. 100% means a disk was busy for the entire sampling interval.':mode==='cpu'?'Executing CPU time across all logical CPUs, averaged over full sampling intervals. Fleet and test-active averages include all host processes. I/O wait and stolen time are separate; hover over a device for details.':'Memory in use over time. Available memory, including reclaimable cache, is excluded.';
  if(smoothing){latest=latest.map(row=>({...row,value:row.value===null?null:(displayPoints(histories[historyMode()].get(row.id)||[]).at(-1)?.value??row.value)}));document.getElementById('levels-description').textContent+=' Smoothing uses a 10-second exponential average; brief peaks are reduced.';}
  latest.sort((a,b)=>mode==='network'?compareNetworkRows(a,b):(b.value??-1)-(a.value??-1)||a.name.localeCompare(b.name));
  const legend=document.getElementById('levels-legend');legend.replaceChildren();
- let previousMachine=null;
- for(const row of latest){if(mode==='network'&&(row.machine||'Gateway-only devices')!==previousMachine){const heading=document.createElement('h4');heading.className='levels-machine-group';heading.textContent=row.machine||'Gateway-only devices';legend.append(heading);previousMachine=row.machine||'Gateway-only devices';}const b=document.createElement('button');b.className='levels-device';b.style.setProperty('--device-color',deviceColor(row.deviceId||row.id));b.setAttribute('aria-pressed',String(!hidden.has(row.id)));b.title=row.basis+' · hover to highlight · click to hide or show';b.onmouseenter=b.onfocus=()=>{highlighted=row.id;draw();};b.onmouseleave=b.onblur=()=>{if(highlighted===row.id){highlighted=null;draw();}};const name=document.createElement('span');name.textContent=row.name;const value=document.createElement('strong');value.textContent=row.value===null?(row.unavailableLabel||'No data'):row.value.toFixed(1)+(mode==='network'?' Mb/s':'%');b.append(name,value);if(mode==='network'){b.classList.add('levels-device-network');const track=document.createElement('span');track.className='levels-throughput-track';track.setAttribute('aria-hidden','true');if(row.value!==null){const fill=document.createElement('span');fill.className='levels-throughput-fill';fill.dataset.value=String(row.value);track.append(fill);}b.append(track);}b.onclick=()=>{hidden.has(row.id)?hidden.delete(row.id):hidden.add(row.id);update(...lastData,false);};legend.append(b);}
- if(mode==='network'&&split)document.getElementById('levels-description').textContent+=' Each interface keeps its color: send is solid, receive dashed. Directional fallback covers gateway-visible traffic only; see each entry for scope.';
+ if(mode==='network')networkLegend(legend);else for(const row of latest)legend.append(legendButton(row));
+ if(mode==='network'&&split)document.getElementById('levels-description').textContent+=' Send is solid; receive is dashed. Toggle either direction in the sidebar.';
  const count=latest.filter(r=>r.value!==null).length;
- document.getElementById('levels-coverage').textContent=count+' / '+latest.length+(mode==='network'&&split?' directional series measured. ':' devices measured. ')+(mode==='network'?'Hosts with telemetry report physical-interface totals; other devices use gateway-visible traffic, which excludes switched traffic. These scopes differ; values are not additive.':'CPU, GPU, disk, and RAM require live host telemetry. Devices without telemetry remain listed as “No data”.')+' Host history is collected by the coordinator for five minutes, even while this page is closed.';
+ document.getElementById('levels-coverage').textContent=mode==='network'?`${count} / ${latest.length} ${split?'directions':'interfaces'} measured · Five-minute background history. Gateway-only measurements may omit switched traffic.`:count+' / '+latest.length+(mode==='network'&&split?' directional series measured. ':' devices measured. ')+(mode==='network'?'Hosts with telemetry report physical-interface totals; other devices use gateway-visible traffic, which excludes switched traffic. These scopes differ; values are not additive.':'CPU, GPU, disk, and RAM require live host telemetry. Devices without telemetry remain listed as “No data”.')+' Host history is collected by the coordinator for five minutes, even while this page is closed.';
  document.getElementById('levels-status').textContent='Updated '+new Date().toLocaleTimeString();draw();
 }
 async function refresh(){

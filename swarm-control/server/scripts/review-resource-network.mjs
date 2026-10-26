@@ -29,15 +29,21 @@ try{
  await page.getByLabel('Separate send / receive').check()
  const paths=await page.locator('#levels-plot path[fill="none"]').evaluateAll(paths=>paths.map(path=>path.getAttribute('d')))
  assert.equal(paths.length,4,'Two interfaces should each have continuous send and receive series')
- await expect(page.locator('.levels-machine-group').first()).toHaveText('worker.local')
- await expect(page.locator('#levels-legend button').first()).toContainText('worker.local · eth0')
+ await expect(page.locator('.levels-machine-group').first()).toHaveText('worker')
+ await expect(page.locator('#levels-legend button').first()).toHaveAttribute('aria-label',/worker.local · eth0/)
  await expect(page.locator('.levels-machine-group').last()).toHaveText('Gateway-only devices')
  await expect(page.locator('#levels-legend')).not.toContainText('interface unknown')
- await expect(page.locator('#levels-legend button').filter({hasText:'eth0'})).toHaveCount(2)
- await expect(page.locator('#levels-legend button').filter({hasText:'wlan0'})).toHaveCount(2)
+ await expect(page.getByRole('button',{name:/worker.local · eth0/})).toHaveCount(2)
+ await expect(page.getByRole('button',{name:/worker.local · wlan0/})).toHaveCount(2)
  assert(paths.every(path=>(path.match(/L/g)||[]).length>=12),'Restored network history should contain all background samples')
- await page.screenshot({path:join(output,'network-history.png'),fullPage:true})
+ const send=page.getByRole('button',{name:/worker.local · eth0 · send/});
+ await send.click();await expect(page.getByRole('button',{name:/worker.local · eth0 · send/})).toHaveAttribute('aria-pressed','false');
+ await page.getByRole('button',{name:/worker.local · eth0 · send/}).click();
+ const boxes=await page.locator('.levels-interface').evaluateAll(cards=>cards.map(card=>{const r=card.getBoundingClientRect();return {top:r.top,bottom:r.bottom}}));
+ assert(boxes.every((box,index)=>index===0||box.top>=boxes[index-1].bottom),'Interface cards overlap');
+ await page.locator('#device-levels').screenshot({path:join(output,'network-history.png')})
  await page.setViewportSize({width:390,height:1000});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false)
+ await page.locator('#device-levels').screenshot({path:join(output,'network-mobile.png')})
  assert.deepEqual(errors,[])
  console.log('PASS: directional network history renders continuous measured samples')
 }finally{await browser.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve))}

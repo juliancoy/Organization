@@ -131,3 +131,22 @@ main{max-width:1440px;margin:auto;padding:28px}a{color:#b7e4cf}.intro,.panel-hea
 @media(max-width:760px){.resource-tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:5px}.resource-tabs button{min-width:0;padding:10px 5px}.task-manager #levels-plot{height:280px}.task-manager #levels-legend{max-height:320px}}
 
 .levels-machine-group{grid-column:1 / -1;flex-basis:100%;font-size:14px;font-weight:650;margin:14px 0 2px;color:#dbe5ec;overflow-wrap:anywhere}
+
+/* Compact network legend: one interface card, two independent directions. */
+#levels-legend:has(.levels-network-machine){display:flex;flex-direction:column;gap:18px;align-items:stretch;max-height:480px;overflow-y:auto;overflow-x:hidden;scrollbar-gutter:stable}
+.levels-network-machine{display:flex;flex-direction:column;gap:10px;min-width:0;flex:none}
+#levels-legend .levels-network-machine .levels-machine-group{font-size:14px;line-height:1.4;letter-spacing:0;margin:0 0 2px;flex-basis:auto;color:#e4edf3;overflow-wrap:anywhere}
+.levels-interface{padding:10px;background:#0c1720;border:1px solid #ffffff12;border-radius:9px;min-width:0;flex:none}
+.levels-interface-heading{display:flex;align-items:center;gap:8px;min-width:0;margin-bottom:9px;font-size:13px;line-height:1.5;color:#dce8ef}
+.levels-interface-heading:before{content:'';width:8px;height:8px;border-radius:50%;background:var(--device-color);flex:none}
+.levels-interface-heading code{margin-left:auto;color:#9fb2c0;font:12px/1.5 ui-monospace,monospace;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.levels-interface-directions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.levels-interface-directions:has(>button:only-child){grid-template-columns:minmax(0,1fr)}
+#levels-legend .levels-network-toggle{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:3px;min-width:0;min-height:58px;height:auto;padding:8px 10px;border:1px solid #45605d;background:#192d32;border-radius:6px;text-align:left;white-space:normal;line-height:1.4;flex:none}
+#levels-legend .levels-network-toggle span{font-size:12px;color:#c0d1db;white-space:nowrap}
+#levels-legend .levels-network-toggle strong{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;color:#edf4f7;white-space:nowrap}
+#levels-legend .levels-network-toggle[aria-pressed=false]{opacity:1;background:#101c25;border-color:#293c47}
+#levels-legend .levels-network-toggle[aria-pressed=false] span,#levels-legend .levels-network-toggle[aria-pressed=false] strong{color:#8093a1}
+#levels-legend .levels-network-toggle:hover{border-color:var(--device-color);background:#20373d}
+@media(max-width:1000px) and (min-width:561px){#levels-legend:has(.levels-network-machine){display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}}
+@media(max-width:560px){#levels-legend:has(.levels-network-machine){max-height:none!important}.levels-interface-heading{font-size:14px}}
