@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 
 PROTOCOL='lifetech-agent.v1'
 CHUNK=4*1024*1024
+CACHE_LOCK=threading.Lock()
 PATH=re.compile(r'/v2/tests/[a-f0-9]{24}/(?:manifests|blobs)/sha256:[a-f0-9]{64}')
 
 
@@ -48,7 +49,12 @@ def cache_read(cache,path,offset,head):
 
 
 def cache_publish(cache,temporary,path,media,total):
+    with CACHE_LOCK:return _cache_publish(cache,temporary,path,media,total)
+
+
+def _cache_publish(cache,temporary,path,media,total):
     """Only complete digest-verified objects become peer-readable."""
+    if not isinstance(media,str) or len(media)>256 or '\r' in media or '\n' in media:raise ValueError('Invalid cached media type')
     temporary.flush();temporary.seek(0)
     if total>2*1024**3:return False
     if os.fstat(temporary.fileno()).st_size!=total:return False
