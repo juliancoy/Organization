@@ -46,3 +46,21 @@ class InterfaceMetricsTests(unittest.TestCase):
     def test_failed_capture_does_not_claim_disconnection(self):
         def failed(_):raise OSError('offline')
         self.assertEqual(InterfaceSampler(failed).sample({}),[])
+
+    def test_negotiated_rates_are_projected_without_becoming_throughput(self):
+        data=capture(1);data['interfaces']['enp1s0'].update(link_speed_mbps=100,link_duplex='full')
+        data['interfaces']['wlp2s0'].update(link_rx_mbps=72.2,link_tx_mbps=65)
+        rows=InterfaceSampler(lambda _:data).sample({})
+        self.assertEqual(rows[0]['link_speed_mbps'],100)
+        self.assertIsNone(rows[0]['network_mbps'])
+        projected=project_host({'host':'worker','network_interfaces':rows})['network_interfaces']
+        self.assertEqual(projected[0]['link_duplex'],'full')
+        self.assertEqual(projected[1]['link_rx_mbps'],72.2)
+        self.assertEqual(projected[1]['link_tx_mbps'],65)
+
+    def test_unknown_or_invalid_link_speed_does_not_become_a_capacity(self):
+        data=capture(1);data['interfaces']['enp1s0'].update(link_speed_mbps=-1,link_rx_mbps=float('inf'),link_tx_mbps=True)
+        row=InterfaceSampler(lambda _:data).sample({})[0]
+        self.assertNotIn('link_speed_mbps',row)
+        self.assertNotIn('link_rx_mbps',row)
+        self.assertNotIn('link_tx_mbps',row)

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {deviceLevels,compareNetworkRows} from '../view/levels-model.js';
+import {deviceLevels,compareNetworkRows,networkLinkLabel} from '../view/levels-model.js';
 const now=Date.now(),host={host:'laptop.local',observed_hostname:'laptop',addresses:['10.42.0.2'],status:'live',sampled_at:now/1000,network_mbps:3,ram_percent:54,disk_busy_percent:82};
 const data={devices:[{ip:'10.42.0.2',mac:'aa'},{ip:'10.42.0.3',mac:'bb'}],link_traffic:{updated:new Date(now).toISOString(),peers:{aa:{rx_mbps:2,tx_mbps:2},bb:{rx_mbps:1,tx_mbps:2}}}};
 test('SSH address identity deduplicates and passive peers cover other devices',()=>{const rows=deviceLevels(data,{hosts:[host]},'network',now);assert.equal(rows.length,1);assert.equal(rows[0].value,3);assert.equal(rows[0].name,'10.42.0.3 · gateway only');});
@@ -65,4 +65,13 @@ test('disconnected interfaces do not report zero traffic and stale state remains
  assert.equal(row.value,null);assert.equal(row.unavailableLabel,'Not connected');
  assert.equal(deviceLevels({}, {hosts:[h]},'network',now+16000)[0].unavailableLabel,'No data');
  assert.deepEqual(deviceLevels({}, {hosts:[host]},'network',now),[]);
+});
+
+test('negotiated link speed is separate from throughput and hides stale capacity',()=>{
+ assert.equal(networkLinkLabel({link_speed_mbps:100,link_duplex:'full'}),'Link: 100 Mb/s · full duplex');
+ assert.equal(networkLinkLabel({link_speed_mbps:1000}),'Link: 1 Gb/s');
+ assert.equal(networkLinkLabel({link_rx_mbps:72.2,link_tx_mbps:65}),'Wi-Fi PHY: RX 72.2 Mb/s · TX 65 Mb/s');
+ assert.equal(networkLinkLabel({link_speed_mbps:100},false),'Link speed unavailable');
+ assert.equal(networkLinkLabel({link_speed_mbps:100},true,true),'Link: Not connected');
+ assert.equal(networkLinkLabel({network_mbps:7}),'Link speed unavailable');
 });

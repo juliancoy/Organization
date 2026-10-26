@@ -149,3 +149,5 @@ main{max-width:1440px;margin:auto;padding:28px}a{color:#b7e4cf}.intro,.panel-hea
 #levels-legend .levels-network-toggle[aria-pressed=false] span,#levels-legend .levels-network-toggle[aria-pressed=false] strong{color:#8093a1}
 #levels-legend .levels-network-toggle:hover{border-color:var(--device-color);background:#20373d}
 @media(max-width:560px){#levels-legend:has(.levels-network-machine){max-height:none!important}.levels-interface-heading{font-size:14px}}
+
+.levels-interface-link{margin:0 0 9px;font-size:12px;line-height:1.5;color:#b4c7d2;overflow-wrap:anywhere}

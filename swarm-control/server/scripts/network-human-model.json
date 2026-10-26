@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "task": "Find a machine and interface, read send and receive rates, and toggle either chart series",
   "purpose": "Executable human usability heuristics; does not substitute for human judgment",
   "viewports": [
@@ -23,7 +23,8 @@
     "continuous history",
     "highest throughput first",
     "observed interfaces only",
-    "disconnected link feedback"
+    "disconnected link feedback",
+    "negotiated link rate separate from throughput"
   ],
   "humanReview": [
     "visual hierarchy",
