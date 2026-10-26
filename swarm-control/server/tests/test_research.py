@@ -6,6 +6,20 @@ from research import snapshot
 
 
 class ResearchTests(unittest.TestCase):
+    def test_depth_job_prevents_premature_completion_without_exporting_reports(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            folder = root / 'followup/run-example'
+            folder.mkdir(parents=True)
+            (folder / 'state.json').write_text('{"status":"passed","jobs":{}}')
+            (folder / 'depth-state.json').write_text('{"status":"running","source":"PRIVATE"}')
+            result = snapshot(root)['followup']
+            self.assertEqual(result['status'], 'running')
+            self.assertEqual(result['jobs']['depth_distribution']['status'], 'running')
+            self.assertNotIn('PRIVATE', json.dumps(result))
+            (folder / 'depth-state.json').write_text('{"status":"failed"}')
+            self.assertEqual(snapshot(root)['followup']['status'], 'failed')
+
     def test_followup_exports_only_named_operational_status(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

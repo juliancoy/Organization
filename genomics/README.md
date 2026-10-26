@@ -43,6 +43,16 @@ checks require unchanged ordered alleles and genotypes. Coverage includes
 reference gaps; missing block GQ remains unknown. Neither report is a validated
 clinical callable-region mask or a pathogenicity classification.
 
+`python3 -m scripts.genomics_depth --help` adds a full-reference depth distribution
+to an existing private follow-up run, using a pinned local mosdepth binary. Its
+100 kb windows include every BAM reference interval, including zero-depth contigs.
+The summary checks interval identity and threshold monotonicity before reporting
+breadth at 1x, 10x, 20x, 30x and 50x, separately for all contigs and autosomes.
+It uses MQ >=20, duplicate/supplementary exclusion and mate-overlap correction;
+mosdepth has no base-quality filter. Its output therefore has a different scope
+from the BQ >=20 samtools coverage scan. Binary version, checksum, exact command
+and BAM identity are recorded alongside the private reports.
+
 - bcftools and samtools: CPU tools for input validation, variant QC, BAM coverage.
 - Ensembl VEP: offline functional annotation; match tool and cache release as well
   as the reference assembly. The existing dataset has a release-115 GRCh38 cache

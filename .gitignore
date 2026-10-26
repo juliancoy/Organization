@@ -103,3 +103,5 @@
 !/genomics/
 /genomics/*
 !/genomics/README.md
+!/scripts/genomics_depth.py
+!/tests/test_genomics_depth.py

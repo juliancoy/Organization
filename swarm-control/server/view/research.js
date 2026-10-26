@@ -30,6 +30,7 @@ async function refresh(){
   const data=await response.json();comparisons(data.public_downloads);const run=data.run;
   if(data.followup){
    const names={bam_coverage:'BAM coverage',gvcf_span_audit:'gVCF span audit',fresh_offline_vep:'Fresh offline VEP'};
+   if(data.followup.jobs.depth_distribution)names.depth_distribution='Whole-genome depth distribution';
    stages[4].status=data.followup.status==='passed'?'Completed':data.followup.status==='failed'?'Needs review':'In progress';
    stages[4].evidence=Object.entries(names).map(([key,label])=>`${label}: ${data.followup.jobs[key]?.status||'unknown'}`).join(' · ')+'. Reports remain private. Coverage and reference-confidence summaries do not establish clinical callability.';
    list.children[4].querySelector('small').textContent=stages[4].status;

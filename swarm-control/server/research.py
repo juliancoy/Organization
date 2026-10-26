@@ -19,6 +19,13 @@ def snapshot(root=ROOT):
                          for name in ('bam_coverage', 'gvcf_span_audit', 'fresh_offline_vep')}}
             for job in result['followup']['jobs'].values():
                 if job['status'] not in allowed:job['status'] = 'unknown'
+            depth_path = followups[0].with_name('depth-state.json')
+            if depth_path.exists():
+                depth = json.loads(depth_path.read_text()).get('status')
+                depth = depth if depth in allowed else 'unknown'
+                result['followup']['jobs']['depth_distribution'] = {'status': depth}
+                if depth == 'failed':result['followup']['status'] = 'failed'
+                elif depth != 'passed' and result['followup']['status'] == 'passed':result['followup']['status'] = 'running'
         except (OSError, ValueError, TypeError, AttributeError):
             result['followup'] = None
     runs = sorted((root / 'distributed').glob('run-*/state.json'), key=lambda p: p.stat().st_mtime, reverse=True)
