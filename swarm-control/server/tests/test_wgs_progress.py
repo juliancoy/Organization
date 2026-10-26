@@ -16,3 +16,13 @@ def test_absent_or_broken_state_is_unavailable(tmp_path):
     assert not snapshot(tmp_path)['available']
     folder=tmp_path/'downloads';folder.mkdir();(folder/'state.json').write_text('partial')
     assert not snapshot(tmp_path)['available']
+
+
+def test_gpu_qc_exposes_only_aggregate_progress(tmp_path):
+    (tmp_path/'gpu-qc').mkdir();(tmp_path/'qc').mkdir()
+    (tmp_path/'gpu-qc/service.json').write_text(json.dumps({'status':'running','host':'peer','batches':4,'bases':200,'socket':'/secret/socket','raw_sequence':'private'}))
+    (tmp_path/'qc/state.json').write_text(json.dumps({'jobs':{'a':{'gpu_batches':3,'gpu_bases':150,'cpu_bases':20,'quality_histogram':[1]*94}}}))
+    value=snapshot(tmp_path)
+    assert value['gpu_qc']['batches']==4
+    assert value['qc']['gpu_batches']==3 and value['qc']['gpu_bases']==150 and value['qc']['cpu_bases']==20
+    assert 'secret' not in str(value) and 'private' not in str(value) and 'quality_histogram' not in str(value)

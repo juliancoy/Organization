@@ -60,7 +60,10 @@ def snapshot(root=ROOT):
     if not isinstance(mapping_jobs,dict):mapping_jobs={}
     mapping_rows=[row for row in mapping_jobs.values() if isinstance(row,dict)]
     driver=read(root/'recall/full/driver.json')
+    gpu_service=read(root/'gpu-qc/service.json')
     return {'available':bool(downloads),'sampled_at':time.time(),'download_status':downloads.get('status','not_started'),'updated':downloads.get('updated'),
             'samples':samples,'storage':storage,'index':index_progress,
-            'qc':{'status':qc.get('status','queued'),'files':len(qc_rows),'reads_processed':sum(number(row.get('reads',row.get('reads_processed'))) for row in qc_rows),'bases_processed':sum(number(row.get('bases',row.get('bases_processed'))) for row in qc_rows)},
+            'qc':{'status':qc.get('status','queued'),'files':len(qc_rows),'reads_processed':sum(number(row.get('reads',row.get('reads_processed'))) for row in qc_rows),'bases_processed':sum(number(row.get('bases',row.get('bases_processed'))) for row in qc_rows),
+                  'gpu_batches':sum(number(row.get('gpu_batches')) for row in qc_rows),'gpu_bases':sum(number(row.get('gpu_bases')) for row in qc_rows),'cpu_bases':sum(number(row.get('cpu_bases')) for row in qc_rows)},
+            'gpu_qc':{'status':gpu_service.get('status','not_started'),'host':gpu_service.get('host'),'updated':gpu_service.get('updated'),'batches':number(gpu_service.get('batches')),'bases':number(gpu_service.get('bases'))},
             'alignment':{'status':driver.get('phase','queued'),'files':len(mapping_rows),'completed':sum(row.get('status',row.get('phase')) in ('passed','complete','verified') for row in mapping_rows)}}
