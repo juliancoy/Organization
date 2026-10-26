@@ -150,3 +150,6 @@
 !/scripts/gpu-tools/
 !/scripts/gpu-tools/**
 !/tests/test_gpu_qc_benchmark.py
+!/scripts/gpu_qc_service.py
+!/tests/test_gpu_qc_service.py
+/scripts/gpu-tools/__pycache__/

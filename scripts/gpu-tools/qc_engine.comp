@@ -1,0 +1,7 @@
+#version 450
+layout(local_size_x=64) in;
+layout(set=0,binding=0,std430) buffer Data {uint words[];};
+layout(push_constant) uniform Params {uint n;};
+void main(){uint id=gl_GlobalInvocationID.x;uint threads=(n+1023u)/1024u;if(id>=threads)return;uint nw=(n+3u)/4u;uint counts[104];for(uint j=0;j<104u;j++)counts[j]=0u;
+for(uint wi=id;wi<nw;wi+=threads){uint seq=words[wi],qual=words[nw+wi];for(uint k=0;k<4u;k++){if(wi*4u+k>=n)break;uint b=((seq>>(k*8u))&255u)&223u;uint bi=b==65u?0u:b==67u?1u:b==71u?2u:b==84u?3u:b==78u?4u:5u;counts[bi]++;uint q=(qual>>(k*8u))&255u;if(q<33u || q>126u){counts[103]++;continue;}q-=33u;counts[6u+q]++;counts[100]+=q;counts[101]+=uint(q>=20u);counts[102]+=uint(q>=30u);}}
+uint outpos=nw*2u+id*104u;for(uint j=0;j<104u;j++)words[outpos+j]=counts[j];}
