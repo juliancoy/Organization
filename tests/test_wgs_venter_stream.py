@@ -57,3 +57,19 @@ class VenterStreamTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             validate_generation({'generation':'fresh','phase':'invalid'},{'run':{'receipt':{'generation':'fresh'}}})
         validate_generation({'generation':'fresh','phase':'verified'},{'run':{'receipt':{'generation':'fresh'}}})
+
+
+def test_download_source_follows_reassigned_owner_and_cache(tmp_path):
+    from scripts.wgs_venter_stream import download_source
+    from scripts.wgs_swarm_download import file_id
+    item={'url':'https://archive/r1'}
+    hosts={'old':{'host':'old','cache':'/old'},'new':{'host':'new','cache':'/default'}}
+    (tmp_path/'downloads').mkdir()
+    state=tmp_path/'downloads/state.json'
+    state.write_text(json.dumps({'jobs':{file_id(item):{'host':'old'}},'workers':[]}))
+    assert download_source(tmp_path,hosts,item)['cache']=='/old'
+    state.write_text(json.dumps({'jobs':{file_id(item):{'host':'new'}},'workers':[{'host':'new','cache':'/live'}]}))
+    assert download_source(tmp_path,hosts,item)=={'host':'new','cache':'/live'}
+    state.write_text(json.dumps({'jobs':{file_id(item):{'host':'untrusted'}}}))
+    import pytest
+    with pytest.raises(RuntimeError,match='not enrolled'):download_source(tmp_path,hosts,item)

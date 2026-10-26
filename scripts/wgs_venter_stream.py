@@ -20,9 +20,19 @@ from scripts.wgs_finalize import install,remote_json,capacity
 from scripts.wgs_recall import alignment
 
 
+def download_source(root, hosts, item):
+    """Resolve the current enrolled download owner and its current cache root."""
+    state=json.loads((Path(root)/'downloads/state.json').read_text())
+    row=state.get('jobs',{}).get(file_id(item),{})
+    name=row.get('host')
+    if name not in hosts:raise RuntimeError('Download owner is absent or not enrolled')
+    worker=next((w for w in state.get('workers',[]) if w['host']==name),{})
+    return {**hosts[name],'cache':worker.get('cache',hosts[name]['cache'])}
+
+
 def mirror(source,target,item,folder,stop):
     """Continuously mirror only committed chunks; use verified final fallback."""
-    ident=file_id(item);origin=str(Path(source['cache'])/ident);destination=folder+'/'+ident
+    ident=file_id(item);destination=folder+'/'+ident
     subprocess.run(distributed.shell_command(target,['mkdir','-p','--',destination+'/chunks']),check=True)
     listing="""import json,pathlib,sys
 p=pathlib.Path(sys.argv[1]);r=p/'receipt.json';out={'chunks':[]}
@@ -37,7 +47,9 @@ print(json.dumps(out))
     try:copied=set(json.loads(subprocess.check_output(distributed.shell_command(target,['python3','-c',listing,destination]),text=True))['chunks'])
     except Exception:copied=set()
     while not stop.is_set():
-        result=subprocess.run(distributed.shell_command(source,['python3','-c',listing,origin]),capture_output=True,text=True,check=True)
+        current_source=source() if callable(source) else source
+        origin=str(Path(current_source['cache'])/ident)
+        result=subprocess.run(distributed.shell_command(current_source,['python3','-c',listing,origin]),capture_output=True,text=True,check=True)
         current=json.loads(result.stdout)
         for index in sorted(set(current['chunks'])-copied):
             for suffix in ('.bin','.json'):
@@ -45,7 +57,7 @@ print(json.dumps(out))
                 # copied second, so OrderedChunks never observes half a chunk.
                 path=origin+'/chunks/'+str(index)+suffix
                 from scripts.wgs_finalize import attest
-                receipt=attest(source,path);incoming=copy_receipt(source,target,receipt)
+                receipt=attest(current_source,path);incoming=copy_receipt(current_source,target,receipt)
                 move="import os,pathlib,sys;a,b=map(pathlib.Path,sys.argv[1:]);b.parent.mkdir(mode=0o700,parents=True,exist_ok=True);os.replace(a,b)"
                 subprocess.run(distributed.shell_command(target,['python3','-c',move,incoming['path'],destination+'/chunks/'+str(index)+suffix]),check=True)
             copied.add(index)
@@ -55,7 +67,7 @@ print(json.dumps(out))
             # archive-verified gzip; in-flight readers preserve their offset.
             total=(item['bytes']+128*1024*1024-1)//(128*1024*1024)
             if len(copied)<total:
-                transfer={**receipt,'path':source_file,'host':source['host']};local=copy_receipt(source,target,transfer)
+                transfer={**receipt,'path':source_file,'host':current_source['host']};local=copy_receipt(current_source,target,transfer)
                 move="import os,pathlib,sys;os.replace(sys.argv[1],sys.argv[2])"
                 subprocess.run(distributed.shell_command(target,['python3','-c',move,local['path'],destination+'/'+item['filename']]),check=True)
             else:
@@ -104,7 +116,7 @@ def map_pair(host,owner,receipt,reference,image,folder):
 def main(root):
     root=Path(root);folder=root/'recall/venter';folder.mkdir(mode=0o700,parents=True,exist_ok=True);full=folder/'full';full.mkdir(mode=0o700,exist_ok=True)
     hosts=json.loads((root/'recall-hosts.json').read_text());by_name={h['host']:h for h in hosts}
-    owner=by_name['julian-latitude.local'];source=by_name['julian-inspiron-3793.local']
+    owner=by_name['julian-latitude.local']
     items=sorted([i for i in json.loads((root/'catalog.json').read_text())['files'] if i['sample']=='Venter'],key=lambda i:i['filename'])
     if len(items)!=2:raise RuntimeError('Exactly two Venter mate sources required')
     generation=uuid.uuid4().hex[:12]
@@ -118,7 +130,7 @@ def main(root):
     mirror_base=str(Path(owner['cache']).parent/'wgs-venter-mirror');stop=threading.Event()
     def mirror_forever():
         while not stop.is_set():
-            try:mirror(source,owner,items[0],mirror_base,stop);return
+            try:mirror(lambda:download_source(root,by_name,items[0]),owner,items[0],mirror_base,stop);return
             except Exception as error:
                 atomic_json(folder/'mirror.json',{'phase':'retrying','error':str(error)[:500],'updated':stamp()});stop.wait(2)
     thread=threading.Thread(target=mirror_forever,daemon=True);thread.start()
