@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {deviceLevels,compareNetworkRows} from '../view/levels-model.js';
 const now=Date.now(),host={host:'laptop.local',observed_hostname:'laptop',addresses:['10.42.0.2'],status:'live',sampled_at:now/1000,network_mbps:3,ram_percent:54,disk_busy_percent:82};
 const data={devices:[{ip:'10.42.0.2',mac:'aa'},{ip:'10.42.0.3',mac:'bb'}],link_traffic:{updated:new Date(now).toISOString(),peers:{aa:{rx_mbps:2,tx_mbps:2},bb:{rx_mbps:1,tx_mbps:2}}}};
-test('SSH address identity deduplicates and passive peers cover other devices',()=>{const rows=deviceLevels(data,{hosts:[host]},'network',now);assert.equal(rows.length,2);assert.equal(rows[0].value,3);assert.equal(rows[1].value,3);});
+test('SSH address identity deduplicates and passive peers cover other devices',()=>{const rows=deviceLevels(data,{hosts:[host]},'network',now);assert.equal(rows.length,1);assert.equal(rows[0].value,3);assert.equal(rows[0].name,'10.42.0.3 · gateway only');});
 test('unmeasured RAM is unknown and stale hosts lose measurements',()=>{assert.deepEqual(deviceLevels(data,{hosts:[host]},'ram',now).map(r=>r.value),[54,null]);assert.equal(deviceLevels(data,{hosts:[host]},'disk',now+16000)[0].value,null);});
 test('unnamed device cannot match unavailable host with no observed hostname',()=>{const rows=deviceLevels(data,{hosts:[{host:'other.local',status:'unavailable'}]},'ram',now);assert.equal(rows.length,3);});
 
@@ -40,13 +40,13 @@ test('each machine exposes distinct interface and directional series without a d
 });
 
 
-test('named computer interfaces precede IP-only gateway devices in the sidebar',()=>{
+test('network rows sort by highest throughput including gateway observations',()=>{
  const stamp=Date.now();
  const host={host:'worker.local',network_interfaces:[{name:'eth0',ifindex:2,status:'live',sampled_at:stamp/1000,network_mbps:1}]};
  const data={devices:[{ip:'10.42.0.3',mac:'aa'}],link_traffic:{updated:new Date(stamp).toISOString(),peers:{aa:{rx_mbps:50,tx_mbps:50}}}};
  const rows=deviceLevels(data,{hosts:[host]},'network',stamp).sort(compareNetworkRows);
- assert.equal(rows[0].name,'worker.local · eth0');
- assert.equal(rows[1].name,'10.42.0.3 · gateway only');
+ assert.equal(rows[0].name,'10.42.0.3 · gateway only');
+ assert.equal(rows[1].name,'worker.local · eth0');
  assert(!rows.some(row=>row.name.includes('interface unknown')));
 });
 
@@ -57,4 +57,12 @@ test('cached mDNS labels disclose their source without changing measured network
  const row=deviceLevels(data,{hosts:[]},'network',stamp)[0];
  assert.equal(row.name,'device.local · gateway only');
  assert.equal(row.value,5);assert.match(row.basis,/last mDNS observation/);
+});
+
+test('disconnected interfaces do not report zero traffic and stale state remains unknown',()=>{
+ const h={...host,network_interfaces:[{name:'eth0',ifindex:2,state:'down',status:'live',sampled_at:now/1000,network_mbps:0}]};
+ const row=deviceLevels({}, {hosts:[h]},'network',now)[0];
+ assert.equal(row.value,null);assert.equal(row.unavailableLabel,'Not connected');
+ assert.equal(deviceLevels({}, {hosts:[h]},'network',now+16000)[0].unavailableLabel,'No data');
+ assert.deepEqual(deviceLevels({}, {hosts:[host]},'network',now),[]);
 });

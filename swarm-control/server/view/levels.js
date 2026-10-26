@@ -38,10 +38,12 @@ function networkLegend(legend){
   const key=row.deviceId||row.id,interfaces=machines.get(machine);
   if(!interfaces.has(key))interfaces.set(key,[]);interfaces.get(key).push(row);
  }
- for(const [machine,interfaces] of machines){
+ const rate=rows=>rows[0].throughput??(rows.some(row=>row.value!==null)?rows.reduce((sum,row)=>sum+(row.value??0),0):-1);
+ const total=interfaces=>Array.from(interfaces.values()).reduce((sum,rows)=>sum+Math.max(0,rate(rows)),0);
+ for(const [machine,interfaces] of [...machines].sort((a,b)=>total(b[1])-total(a[1])||a[0].localeCompare(b[0]))){
   const group=document.createElement('section');group.className='levels-network-machine';
   const heading=document.createElement('h4');heading.className='levels-machine-group';heading.textContent=machine.replace(/\.local$/i,'');heading.title=machine;group.append(heading);
-  for(const rows of interfaces.values()){
+  for(const rows of [...interfaces.values()].sort((a,b)=>rate(b)-rate(a)||a[0].name.localeCompare(b[0].name))){
    const first=rows[0],card=document.createElement('div');card.className='levels-interface';card.style.setProperty('--device-color',deviceColor(first.deviceId||first.id));
    const name=first.interface||first.name.replace(/ · (send|receive)$/,'').replace(/ · gateway only$/,'');
    const caption=document.createElement('div');caption.className='levels-interface-heading';
