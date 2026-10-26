@@ -55,24 +55,60 @@ class ResourceLease:
     def capacity(self):
         if self.limits is not None:return self.limits
         memory={line.split(':',1)[0]:int(line.split()[1])//1024 for line in Path('/proc/meminfo').read_text().splitlines() if len(line.split())>=2 and line.split()[1].isdigit()}
-        limits={'cpus':max(1,len(os.sched_getaffinity(0))), 'memory_mb':max(0,memory['MemTotal']-1024),
-                'available_mb':max(0,memory['MemAvailable']-1024)}
+        limits={'cpus':max(1,len(os.sched_getaffinity(0))), 'memory_mb':max(0,memory['MemTotal']),
+                'available_mb':max(0,memory['MemAvailable'])}
         # Respect every finite cgroup ancestor, including the user/service slice
         # shared by rootless Docker. Reserve room for Docker and agent threads.
         root=Path('/sys/fs/cgroup')
         group=next((line.split(':',2)[2] for line in Path('/proc/self/cgroup').read_text().splitlines() if line.startswith('0::')), '/')
         current=root/group.lstrip('/')
         bounds=[]
+        memory_bounds=[]
+        ancestors=[current,*current.parents]
+        container_scope=next((parent for parent in ancestors if re.fullmatch(r'(?:docker-|libpod-)?[a-f0-9]{64}(?:\.scope)?',parent.name)),None)
+        # Docker batches are sibling containers, not descendants of this agent.
+        # A private cgroup namespace may hide shared ancestors completely.
+        private_namespace=container_scope is None and Path('/.dockerenv').exists()
+        limits['memory_scope']='host available RAM and visible shared worker cgroup ancestors'
+        if private_namespace:limits['memory_scope']='host available RAM; agent-private cgroup excluded; shared cgroup ancestors not visible'
         for parent in [current,*current.parents]:
             if parent!=root and root not in parent.parents:continue
+            shared_memory_scope=not private_namespace and (container_scope is None or parent in container_scope.parents)
+            if shared_memory_scope:
+                try:
+                    maximum=(parent/'memory.max').read_text().strip()
+                    if maximum!='max':memory_bounds.append((int(maximum)//1024**2,int((parent/'memory.current').read_text())//1024**2))
+                except FileNotFoundError:pass
             try:
                 maximum=(parent/'pids.max').read_text().strip()
                 if maximum!='max':bounds.append((int(maximum),int((parent/'pids.current').read_text())))
             except FileNotFoundError:continue
+        if memory_bounds:
+            limits['memory_mb']=min(limits['memory_mb'],*(maximum for maximum,_ in memory_bounds))
+            limits['available_mb']=max(0,min(limits['available_mb'],*(maximum-used for maximum,used in memory_bounds)))
         if bounds:
             limits['pids']=max(0,min(maximum-min(256,max(32,maximum//4)) for maximum,_ in bounds))
             limits['available_pids']=max(0,min(maximum-used-min(256,max(32,maximum//4)) for maximum,used in bounds))
         return limits
+
+    @classmethod
+    def pool_capacity(cls, directory=None, group=None):
+        """Read admission headroom under the pool lock, without making a reservation."""
+        probe=cls.__new__(cls)
+        probe.limits=None
+        probe.directory=Path(directory or os.getenv('SWARM_RESOURCE_DIR',str(Path.home()/'.local/state/swarm-control/resources')))
+        probe.directory.mkdir(parents=True,exist_ok=True,mode=0o700)
+        probe.path=probe.directory/'.capacity'
+        with probe.guard():
+            limits=probe.capacity();rows=probe.rows();active=[row for row in rows if row['active']]
+            reserved=sum(row['memory_mb'] for row in active)
+            # MemAvailable already excludes background pressure. Conservatively
+            # subtract every outstanding reservation as well; this double-counts
+            # RAM already consumed by active workers but never pledges it twice.
+            available=max(0,min(limits['memory_mb'],limits.get('available_mb',limits['memory_mb']))-reserved)
+            return {**limits,'available_mb':available,'reserved_mb':reserved,
+                    'active_jobs':len(active),'group_active_jobs':sum(row['group']==group for row in active),
+                    'waiting_jobs':sum(not row['active'] for row in rows)}
 
     def rows(self):
         rows=[]
@@ -97,7 +133,7 @@ class ResourceLease:
             limits=self.capacity();rows=self.rows();active=[r for r in rows if r['active']]
             keys=('cpus','memory_mb')+(('pids',) if 'pids' in limits else ())
             free={k:limits[k]-sum(r.get(k,512) for r in active) for k in keys}
-            free['memory_mb']=min(free['memory_mb'],limits.get('available_mb',limits['memory_mb']))
+            free['memory_mb']=max(0,min(limits['memory_mb'],limits.get('available_mb',limits['memory_mb']))-sum(r['memory_mb'] for r in active))
             if 'pids' in free:free['pids']=min(free['pids'],limits.get('available_pids',limits['pids']))
             if any(self.row[k]>limits[k] for k in keys):raise ValueError('Task exceeds node resource capacity')
             waiting=sorted((r for r in rows if not r['active']),key=lambda r:(r['created'],r['id']))
@@ -563,6 +599,9 @@ class Agent:
             self.dispatch('resource.release',{'id':ident})
 
     def dispatch(self, op, args):
+        if op=='resource.capacity':
+            if set(args)-{'group'}:raise ValueError('Invalid capacity request')
+            return ResourceLease.pool_capacity(directory=os.getenv('SWARM_RESOURCE_DIR',str(self.root/'.resources')),group=args.get('group'))
         if op in ('resource.acquire','resource.release'):
             with self.lock:
                 leases=getattr(self,'resource_leases',None)
@@ -574,7 +613,7 @@ class Agent:
                     if previous:previous['timer'].cancel();previous['lease'].close()
                     self.busy()
                     return {'released':True}
-                if set(args)!={'id','group','cpus','memory_mb','container'} or type(args['cpus']) is not int or args['cpus']!=1 or type(args['memory_mb']) is not int or args['memory_mb'] not in (512,1024,2048) or not re.fullmatch(r'genomics-[a-f0-9]{32}',args['container']):
+                if set(args)!={'id','group','cpus','memory_mb','container'} or type(args['cpus']) is not int or args['cpus']!=1 or type(args['memory_mb']) is not int or args['memory_mb']<1 or not re.fullmatch(r'genomics-[a-f0-9]{32}',args['container']):
                     raise ValueError('Expected a bounded private batch resource request')
                 policy=worker_policy(self.config)
                 if not policy['accepting_jobs']:raise RuntimeError(policy['reason'])
@@ -588,7 +627,9 @@ class Agent:
                 else:
                     lease=previous['lease']
                     if any(lease.row[k]!=args[k] for k in ('group','cpus','memory_mb','container')):raise ValueError('Resource request ID already used')
-                acquired=lease.try_acquire()
+                try:acquired=lease.try_acquire()
+                except ValueError:
+                    leases.pop(ident)['timer'].cancel();lease.close();self.busy();raise
                 if acquired and not leases[ident].get('started'):
                     leases[ident]['timer'].cancel()
                     timer=threading.Timer(240,lambda:self.expire_resource(ident));timer.daemon=True

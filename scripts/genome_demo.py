@@ -9,6 +9,11 @@ import hashlib
 import json
 from pathlib import Path
 
+try:
+    from scripts.genome_composition import composition
+except ImportError:
+    from genome_composition import composition
+
 CHROMS=[str(n) for n in range(1,23)]+['X','Y','MT']
 SOURCE='https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/rmsk.txt.gz'
 
@@ -58,6 +63,7 @@ def build(root,rmsk):
         chromosomes,bins,overlaps=distribution(root/vcf,regions if assembly=='GRCh38' else {})
         if sum(chromosomes.values())!=qc['records']:raise ValueError('Chromosome count mismatch')
         sample={'name':name,'assembly':assembly,'records':qc['records'],'variant_types':qc['variant_types'],
+                'genome_composition':composition(root/vcf),
                 'genotypes':qc['genotypes'],'depth_bins':qc['depth_bins'],'quality_bins':qc['quality_bins'],
                 'pass':qc['filters'].get('PASS',0),'transitions':qc['transitions'],'transversions':qc['transversions'],
                 'consequences':annotation['consequences'],'annotated':annotation['records_with_csq'],
@@ -68,8 +74,14 @@ def build(root,rmsk):
             'reference_bp':{c:sum(b-a for a,b in rows) for c,rows in regions.items()},'family_annotation_bp':families}}
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--root',type=Path,default=Path('/mnt/PILEDRIVE/genomics-workbench'));parser.add_argument('--output',type=Path,required=True);args=parser.parse_args()
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--root',type=Path,default=Path('/mnt/PILEDRIVE/genomics-workbench'));parser.add_argument('--output',type=Path,required=True);parser.add_argument('--reference-run',type=Path,help='Completed private swarm reference-match run');args=parser.parse_args()
     data=build(args.root,args.root/'demo/rmsk.txt.gz')
+    if args.reference_run:
+        try:
+            from scripts.genome_reference_snapshot import apply_reference_matches,load_summaries
+        except ImportError:
+            from genome_reference_snapshot import apply_reference_matches,load_summaries
+        data=apply_reference_matches(data,load_summaries(args.reference_run))
     args.output.write_text('export default '+json.dumps(data,separators=(',',':'))+';\n')
     print('Aggregate snapshot written:',args.output)
 if __name__=='__main__':main()

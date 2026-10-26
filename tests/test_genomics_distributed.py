@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch, Mock
 from scripts.genomics_compute import compute
-from scripts.genomics_distributed import batches,eligible,execute_reserved,merge,Run
+from scripts.genomics_distributed import batches,eligible,execute_reserved,merge,Run,memory_allocation,execute
 
 HEADER='##fileformat=VCFv4.2\n##INFO=<ID=CSQ,Number=.,Type=String,Description="Format: Allele|Consequence">\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSYNTHETIC\n'
 ROWS=['1\t1\t.\tA\tG\t30\tPASS\tCSQ=G|missense_variant,G|missense_variant&splice_region_variant\tGT:DP:GQ\t0/1:25:40\n',
@@ -57,16 +57,37 @@ class DistributedGenomicsTests(unittest.TestCase):
             source=Path(d)/'x.vcf.gz';source.write_bytes(payload());job=next(batches(source,'qc',1))
             reply={**compute(job['payload'],'qc'),'sha256':job['sha256']}
             with patch('scripts.genomics_distributed.subprocess.Popen',return_value=Mock(returncode=0,poll=Mock(return_value=0),communicate=Mock(return_value=(json.dumps(reply).encode(),b'')))) as run:
-                execute_reserved({'host':'node.local','local':False,'image':'sha256:test','ssh':['ssh','-o','StrictHostKeyChecking=yes','user@node.local']},job,'genomics-fixture')
+                execute_reserved({'host':'node.local','local':False,'image':'sha256:test','ssh':['ssh','-o','StrictHostKeyChecking=yes','user@node.local']},job,'genomics-fixture',1536)
             command=run.call_args.args[0]
             self.assertLess(command.index('ServerAliveInterval=15'),command.index('user@node.local'))
             self.assertNotIn('shell',run.call_args.kwargs)
+            self.assertIn('--memory 1536m --memory-swap 1536m',command[-1])
             self.assertEqual(run.return_value.communicate.call_args.args[0],job['payload'])
 
     def test_result_substitution_rejected(self):
         from types import SimpleNamespace
         with patch('scripts.genomics_distributed.subprocess.Popen',return_value=Mock(returncode=0,poll=Mock(return_value=0),communicate=Mock(return_value=(b'{"sha256":"wrong"}',b'')))):
-            with self.assertRaisesRegex(RuntimeError,'does not match'):execute_reserved({'host':'local','local':True,'image':'sha256:test'},{'kind':'qc','records':1,'payload':payload(),'sha256':'expected'},'genomics-fixture')
+            with self.assertRaisesRegex(RuntimeError,'does not match'):execute_reserved({'host':'local','local':True,'image':'sha256:test'},{'kind':'qc','records':1,'payload':payload(),'sha256':'expected'},'genomics-fixture',1536)
+
+    def test_memory_budget_tracks_live_capacity_remaining_concurrency_and_queue(self):
+        self.assertEqual(memory_allocation({'available_mb':24000,'group_active_jobs':0,'waiting_jobs':0},4),6000)
+        self.assertEqual(memory_allocation({'available_mb':18000,'group_active_jobs':1,'waiting_jobs':0},4),6000)
+        self.assertEqual(memory_allocation({'available_mb':18000,'group_active_jobs':1,'waiting_jobs':3},4),3000)
+        self.assertEqual(memory_allocation({'available_mb':751,'group_active_jobs':0,'waiting_jobs':0},1),751)
+        from scripts.genomics_distributed import CapacityWait
+        with self.assertRaises(CapacityWait):memory_allocation({'available_mb':0},4)
+
+    def test_worker_enforcement_matches_the_actual_capacity_reservation(self):
+        from types import SimpleNamespace
+        import sys
+        client=Mock()
+        client.call.side_effect=[{'available_mb':20000,'group_active_jobs':0,'waiting_jobs':1},{'acquired':True},{'released':True}]
+        host={'_concurrency':3}
+        with patch.dict(sys.modules,{'agent_client':SimpleNamespace(AgentClient=Mock(return_value=client))}),patch('scripts.genomics_distributed.execute_reserved',return_value={'passed':True}) as reserved:
+            self.assertEqual(execute(host,{}),{'passed':True})
+        self.assertEqual(client.call.call_args_list[1].args[1]['memory_mb'],5000)
+        self.assertEqual(reserved.call_args.args[-1],5000)
+        self.assertEqual(client.call.call_args_list[-1].args[0],'resource.release')
 
     def test_reference_blocks_cannot_be_counted_as_alternate_variants(self):
         with self.assertRaisesRegex(ValueError,'prepared'):compute(payload([ROWS[0].replace('\tG\t','\t<NON_REF>\t')]),'qc')

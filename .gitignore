@@ -105,3 +105,15 @@
 !/genomics/README.md
 !/scripts/genomics_depth.py
 !/tests/test_genomics_depth.py
+
+!/scripts/genome_composition.py
+!/tests/test_genome_composition.py
+
+!/scripts/genome_reference_compute.py
+!/scripts/genome_reference_giab.py
+!/scripts/genome_reference_swarm.py
+!/scripts/genome_reference_snapshot.py
+!/tests/test_genome_reference.py
+!/tests/test_genome_reference_giab.py
+!/tests/test_genome_reference_swarm.py
+!/tests/test_genome_reference_snapshot.py

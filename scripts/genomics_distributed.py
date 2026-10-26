@@ -39,7 +39,7 @@ def shell_command(host,command):
 def has_capacity(metrics):
     cpu=metrics.get('percent');total=metrics.get('ram_total_bytes');used=metrics.get('ram_used_bytes')
     return (isinstance(cpu,(int,float)) and math.isfinite(cpu) and 0<=cpu<=100 and
-            isinstance(total,(int,float)) and isinstance(used,(int,float)) and total-used>=1536*1024*1024)
+            isinstance(total,(int,float)) and isinstance(used,(int,float)) and 0<=used<total)
 
 
 def eligible(status):
@@ -103,6 +103,19 @@ def batches(path,kind,limit=50000):
         if body:number+=1;yield package()
 
 
+def memory_allocation(capacity, concurrency):
+    """Divide currently schedulable RAM among remaining workers and queued jobs."""
+    available=capacity.get('available_mb')
+    if type(available) is not int or available<1:raise CapacityWait('No schedulable worker memory')
+    if type(concurrency) is not int or concurrency<1:raise ValueError('Invalid worker concurrency')
+    active=capacity.get('group_active_jobs',0);waiting=capacity.get('waiting_jobs',0)
+    if type(active) is not int or type(waiting) is not int or min(active,waiting)<0:raise ValueError('Invalid pool capacity')
+    shares=max(1,concurrency-active)+waiting
+    allocation=available//shares
+    if allocation<1:raise CapacityWait('Waiting for shared worker memory')
+    return allocation
+
+
 def execute(host,batch):
     sys.path.insert(0,str(ROOT/'swarm-control/server'))
     from agent_client import AgentClient
@@ -110,19 +123,22 @@ def execute(host,batch):
     client=AgentClient(host);lease_id=uuid.uuid4().hex
     deadline=time.monotonic()+120
     try:
-        while not client.call('resource.acquire',{'id':lease_id,'group':GROUP,'cpus':1,'memory_mb':512,'container':name})['acquired']:
+        capacity=client.call('resource.capacity',{'group':GROUP})
+        memory_mb=memory_allocation(capacity,host.get('_concurrency',1))
+        while not client.call('resource.acquire',{'id':lease_id,'group':GROUP,'cpus':1,'memory_mb':memory_mb,'container':name})['acquired']:
             if STOP.wait(.5):raise InterruptedError('Resource wait cancelled')
             if time.monotonic()>deadline:raise CapacityWait('Waiting for shared worker resources')
         if batch.get('_on_start'):batch['_on_start']()
-        return execute_reserved(host,batch,name)
+        return execute_reserved(host,batch,name,memory_mb)
     finally:
         try:client.call('resource.release',{'id':lease_id})
         finally:client.close()
 
 
-def execute_reserved(host,batch,name):
+def execute_reserved(host,batch,name,memory_mb):
+    if type(memory_mb) is not int or memory_mb<1:raise ValueError('Expected leased worker memory')
     command=shell_command(host,['docker','run','--name',name,'--label','org.lifetech.genomics=true','--rm','--pull=never','-i','--network','none','--read-only',
-        '--log-driver','none','--memory','512m','--memory-swap','512m','--cpus','1','--pids-limit','32',
+        '--log-driver','none','--memory',str(memory_mb)+'m','--memory-swap',str(memory_mb)+'m','--cpus','1','--pids-limit','32',
         '--cap-drop','ALL','--security-opt','no-new-privileges','--ulimit','core=0:0',
         host['image'],'python','-c',WORKER,batch['kind']])
     started=time.monotonic()
@@ -148,7 +164,7 @@ def execute_reserved(host,batch,name):
     if len(result.stdout)>1024*1024:raise RuntimeError('Summary exceeds 1 MiB')
     data=json.loads(result.stdout)
     if data.get('sha256')!=batch['sha256'] or data.get('records')!=batch['records'] or data.get('kind')!=batch['kind']:raise RuntimeError('Worker result does not match its batch')
-    return {**data,'dataset':batch.get('dataset'),'host':host['host'],'elapsed_seconds':round(time.monotonic()-started,3),'input_bytes':len(batch['payload'])}
+    return {**data,'dataset':batch.get('dataset'),'memory_mb':memory_mb,'host':host['host'],'elapsed_seconds':round(time.monotonic()-started,3),'input_bytes':len(batch['payload'])}
 
 
 def merge(results,kind,dataset=None):
@@ -176,7 +192,7 @@ class Run:
                     'previous_started':previous.get('started'),'worker_source_sha256':digest,
                     'workers':[{k:v for k,v in h.items() if k not in ('ssh','agent_endpoint')} for h in hosts],
                     'jobs':{},'sources':{},'scope':'Private streamed QC and consequence summaries; annotation engine recorded in source headers. Remote inputs remain in process memory only.'}
-        for host in self.hosts:host['_capacity_lock']=threading.Lock();host['_checked']=0;host['_cooldown']=0
+        for host in self.hosts:host['_concurrency']=slots or min(32,host.get('cpus',2));host['_capacity_lock']=threading.Lock();host['_checked']=0;host['_cooldown']=0
 
     def save(self):
         with self.lock:

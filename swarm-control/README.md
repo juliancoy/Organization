@@ -123,6 +123,13 @@ sample identifiers, report contents, or arbitrary filesystem paths. Missing stat
 is shown as unavailable. Partial downloads do not imply active transfer or
 successful validation. Browser checks use synthetic status fixtures.
 
+Verified reference-match snapshots can be rebuilt with
+`python3 -m scripts.genome_demo --root <private-workbench> --reference-run <completed-private-run> --output <snapshot.js>`.
+The reference run uses quality-qualified gVCF calls for personal data and official
+GIAB benchmark regions minus both official and normalized variant REF spans.
+Unknown quality stays unverified. Only aggregate counts enter the public snapshot;
+private intervals, sample headers, and worker hostnames stay outside it.
+
 ## Concurrent tests and private DNA jobs
 
 The durable request inbox admits up to eight independent runs concurrently and
@@ -136,8 +143,11 @@ All test/install containers and private DNA batches acquire CPU and memory from
 one process-safe pool per worker. The pool also reserves each container’s PID
 limit and leaves up to 256 process/thread slots free in finite cgroup ancestors for host
 services and Docker. Combined reservations cannot exceed logical
-CPUs or physical RAM minus 1 GiB for the host; current available memory is also
-checked. Fitting jobs backfill free slots. Groups with the smallest dominant CPU
+CPUs or current schedulable RAM, including visible shared cgroup constraints.
+Genomics jobs divide live available memory across remaining concurrency and queued
+jobs; their Docker memory limits equal the resource leases. There is no fixed
+512 MiB worker ceiling or fixed host-memory reserve. Agent-private container
+limits do not constrain sibling worker containers. Fitting jobs backfill free slots. Groups with the smallest dominant CPU
 or memory share get priority, and a waiter older than 30 seconds reserves
 headroom to prevent starvation. Docker still enforces each container's limits.
 The controller bounds pending compressed DNA payloads to 128 MiB per run and 64 in-flight batches. Process locks recover capacity after crashes; orphan container reservations remain
@@ -163,3 +173,14 @@ Launcher updates raise undersized PID limits on the verified launcher container 
 a bounded budget based on logical CPUs (at most 32,768). This uses Docker update
 and does not restart containers; unrelated containers and unlimited limits are
 left alone.
+
+
+## Task Manager history
+
+The coordinator's resource sampler retains a rolling five minutes of host CPU,
+RAM, disk, network and GPU measurements in bounded memory, independently of
+browser requests. Opening or reloading Task Manager restores that history from
+the authenticated feed. Collection continues while the page is closed; a
+coordinator restart clears the window. Unavailable samples remain gaps. Historical
+gateway-only traffic is not reconstructed from current measurements. Private
+process details, paths, credentials and genomic records are excluded.
