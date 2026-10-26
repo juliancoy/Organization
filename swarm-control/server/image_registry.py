@@ -19,6 +19,7 @@ class ImageRegistry:
         self.lock=threading.Lock()
         self.ready=False
         self.published={}
+        self.seeders={}
 
     def start(self):
         if self.ready:return
@@ -89,9 +90,11 @@ class ImageRegistry:
         coordinator=json.loads(CONFIG.read_text())['name']
         self.service.notify(image,'distributing_layers',coordinator,destination['host'])
         client=AgentClient(destination)
+        sources=list(dict.fromkeys(self.seeders.get((image,fingerprint),[])+[name for name,images in self.service.host_images.items() if name!='local' and image in images]))
+        sources=[name for name in sources if name!=destination['host'] and name!=coordinator]
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             future=pool.submit(client.call,'image.pull',{'coordinator':coordinator,'repository':repository,
-                'digest':digest,'fingerprint':fingerprint,'image':image},timeout=1800)
+                'digest':digest,'fingerprint':fingerprint,'image':image,'sources':sources},timeout=1800)
             while True:
                 try:
                     result=future.result(timeout=2)
@@ -101,5 +104,7 @@ class ImageRegistry:
                     try:progress=client.call('image.progress',{'image':image},timeout=10)
                     except Exception:progress={}
                     self.service.notify(image,'distributing_layers',coordinator,destination['host'],progress)
-        self.service.notify(image,'transferred',coordinator,destination['host'])
         if not result.get('id'):raise RuntimeError('Agent did not confirm its layer-verified image')
+        self.seeders.setdefault((image,fingerprint),[])
+        if destination['host'] not in self.seeders[(image,fingerprint)]:self.seeders[(image,fingerprint)].append(destination['host'])
+        self.service.notify(image,'transferred',coordinator,destination['host'],{'source_bytes':result.get('source_bytes',{})})

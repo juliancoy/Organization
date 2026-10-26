@@ -190,7 +190,11 @@ class Mesh:
         await self.runner.setup()
         from launcher_discovery import Discovery
         self.discovery = Discovery(self.name, self.peers, PORT)
-        await web.TCPSite(self.runner, self.peers[self.name], PORT).start()
+        from launcher_registry import transport_socket
+        import socket
+        listener=transport_socket((socket.AF_INET,socket.SOCK_STREAM,0))
+        listener.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);listener.bind((self.peers[self.name],PORT));listener.listen(128);listener.setblocking(False)
+        await web.SockSite(self.runner,listener).start()
         print(f'Launcher WebRTC listening on LAN port {PORT}; {len(self.peers)-1} enrolled peers', flush=True)
         initial = {'name':self.name,'source_revision':self.source_revision,'config_revision':self.config_revision,'peers':{peer:{'connection':'disconnected'} for peer in self.peers if peer!=self.name}}
         path = Path('/tmp/launcher-peers.json')
@@ -496,7 +500,8 @@ class JobGateway:
         finally:self.pending.pop((peer,ident),None)
 
     async def request(self, request):
-        from aiohttp import web,ClientSession,ClientTimeout,ClientConnectorError,ConnectionTimeoutError
+        from aiohttp import web,ClientSession,ClientTimeout,ClientConnectorError,ConnectionTimeoutError,TCPConnector
+        from launcher_registry import transport_socket
         # This bridge never decrypts caller traffic, and only contacts enrolled peers.
         if request.headers.get('Origin'):raise web.HTTPForbidden()
         node=request.headers.get('X-Lifetech-Peer');config=json.loads(self.agent.config.read_text())
@@ -505,7 +510,7 @@ class JobGateway:
         try:
             if request.headers.get('X-Lifetech-Transport')!='webrtc':
                 try:
-                    async with ClientSession(timeout=ClientTimeout(total=180,connect=3),trust_env=False) as session:
+                    async with ClientSession(timeout=ClientTimeout(total=180,connect=3),trust_env=False,connector=TCPConnector(socket_factory=transport_socket)) as session:
                         async with session.post('http://'+config['peers'][node]+':8790/agent/v1',data=raw,allow_redirects=False) as response:
                             if response.status!=200:raise RuntimeError('Agent rejected request')
                             data=bytearray()

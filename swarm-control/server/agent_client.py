@@ -1,5 +1,7 @@
 """Client for the encrypted launcher job protocol; no SSH fallback."""
 import base64
+import errno
+import socket
 import hashlib
 import http.client
 import threading
@@ -16,6 +18,26 @@ SIGNING_KEY=Path.home()/'.config/map-master/controller-signing.key'
 CONFIG=Path(os.getenv('LIFETECH_PEER_CONFIG',str(Path.home()/'.config/lifetech-launcher/peers.json')))
 
 
+def multipath_connection(address,timeout=30,source_address=None,**kwargs):
+    host,port=address
+    last=None
+    for family,kind,protocol,_,destination in socket.getaddrinfo(host,port,0,socket.SOCK_STREAM):
+        sock=None
+        try:
+            try:sock=socket.socket(family,kind,getattr(socket,'IPPROTO_MPTCP',262))
+            except OSError as error:
+                if error.errno not in (errno.EPROTONOSUPPORT,errno.EINVAL,errno.EAFNOSUPPORT,errno.EPERM):raise
+                sock=socket.socket(family,kind,protocol)
+            sock.settimeout(timeout)
+            if source_address:sock.bind(source_address)
+            sock.connect(destination);return sock
+        except OSError as error:
+            last=error
+            if sock:sock.close()
+    if last:raise last
+    raise OSError('No agent address available')
+
+
 class AgentClient:
     def __init__(self, host):
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -29,6 +51,7 @@ class AgentClient:
             raise ValueError('Invalid agent endpoint')
         connection=http.client.HTTPSConnection if endpoint.scheme=='https' else http.client.HTTPConnection
         self.connection=connection(endpoint.hostname,endpoint.port,timeout=30)
+        self.connection._create_connection=multipath_connection
         self.connection_lock=threading.Lock()
 
     def call(self, op, args=None, timeout=30):
@@ -167,7 +190,7 @@ class AgentSessions:
                     host['worker_policy']=value['worker_policy']
                     raise RuntimeError(value['worker_policy']['reason'])
                 value=self.updater.ensure(host,client,value)
-                required={'controller-signature','github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','file-queue','snapshot-stage','event-wait','shared-resources'}
+                required={'controller-signature','github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','peer-layer-cache','mptcp-transport','file-queue','snapshot-stage','event-wait','shared-resources'}
                 if value.get('protocol')!=PROTOCOL:raise RuntimeError('Agent protocol mismatch after launcher update')
                 if not value.get('ready'):raise RuntimeError('Agent is not ready or is draining for an update')
                 missing=required-set(value.get('capabilities',[]))

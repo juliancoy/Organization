@@ -1,5 +1,12 @@
 """Loopback Docker registry bridge over authenticated agent requests."""
 import base64
+import errno
+import hashlib
+from pathlib import Path
+import os
+import socket
+import shutil
+import tempfile
 from collections import deque
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,18 +23,65 @@ CHUNK=4*1024*1024
 PATH=re.compile(r'/v2/tests/[a-f0-9]{24}/(?:manifests|blobs)/sha256:[a-f0-9]{64}')
 
 
-def read(args):
+def transport_socket(address_info):
+    """Negotiate MPTCP when supported; kernel transparently accepts TCP peers."""
+    family,kind,protocol,*_=address_info
+    if family in (socket.AF_INET,socket.AF_INET6):
+        try:return socket.socket(family,kind,getattr(socket,'IPPROTO_MPTCP',262))
+        except OSError as error:
+            if error.errno not in (errno.EPROTONOSUPPORT,errno.EINVAL,errno.EAFNOSUPPORT,errno.EPERM):raise
+    return socket.socket(family,kind,protocol)
+
+
+def cache_read(cache,path,offset,head):
+    if cache is None:return None
+    digest=path.rsplit(':',1)[1]
+    file=Path(cache)/digest
+    try:
+        with file.open('rb') as stream:
+            total=os.fstat(stream.fileno()).st_size
+            stream.seek(offset);data=b'' if head else stream.read(CHUNK)
+        media=(Path(cache)/(digest+'.type')).read_text()
+        if len(media)>256 or '\r' in media or '\n' in media:return None
+        return {'data':base64.b64encode(data).decode(),'total':total,'type':media}
+    except OSError:return None
+
+
+def cache_publish(cache,temporary,path,media,total):
+    """Only complete digest-verified objects become peer-readable."""
+    temporary.flush();temporary.seek(0)
+    if total>2*1024**3:return False
+    if os.fstat(temporary.fileno()).st_size!=total:return False
+    digest=path.rsplit(':',1)[1]
+    if hashlib.file_digest(temporary,'sha256').hexdigest()!=digest:raise ValueError('Layer cache digest mismatch')
+    cache=Path(cache);destination=cache/digest
+    (cache/(digest+'.type')).write_text(media)
+    os.replace(temporary.name,destination)
+    # Bound retained compressed layers and manifests to 2 GiB, oldest first.
+    files=sorted((p for p in cache.iterdir() if re.fullmatch('[a-f0-9]{64}',p.name)),key=lambda p:p.stat().st_mtime)
+    size=sum(p.stat().st_size for p in files)
+    for file in files:
+        if size<=2*1024**3:break
+        size-=file.stat().st_size;file.unlink(missing_ok=True);file.with_name(file.name+'.type').unlink(missing_ok=True)
+    return True
+
+
+def read(args,cache=None):
     path=args['path'];offset=args.get('offset',0)
     if not PATH.fullmatch(path):raise ValueError('Invalid registry path')
     if not isinstance(offset,int) or offset<0:raise ValueError('Invalid registry range')
     head=args.get('head') is True
+    cached=cache_read(cache,path,offset,head)
+    if cached is not None:return cached
     headers={'Accept':'application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json'}
     if not head:headers['Range']=f'bytes={offset}-{offset+CHUNK-1}'
     request=urllib.request.Request('http://127.0.0.1:18791'+path,headers=headers,method='HEAD' if head else 'GET')
     opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
     try:
         response=opener.open(request,timeout=30)
-    except urllib.error.HTTPError as error:
+    except urllib.error.URLError as error:
+        if not isinstance(error,urllib.error.HTTPError):return {'status':404,'data':'','total':0,'type':'application/json'}
+
         with error:
             detail=error.read(4096).decode(errors='replace')
             if error.code==404:
@@ -49,22 +103,36 @@ def pull(agent,args):
     if not re.fullmatch('tests/[a-f0-9]{24}',repository) or not re.fullmatch('sha256:[a-f0-9]{64}',digest):raise ValueError('Invalid immutable registry reference')
     config=json.loads(agent.config.read_text())
     if coordinator not in config['peers']:raise ValueError('Registry coordinator is not enrolled')
+    sources=list(dict.fromkeys(args.get('sources',[])+[coordinator]))
+    if len(sources)>24 or any(node not in config['peers'] or node==config['name'] for node in sources):raise ValueError('Invalid enrolled image sources')
+    cache=agent.config.parent/'layer-cache';cache.mkdir(mode=0o700,exist_ok=True)
+    selected={};source_bytes={}
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     cipher=AESGCM(bytes.fromhex(config['key']))
     opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
     def request_chunk(path,offset,head=False):
-        request_id=secrets.token_hex(16)
-        payload={'from':config['name'],'to':coordinator,'time':time.time(),'nonce':request_id,
-                 'op':'registry.read','args':{'path':path,'offset':offset,'head':head}}
-        nonce=secrets.token_bytes(12)
-        request=urllib.request.Request('http://127.0.0.1:8791/agent/v1',
-            data=nonce+cipher.encrypt(nonce,json.dumps(payload).encode(),PROTOCOL.encode()),
-            headers={'Content-Type':'application/octet-stream','X-Lifetech-Peer':coordinator})
-        with opener.open(request,timeout=60) as response:raw=response.read(2*CHUNK)
-        value=json.loads(cipher.decrypt(raw[:12],raw[12:],PROTOCOL.encode()))
-        if value.get('nonce')!=request_id or value.get('node')!=coordinator or abs(time.time()-value['time'])>60:raise ValueError('Invalid registry response identity or freshness')
-        if not value.get('ok'):raise RuntimeError(value.get('error','Registry read failed'))
-        return value['result']
+        last=None
+        for node in dict.fromkeys(([selected[path]] if path in selected else [])+sources):
+            try:
+                request_id=secrets.token_hex(16)
+                payload={'from':config['name'],'to':node,'time':time.time(),'nonce':request_id,
+                         'op':'registry.read','args':{'path':path,'offset':offset,'head':head}}
+                nonce=secrets.token_bytes(12)
+                request=urllib.request.Request('http://127.0.0.1:8791/agent/v1',
+                    data=nonce+cipher.encrypt(nonce,json.dumps(payload).encode(),PROTOCOL.encode()),
+                    headers={'Content-Type':'application/octet-stream','X-Lifetech-Peer':node})
+                with opener.open(request,timeout=60) as response:raw=response.read(2*CHUNK)
+                value=json.loads(cipher.decrypt(raw[:12],raw[12:],PROTOCOL.encode()))
+                if value.get('nonce')!=request_id or value.get('node')!=node or abs(time.time()-value['time'])>60:raise ValueError('Invalid registry response identity or freshness')
+                if not value.get('ok'):raise RuntimeError(value.get('error','Registry read failed'))
+                result=value['result']
+                if result.get('status')==404:continue
+                selected[path]=node
+                source_bytes[node]=source_bytes.get(node,0)+len(base64.b64decode(result.get('data',''),validate=True))
+                return result
+            except (OSError,ValueError,RuntimeError) as error:last=error
+        if last:raise RuntimeError('No enrolled image source available') from last
+        return {'status':404,'data':'','total':0,'type':'application/json'}
     errors=deque(maxlen=10)
     layers={}
     started=time.monotonic()
@@ -93,7 +161,7 @@ def pull(agent,args):
                 return
             if not PATH.fullmatch(path) or not path.startswith('/v2/'+repository+'/'):
                 self.send_error(404);return
-            sent=False
+            sent=False;cached=None
             try:
                 requested=self.headers.get('Range')
                 match=re.fullmatch(r'bytes=(\d+)-(\d*)',requested) if requested else None
@@ -112,16 +180,21 @@ def pull(agent,args):
                 if match:self.send_header('Content-Range',f'bytes {offset}-{end}/{total}')
                 self.send_header('Docker-Distribution-Api-Version','registry/2.0');self.end_headers();sent=True
                 if not body:return
+                if offset==0 and end==total-1 and total<=2*1024**3 and shutil.disk_usage(cache).free>total+128*1024**2:cached=tempfile.NamedTemporaryFile(mode='w+b',dir=cache,prefix='.partial-',delete=False)
                 value=first
                 while offset<=end:
                     data=base64.b64decode(value['data'],validate=True)[:end-offset+1]
                     if not data or len(data)>CHUNK or offset+len(data)>total or value['total']!=total:raise ValueError('Invalid registry chunk')
+                    if cached:cached.write(data)
                     self.wfile.write(data);offset+=len(data)
                     if offset<=end:value=request_chunk(path,offset)
+                if cached:cache_publish(cache,cached,path,first['type'],total)
             except Exception as error:
                 errors.append(type(error).__name__+': '+str(error)[:400])
                 self.close_connection=True
                 if not sent:self.send_error(502,'Authenticated registry bridge failed')
+            finally:
+                if cached:cached.close();Path(cached.name).unlink(missing_ok=True)
     server=ThreadingHTTPServer(('127.0.0.1',0),Proxy);server.daemon_threads=True
     thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
     reference=f'127.0.0.1:{server.server_port}/{repository}@{digest}'
@@ -148,12 +221,12 @@ def pull(agent,args):
                     agent.image_progress[args['image']]={'transfer_phase':'downloading' if remaining else 'finalizing',
                         'bytes_completed':current,'bytes_total':total,'bytes_per_second':speed,
                         'eta_seconds':remaining/speed if speed>0 and remaining else None,
-                        'updated':time.time()}
+                        'sources':dict(source_bytes),'updated':time.time()}
             image=client.images.get(reference)
             if agent.image_fingerprint(image)!=args['fingerprint']:raise ValueError('Registry image contents differ from coordinator')
             image.tag(args['image'])
             with agent.lock:agent.image_progress.pop(args['image'],None)
-            return {'id':image.id}
+            return {'id':image.id,'source_bytes':dict(source_bytes)}
     except Exception as error:
         detail=('Registry bridge: '+errors[-1]+'; ') if errors else ''
         raise RuntimeError((detail+str(error))[:1000]) from error
