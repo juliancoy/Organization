@@ -26,6 +26,13 @@ def snapshot(root=ROOT):
                 result['followup']['jobs']['depth_distribution'] = {'status': depth}
                 if depth == 'failed':result['followup']['status'] = 'failed'
                 elif depth != 'passed' and result['followup']['status'] == 'passed':result['followup']['status'] = 'running'
+            replacement_path = followups[0].with_name('annotation-replacement.json')
+            if replacement_path.exists():
+                replacement = json.loads(replacement_path.read_text())
+                if replacement.get('status') == 'passed' and replacement.get('verified') is True:
+                    result['followup']['jobs']['fresh_offline_vep'] = {'status': 'passed'}
+                    statuses = [job['status'] for job in result['followup']['jobs'].values()]
+                    result['followup']['status'] = 'passed' if all(s == 'passed' for s in statuses) else 'failed' if 'failed' in statuses else 'running'
         except (OSError, ValueError, TypeError, AttributeError):
             result['followup'] = None
     runs = sorted((root / 'distributed').glob('run-*/state.json'), key=lambda p: p.stat().st_mtime, reverse=True)

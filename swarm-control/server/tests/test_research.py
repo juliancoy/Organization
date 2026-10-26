@@ -6,6 +6,21 @@ from research import snapshot
 
 
 class ResearchTests(unittest.TestCase):
+    def test_verified_annotation_replacement_retains_failed_original_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            folder = root / 'followup/run-example'
+            folder.mkdir(parents=True)
+            original = {'status': 'failed', 'jobs': {name: {'status': 'passed' if name != 'fresh_offline_vep' else 'failed'} for name in ('bam_coverage', 'gvcf_span_audit', 'fresh_offline_vep')}}
+            (folder / 'state.json').write_text(json.dumps(original))
+            (folder / 'annotation-replacement.json').write_text('{"status":"passed","verified":false,"path":"PRIVATE"}')
+            self.assertEqual(snapshot(root)['followup']['status'], 'failed')
+            (folder / 'annotation-replacement.json').write_text('{"status":"passed","verified":true,"path":"PRIVATE"}')
+            result = snapshot(root)['followup']
+            self.assertEqual(result['status'], 'passed')
+            self.assertNotIn('PRIVATE', json.dumps(result))
+            self.assertEqual(json.loads((folder / 'state.json').read_text()), original)
+
     def test_depth_job_prevents_premature_completion_without_exporting_reports(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
