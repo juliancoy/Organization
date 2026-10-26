@@ -153,3 +153,5 @@
 !/scripts/gpu_qc_service.py
 !/tests/test_gpu_qc_service.py
 /scripts/gpu-tools/__pycache__/
+!/scripts/gpu_genome_masks.py
+!/tests/test_gpu_genome_masks.py

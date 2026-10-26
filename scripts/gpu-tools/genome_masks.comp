@@ -1,0 +1,37 @@
+#version 450
+layout(local_size_x=64) in;
+layout(set=0,binding=0,std430) buffer Data { uint words[]; } data;
+layout(push_constant) uniform Params { uint count; uint output_offset; } params;
+// Six nibbles: confident reference=1, any ALT REF span=2, unknown=4,
+// confidently characterized variant START=8. Bit31 marks reference N.
+// Span coverage alone never establishes an alternate allele or known status.
+void main() {
+ uint invocation=gl_GlobalInvocationID.x;
+ uint threads=(params.count+1023u)/1024u;
+ if(invocation>=threads)return;
+ uint counts[69];for(uint j=0u;j<69u;j++)counts[j]=0u;
+ for(uint position=invocation;position<params.count;position+=threads) {
+  uint packed=data.words[position];uint state[6];
+  for(uint person=0u;person<6u;person++) {
+   uint bits=(packed>>(person*4u))&15u;
+   bool reference=(bits&1u)!=0u,span=(bits&2u)!=0u,unknown=(bits&4u)!=0u,start=(bits&8u)!=0u;
+   if(span)counts[18u+person]++;
+   uint value=0u;
+   if((packed&0x80000000u)==0u&&!unknown&&!(reference&&span)) {
+    if(span&&start)value=2u;
+    else if(reference&&!span&&!start)value=1u;
+   }
+   state[person]=value;
+   counts[(value==1u?0u:value==2u?6u:12u)+person]++;
+  }
+  uint pair=0u;
+  for(uint left=0u;left<6u;left++)for(uint right=left+1u;right<6u;right++) {
+   if(state[left]!=0u&&state[right]!=0u) {
+    counts[24u+pair*3u]++;
+    counts[25u+pair*3u+(state[left]==state[right]?0u:1u)]++;
+   }
+   pair++;
+  }
+ }
+ for(uint j=0u;j<69u;j++)data.words[params.output_offset+invocation*69u+j]=counts[j];
+}
