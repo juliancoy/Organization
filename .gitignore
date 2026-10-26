@@ -145,3 +145,8 @@
 
 !scripts/wgs_archive.py
 !tests/test_wgs_archive.py
+
+!/scripts/gpu_qc_benchmark.py
+!/scripts/gpu-tools/
+!/scripts/gpu-tools/**
+!/tests/test_gpu_qc_benchmark.py

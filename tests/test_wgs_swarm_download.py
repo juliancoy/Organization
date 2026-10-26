@@ -154,3 +154,25 @@ def test_bad_preserved_single_range_is_quarantined_and_freshly_retried(tmp_path,
     receipt=json.loads(output.getvalue());assert receipt['md5']==source['md5']
     assert (tmp_path/ident/source['filename']).read_bytes()==payload
     quarantined=list((tmp_path/ident).glob('checksum-mismatch-*/chunks/0.bin'));assert len(quarantined)==1 and quarantined[0].read_bytes()==bad
+
+
+def test_seeded_paired_stream_requests_earliest_missing_chunk_before_small_files(tmp_path,monkeypatch):
+    import io,sys,urllib.request
+    payloads={};jobs=[]
+    for index,(size,layout) in enumerate([(10,'SINGLE'),(43,'PAIRED')]):
+        source={**item(url=f'https://ftp.sra.ebi.ac.uk/vol1/fastq/SRR000/SRR00000{index}/SRR00000{index}.fastq.gz',size=size),'layout':layout}
+        data=bytes([65+index])*size;source['md5']=hashlib.md5(data).hexdigest();payloads[source['url']]=data;jobs.append({'item':source,'id':file_id(source),'chunk_bytes':16,'allowed_hosts':['ftp.sra.ebi.ac.uk']})
+    paired=jobs[1];chunks=tmp_path/paired['id']/'chunks';chunks.mkdir(parents=True)
+    for i in range(2):
+        data=payloads[paired['item']['url']][i*16:(i+1)*16];(chunks/f'{i}.bin').write_bytes(data);(chunks/f'{i}.json').write_text(json.dumps({'sha256':hashlib.sha256(data).hexdigest(),'bytes':16}))
+    calls=[]
+    class Response(io.BytesIO):
+        status=206
+        def __init__(self,url,start,end):super().__init__(payloads[url][start:end+1]);self.url=url;self.headers={'Content-Range':f'bytes {start}-{end}/{len(payloads[url])}'}
+        def geturl(self):return self.url
+    def request(req,timeout):
+        start,end=map(int,req.headers['Range'].removeprefix('bytes=').split('-'));calls.append((req.full_url,start));return Response(req.full_url,start,end)
+    monkeypatch.setenv('WGS_CACHE_ROOT',str(tmp_path));monkeypatch.setattr(urllib.request,'urlopen',request);monkeypatch.setattr(sys,'stdin',io.StringIO(json.dumps({'jobs':jobs,'connections':1})));monkeypatch.setattr(sys,'stdout',io.StringIO())
+    exec(compile(DOWNLOAD_WORKER,'worker','exec'),{})
+    assert calls[0]==(paired['item']['url'],32)
+    assert len(calls)==2, 'Seeded prefix must never be downloaded again'

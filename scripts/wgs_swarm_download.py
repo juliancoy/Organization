@@ -79,7 +79,7 @@ print(json.dumps({'cache':str(path),'free_bytes':shutil.disk_usage(path).free,'u
 
 
 # Self-contained stdlib worker. Chunk boundaries concern transport, not analysis.
-DOWNLOAD_WORKER=r'''import concurrent.futures,contextlib,datetime,email.utils,fcntl,hashlib,json,os,pathlib,shutil,sys,threading,time,urllib.request,urllib.parse,urllib.error
+DOWNLOAD_WORKER=r'''import concurrent.futures,contextlib,datetime,email.utils,fcntl,hashlib,itertools,json,os,pathlib,shutil,sys,threading,time,urllib.request,urllib.parse,urllib.error
 job=json.load(sys.stdin);jobs=job.get('jobs',[job]);cache_root=pathlib.Path(os.environ.get('WGS_CACHE_ROOT','/cache'));guard=threading.RLock();finished=threading.Event();contexts={};errors=[];throttle_until=0;network_active=0;network_failures=0;network_bytes=0;network_limit=1;control_not_before=0;network_condition=threading.Condition(guard)
 
 def save(path,value):
@@ -112,6 +112,11 @@ def initialize(current):
    lock.close();emit(prior);return None
  chunks=folder/'chunks';chunks.mkdir(mode=0o700,exist_ok=True);chunk_size=current['chunk_bytes'];total=(item['bytes']+chunk_size-1)//chunk_size
  ctx={'id':current['id'],'item':item,'folder':folder,'final':final,'receipt_path':receipt_path,'chunks':chunks,'chunk_size':chunk_size,'total':total,'done':set(),'active':set(),'phase':'queued','lock':lock,'started':time.monotonic(),'remaining':total,'failed':False,'allowed_hosts':current['allowed_hosts'],'transport_worker_version':current.get('transport_worker_version','unversioned')}
+ for index in range(total):
+  target=chunks/(str(index)+'.bin');meta=chunks/(str(index)+'.json')
+  if target.exists() and meta.exists():
+   prior=json.loads(meta.read_text());expected=min(chunk_size,item['bytes']-index*chunk_size)
+   if target.stat().st_size==expected and prior.get('sha256')==digest(target,'sha256'):ctx['done'].add(index)
  report(ctx);return ctx
 
 class YieldNetworkSlot(Exception):pass
@@ -150,6 +155,8 @@ def retry_delay(error,attempt):
 def fetch(ctx,index):
  global throttle_until,network_failures,network_bytes
  item=ctx['item'];start=index*ctx['chunk_size'];end=min(item['bytes'],start+ctx['chunk_size'])-1;target=ctx['chunks']/(str(index)+'.bin');meta=ctx['chunks']/(str(index)+'.json');partial=target.with_suffix('.part')
+ while (ctx['folder']/'download.hold').exists():
+  report(ctx,'waiting_for_seed');time.sleep(.25)
  if target.exists() and meta.exists():
   old=json.loads(meta.read_text())
   if target.stat().st_size==end-start+1 and old.get('sha256')==digest(target,'sha256'):
@@ -250,7 +257,11 @@ for current in jobs:
   if ctx:contexts[ctx['id']]=ctx
  except Exception as error:errors.append(current['id']);emit({'id':current['id'],'error':type(error).__name__+': '+str(error)[:400]})
 read_control();threading.Thread(target=progress_loop,daemon=True).start()
-tasks=((ctx,index) for index in range(max((c['total'] for c in contexts.values()),default=0)) for ctx in contexts.values() if index<ctx['total'])
+# Give each paired stream its earliest missing compressed range before small
+# files occupy all executor slots, then return to fair round-robin scheduling.
+priority=[(ctx,next(i for i in range(ctx['total']) if i not in ctx['done'])) for ctx in contexts.values() if ctx['item'].get('layout')=='PAIRED' and len(ctx['done'])<ctx['total']]
+priority_keys={(ctx['id'],index) for ctx,index in priority}
+tasks=itertools.chain(priority,((ctx,index) for index in range(max((c['total'] for c in contexts.values()),default=0)) for ctx in contexts.values() if index<ctx['total'] and (ctx['id'],index) not in priority_keys))
 try:
  with concurrent.futures.ThreadPoolExecutor(max_workers=job['connections']) as pool:list(pool.map(execute,tasks))
 finally:
