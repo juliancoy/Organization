@@ -2,3 +2,5 @@ header{height:auto;min-height:86px;padding:18px 28px;flex-wrap:wrap}header nav{d
 
 .task-manager #device-levels .levels-controls>label:first-child{display:none}
 #task-hosts details{border-top:1px solid #334856;padding:12px 0;overflow-wrap:anywhere}#task-hosts summary{cursor:pointer;min-height:44px;padding:10px 0}#task-hosts p{font-size:14px;color:#b9cad5;line-height:1.6}#task-summary{overflow-wrap:anywhere}
+
+.connection-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}.connection-card{border:1px solid #536376;border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:7px;min-width:0;overflow-wrap:anywhere}.connection-card strong{font-size:14px}.connection-card span{font-size:13px;color:#c4cedb}.connection-card small{font-size:12px;color:#a8b5c7}.connection-card[data-state=connected]{border-color:#54b893}.connection-card[data-state=connected] span{color:#a8ecc6}.connection-card[data-state=disconnected] span,.connection-card[data-state=authentication_denied] span{color:#ffc28a}@media(max-width:480px){.connection-grid{grid-template-columns:1fr}}

@@ -184,3 +184,14 @@ the authenticated feed. Collection continues while the page is closed; a
 coordinator restart clears the window. Unavailable samples remain gaps. Historical
 gateway-only traffic is not reconstructed from current measurements. Private
 process details, paths, credentials and genomic records are excluded.
+
+## Live machine connections
+
+Task Manager uses a small owner-authenticated connection feed separately from
+resource history. Enrolled peers receive signed status heartbeats every second,
+with a two-second timeout per peer. Each result publishes independently, so a
+slow or disconnected machine cannot stall healthy machines. Enrollment changes
+are picked up automatically. Samples older than five seconds become unknown.
+The visible page polls the feed every second and rechecks immediately after
+network recovery or returning to the tab. A paused worker remains connected;
+browser/API outages show unknown status rather than claiming machines are offline.

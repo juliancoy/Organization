@@ -28,6 +28,14 @@ class RemoteBoundaryTests(unittest.TestCase):
         if origin:headers['Origin']=origin
         if body is not None:headers['Content-Type']='application/json';body=json.dumps(body)
         c.request(method,path,body=body,headers=headers);r=c.getresponse();status=r.status;self.last_cookie=r.getheader('Set-Cookie');r.read();c.close();return status
+    def test_connection_feed_requires_owner_and_is_read_only(self):
+        with patch('status.connections',return_value={'hosts':[]}) as read:
+            self.assertEqual(self.request('/api/v1/swarm/connections'),401)
+            read.assert_not_called()
+            self.assertEqual(self.request('/api/v1/swarm/connections',cookie=self.cookie),200)
+            read.assert_called_once()
+            self.assertEqual(self.request('/api/v1/swarm/connections','POST',origin='https://compai.example',body={},cookie=self.cookie),404)
+
     def test_private_data_and_commands_require_owner_credentials(self):
         with patch('api.codex.rest') as rest:
             for path in ['/api/v1/master/codex/threads','/api/v1/master/codex/commands','/api/v1/master/codex/queue','/api/v1/master/codex/transcribe']:

@@ -128,3 +128,11 @@ def research_jobs(body=None):
     if set(body)=={'profile','request_id'}:return call('/research-requests',body)
     if set(body)=={'cancel'}:return call('/cancel-request',{'request_id':body['cancel']})
     raise ValueError('Invalid job action')
+
+
+def connections():
+    """Small authenticated connection feed, independent of resource sampling."""
+    value=read_coordinator('/api/connections')
+    fields=('host','address','status','checked_at','last_seen','connected_at','ready','accepting_jobs')
+    return {**{key:value[key] for key in ('sampled_at','poll_interval_seconds','heartbeat_timeout_seconds','stale_after_seconds','inventory_available') if key in value},
+            'hosts':[{key:row[key] for key in fields if key in row} for row in value.get('hosts',[])[:64]]}

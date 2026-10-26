@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from paths import STATE
 from cpu import CpuMonitor
+from connections import Connections
 from socket_owners import SocketOwners
 from docker_downloads import DockerDownloads
 from containers import ContainerMonitor
@@ -52,6 +53,7 @@ def master_suites():
     return SUITES
 master_api = MasterAPI(distributed_tests, snapshot, master_suites)
 cpu_monitor = CpuMonitor(activity=distributed_tests.cpu_activity)
+connection_monitor = Connections()
 socket_owners = SocketOwners()
 docker_downloads = DockerDownloads()
 container_monitor = ContainerMonitor()
@@ -276,6 +278,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(400, str(exc))
                 return
             content_type = 'application/json'
+        elif path == '/api/connections':
+            body = json.dumps(connection_monitor.view()).encode()
+            content_type = 'application/json'
         elif path == '/api/cpu':
             body = json.dumps(cpu_monitor.view()).encode()
             content_type = 'application/json'
@@ -484,6 +489,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == '__main__':
+    threading.Thread(target=connection_monitor.worker, daemon=True).start()
     threading.Thread(target=cpu_monitor.worker, daemon=True).start()
     threading.Thread(target=socket_owners.worker, daemon=True).start()
     threading.Thread(target=docker_downloads.worker, daemon=True).start()
