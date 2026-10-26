@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Durable Watson merge and chromosome recall after every source run verifies.
 
-Private BAMs and confidence intervals stay on enrolled SSDs. Only aggregate
+Private BAMs and confidence intervals stay on enrolled storage. Only aggregate
 summaries return to the coordinator. No chart publication occurs here.
 """
 from concurrent.futures import ThreadPoolExecutor
@@ -64,7 +64,7 @@ def main(root,sample="Watson"):
         if driver.exists() and json.loads(driver.read_text()).get('phase') in ('all_watson_runs_aligned','all_venter_shards_aligned_and_sources_verified'):break
         time.sleep(15)
     hosts=json.loads((root/'recall-hosts.json').read_text());by_name={h['host']:h for h in hosts}
-    # These SSDs have the capacity for complete aligned genomes and sort scratch.
+    # Latitude provides SSD scratch; Inspiron is HDD input/archive storage.
     from docker_utils.images import ImageResolver
     resolver=ImageResolver([h for h in hosts if not h['local']],lambda h:h['ssh'])
     pinned=json.loads((root/'tools.json').read_text())['image']
@@ -93,11 +93,11 @@ def main(root,sample="Watson"):
     required_bytes=4*total_bam_bytes
     while True:
         choices=[]
-        for name in ('julian-latitude.local','julian-inspiron-3793.local'):
+        for name in ('julian-latitude.local',):
             h=by_name[name];query="import json,shutil,sys;print(json.dumps({'free_bytes':shutil.disk_usage(sys.argv[1]).free}))"
             free=json.loads(subprocess.check_output(distributed.shell_command(h,['python3','-c',query,h['cache']]),text=True))['free_bytes']
             choices.append((free,h))
-        if state.get('target_host'):
+        if state.get('target_host') in {h['host'] for _,h in choices}:
             target=by_name[state['target_host']];break
         eligible=[(free,h) for free,h in choices if free>=required_bytes]
         state['storage_plan']={'actual_input_bam_bytes':total_bam_bytes,'conservative_peak_additional_bytes':required_bytes,'candidates':{h['host']:free for free,h in choices},'preserve_original_fastqs':True}

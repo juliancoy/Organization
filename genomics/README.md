@@ -203,7 +203,9 @@ The public Watson original LS454 runs and Venter SRR7097858 paired reads are
 catalogued by `scripts/wgs_catalog.py`. Publisher file sizes and MD5 values,
 source identities, and the private storage plan live beneath
 `/mnt/PILEDRIVE/genomics-workbench/wgs/`; this directory is outside Git.
-Venter's two large mates are placed on the Inspiron and Latitude SSDs. Derived
+Venter's two large mates are placed on the Inspiron HDD and Latitude SSD.
+Inspiron is suitable for sequential input storage; final gathering, duplicate
+removal, and heavy sort scratch are restricted to Latitude's SSD. Derived
 BAMs remain distributed until a host passes a fresh scratch-space check.
 
 `wgs_swarm_download.py` assigns downloads to six enrolled machines using signed,
