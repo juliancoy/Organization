@@ -61,9 +61,12 @@ def snapshot(root=ROOT):
     mapping_rows=[row for row in mapping_jobs.values() if isinstance(row,dict)]
     driver=read(root/'recall/full/driver.json')
     gpu_service=read(root/'gpu-qc/service.json')
+    replay=read(root/'qc/gpu-replay/state.json');replay_jobs=replay.get('jobs',{})
+    replay_rows=[row for row in replay_jobs.values() if isinstance(row,dict)] if isinstance(replay_jobs,dict) else []
     return {'available':bool(downloads),'sampled_at':time.time(),'download_status':downloads.get('status','not_started'),'updated':downloads.get('updated'),
             'samples':samples,'storage':storage,'index':index_progress,
             'qc':{'status':qc.get('status','queued'),'files':len(qc_rows),'reads_processed':sum(number(row.get('reads',row.get('reads_processed'))) for row in qc_rows),'bases_processed':sum(number(row.get('bases',row.get('bases_processed'))) for row in qc_rows),
                   'gpu_batches':sum(number(row.get('gpu_batches')) for row in qc_rows),'gpu_bases':sum(number(row.get('gpu_bases')) for row in qc_rows),'cpu_bases':sum(number(row.get('cpu_bases')) for row in qc_rows)},
             'gpu_qc':{'status':gpu_service.get('status','not_started'),'host':gpu_service.get('host'),'updated':gpu_service.get('updated'),'batches':number(gpu_service.get('batches')),'bases':number(gpu_service.get('bases'))},
+            'gpu_backfill':{'status':replay.get('status','not_started'),'files':len(replay_rows),'verified_files':sum(row.get('phase')=='verified' for row in replay_rows),'batches':sum(number(row.get('gpu_batches')) for row in replay_rows),'bases':sum(number(row.get('gpu_bases')) for row in replay_rows),'cpu_crosschecked_batches':sum(number(row.get('gpu_cpu_crosschecked_batches')) for row in replay_rows)},
             'alignment':{'status':driver.get('phase','queued'),'files':len(mapping_rows),'completed':sum(row.get('status',row.get('phase')) in ('passed','complete','verified') for row in mapping_rows)}}

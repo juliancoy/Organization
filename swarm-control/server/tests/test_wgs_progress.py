@@ -26,3 +26,11 @@ def test_gpu_qc_exposes_only_aggregate_progress(tmp_path):
     assert value['gpu_qc']['batches']==4
     assert value['qc']['gpu_batches']==3 and value['qc']['gpu_bases']==150 and value['qc']['cpu_bases']==20
     assert 'secret' not in str(value) and 'private' not in str(value) and 'quality_histogram' not in str(value)
+
+
+def test_backfill_is_reported_separately_from_source_qc(tmp_path):
+    path=tmp_path/'qc/gpu-replay';path.mkdir(parents=True)
+    (path/'state.json').write_text(json.dumps({'status':'running','jobs':{'a':{'phase':'verified','gpu_batches':3,'gpu_bases':42,'gpu_cpu_crosschecked_batches':2,'quality_histogram':[0]*94}}}))
+    value=snapshot(tmp_path)
+    assert value['qc']['reads_processed']==0 and value['qc']['gpu_bases']==0
+    assert value['gpu_backfill']=={'status':'running','files':1,'verified_files':1,'batches':3,'bases':42,'cpu_crosschecked_batches':2}
