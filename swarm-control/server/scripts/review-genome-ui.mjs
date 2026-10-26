@@ -53,9 +53,16 @@ try{
   assert.ok(Math.abs(Number(await segment.getAttribute('data-arc'))-Number(await segment.getAttribute('data-percent')))<0.000001);
   await page.locator('#composition-scale').fill('8');
   assert.equal(Number(await page.locator('[data-tick="1"]').getAttribute('data-position')),tickBefore);
+  async function checkLabelPalette(){
+   const labels=await page.locator('.ring-section-titles text').evaluateAll(items=>items.map(e=>({key:e.dataset.sectionTitle,fill:e.getAttribute('fill'),backing:e.getAttribute('stroke')})));
+   const luminance=color=>{const channels=[1,3,5].map(i=>parseInt(color.slice(i,i+2),16)/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4);return channels.reduce((sum,v,i)=>sum+v*[.2126,.7152,.0722][i],0)};
+   for(const label of labels){assert.equal(label.fill,await page.locator(`.genome-rings circle[data-category="${label.key}"]`).first().getAttribute('stroke'));assert.ok((luminance(label.fill)+.05)/(luminance(label.backing)+.05)>=4.5,`${label.key} text contrast`)}
+  }
+  await checkLabelPalette();
   const color=await segment.getAttribute('stroke');
   await page.locator('#composition-palette').click();
   assert.notEqual(await segment.getAttribute('stroke'),color);
+  await checkLabelPalette();
   await segment.focus();assert.match(await page.locator('#ring-readout').innerText(),/Other \/ mixed/);
   await page.locator('.ring-details summary').click();
   assert.match(await page.locator('#metrics').innerText(),/Confirmed same\nUnavailable/);
