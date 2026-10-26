@@ -22,3 +22,21 @@ Agent updates use the existing atomic release supervisor. Busy agents retain
 their running workloads and switch releases when idle. Old agents remain TCP
 compatible; new distributed work requires the peer-cache and MPTCP transport
 capabilities so an old agent cannot silently pass as an upgraded one.
+
+
+## Archive SSH transport
+
+Agent/image MPTCP does not convert existing SSH streams. The WGS archive opts in
+through its private `archive/transport.json`, naming the enrolled destination and
+port 8792. SSH's ProxyCommand connects to an owner-only Unix socket. Inspiron
+initiates a mutually HMAC-authenticated MPTCP connection back to Compai, using its
+existing Ethernet/Wi-Fi subflow endpoints. The bridge carries unchanged SSH bytes;
+existing SSH keys and host-key checks still protect archive content end to end.
+The reverse service connects only to Inspiron's loopback SSH port, after Compai
+requests a session. No routing changes or administrative privileges are needed.
+
+The two user services are `swarm-archive-multipath.service`. Their shared transport
+key is in the owner-only Swarm Control configuration directory, never source or
+logs. Stop/restart an archive copy only through its own service; `.partial` data
+is retained and resumed, and both SHA-256 and MD5 must match before publication.
+Removing `archive/transport.json` and restarting the archive restores direct SSH.

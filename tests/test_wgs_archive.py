@@ -25,3 +25,13 @@ def test_bad_resumed_prefix_is_quarantined(tmp_path):
     assert result.returncode!=0
     assert not path.exists() and not partial.exists()
     assert len(list(tmp_path.glob('*.checksum-failed-*')))==1
+
+
+def test_archive_proxy_keeps_ssh_host_verification_and_original_host():
+    from scripts.wgs_archive import remote
+    host={'local':False,'ssh':['ssh','-o','StrictHostKeyChecking=yes','-o','HostKeyAlias=inspiron.local','owner@inspiron.local'],'archive_mptcp':{'address':'10.42.0.142','port':8792}}
+    original=list(host['ssh']);command=remote(host,'print(1)')
+    assert 'StrictHostKeyChecking=yes' in command
+    assert 'HostKeyAlias=inspiron.local' in command
+    assert any(value.startswith('ProxyCommand=') and 'ssh_multipath.py' in value for value in command)
+    assert host['ssh']==original

@@ -4,6 +4,10 @@ import argparse
 import json
 from pathlib import Path
 import subprocess
+import shlex
+import sys
+import ipaddress
+from urllib.parse import urlsplit
 import time
 from scripts import genomics_distributed as distributed
 from scripts.wgs_swarm_download import AgentClient, atomic_json, stamp, validate_manifest
@@ -68,6 +72,8 @@ print(json.dumps({'verified':True,'path':str(path),'bytes':n,'sha256':h.hexdiges
 
 
 def remote(host, code, *args):
+    if host.get('archive_mptcp'):
+        host={**host,'ssh':host['ssh'][:-1]+['-o','ProxyCommand='+shlex.join([sys.executable,str(Path(__file__).with_name('ssh_multipath.py')),'connect','--socket',str(Path.home()/'.config/swarm-control/archive-mptcp/socket')])]+host['ssh'][-1:]}
     return distributed.shell_command(host, ['nice', '-n', '15', 'ionice', '-c', '3', 'python3', '-c', code, *map(str, args)])
 
 
@@ -106,6 +112,12 @@ def main(root, supplement=None):
     root=Path(root);folder=root/'archive';folder.mkdir(mode=0o700,exist_ok=True)
     hosts=json.loads((root/'recall-hosts.json').read_text());by_name={h['host']:h for h in hosts}
     destination=by_name['julian-inspiron-3793.local']
+    transport=folder/'transport.json'
+    if transport.exists():
+        config=json.loads(transport.read_text())
+        address=str(ipaddress.IPv4Address(config['address']));port=config['port']
+        if address!=(destination.get('lan_address') or urlsplit(destination['agent_endpoint']).hostname) or type(port) is not int or not 1024<=port<=65535:raise ValueError('Archive transport must use the enrolled destination')
+        destination={**destination,'archive_mptcp':{'address':address,'port':port}}
     target=str(Path(destination['cache']).parent/'wgs-archive')
     manifest=json.loads((root/'catalog.json').read_text());files=validate_manifest(manifest)
     if any(f.get('sample') not in ('Watson','Venter') for f in files):raise ValueError('Unexpected archive sample')
