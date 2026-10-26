@@ -280,8 +280,21 @@ Missing counters remain unmeasured, rather than being reported as zero. Software
 renderers such as llvmpipe never count as hardware GPU execution.
 
 The production BWA/samtools/bcftools commands remain CPU programs. Device exposure
-does not accelerate them. GPU candidates are bounded batched read QC, histograms,
-and tiled confidence-mask intersections. A candidate needs exact CPU agreement
-and an end-to-end benchmark including transfers and setup before activation.
+does not accelerate them. Read QC now uses bounded Vulkan batches on the mini-PC through
+`lifetech-gpu-qc.service`, with one persistent hardware context and automatic CPU
+fallback per transaction. It computes base composition and all 94 Phred+33
+quality bins. `lifetech-gpu-histogram-backfill.service` enriches previously verified
+mini-PC sources without replacing their original QC provenance. The first two
+files were independently CPU-checked for every bin in all 14 batches; later files
+retain publisher checksums, exact read counts, and prior aggregate comparisons.
+Task Manager reports backfill separately so repeat analysis does not inflate
+primary read totals.
+
+Tiled confidence-mask comparisons share the serialized worker. These operate on
+explicit confidence evidence, preserve unknown positions and variant REF-span
+exclusions, and compare reference status rather than alleles. The mask tools
+produce private analysis results; they do not publish new chart values.
+A new kernel needs exact CPU agreement and a benchmark including transfers and
+setup before it is described as an acceleration.
 Keep a persistent GPU context if it materially improves throughput, respect live
 resource leases, and preserve other applications' GPU-memory headroom.
