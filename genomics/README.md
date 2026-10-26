@@ -246,3 +246,18 @@ as unknown.
 
 Completed WGS results are private research aggregates pending review. These
 services do not automatically replace the public Genome Explorer snapshot.
+
+
+`lifetech-wgs-archive.service` maintains a complete source-read copy on Inspiron's
+HDD at the private `wgs-archive` directory beside its worker cache. It copies
+publisher-verified Watson/Venter files sequentially, resumes interrupted transfers,
+and verifies both MD5 and SHA-256 before atomic installation. A 10 GiB disk reserve
+is required. Local archive progress is `wgs/archive/state.json`.
+
+An explicitly authorized private Julian supplement includes original and
+normalized calls, structural/mitochondrial calls, annotations, analysis provenance,
+reference-match summaries, the reference FASTA and index, and the original indexed
+WGS BAM. A private manifest is built by `lifetech-julian-archive-prepare.service`;
+`wgs_archive.py --private-manifest` incorporates it. Originals are retained. These
+files and their detailed archive receipts are owner-only and never included in
+the public operational projection or Genome Explorer.

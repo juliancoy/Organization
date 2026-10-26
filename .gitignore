@@ -142,3 +142,6 @@
 
 !/scripts/wgs_reference_confidence.py
 !/tests/test_wgs_reference_confidence.py
+
+!scripts/wgs_archive.py
+!tests/test_wgs_archive.py
