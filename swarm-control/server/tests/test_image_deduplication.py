@@ -39,3 +39,55 @@ class ImageDeduplicationTests(unittest.TestCase):
         self.assertEqual(result['total'],123)
         self.assertEqual(result['data'],'')
         response.read.assert_not_called()
+
+
+class PeerLayerCacheTests(unittest.TestCase):
+    def module(self):
+        spec=importlib.util.spec_from_file_location('layer_registry',Path(__file__).resolve().parents[3]/'scripts/launcher_registry.py')
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
+
+    def test_only_complete_digest_verified_content_is_shared_and_ranges_work(self):
+        import tempfile,hashlib,base64
+        module=self.module();data=b'peer layer bytes'*100;digest=hashlib.sha256(data).hexdigest()
+        path='/v2/tests/'+('a'*24)+'/blobs/sha256:'+digest
+        with tempfile.TemporaryDirectory() as folder:
+            with tempfile.NamedTemporaryFile(mode='w+b',dir=folder,delete=False) as stream:
+                stream.write(data)
+                self.assertIsNone(module.cache_read(folder,path,0,False))
+                self.assertTrue(module.cache_publish(folder,stream,path,'application/octet-stream',len(data)))
+            with patch.object(module.urllib.request,'build_opener') as network:
+                result=module.read({'path':path,'offset':8},folder)
+            self.assertEqual(base64.b64decode(result['data']),data[8:]);network.assert_not_called()
+            self.assertEqual(module.read({'path':path,'head':True},folder)['data'],'')
+
+    def test_wrong_digest_and_incomplete_objects_cannot_be_seeded(self):
+        import tempfile
+        module=self.module();path='/v2/tests/'+('a'*24)+'/blobs/sha256:'+('b'*64)
+        with tempfile.TemporaryDirectory() as folder:
+            with tempfile.NamedTemporaryFile(mode='w+b',dir=folder) as stream:
+                stream.write(b'wrong')
+                self.assertFalse(module.cache_publish(folder,stream,path,'application/octet-stream',6))
+                with self.assertRaises(ValueError):module.cache_publish(folder,stream,path,'application/octet-stream',5)
+            self.assertIsNone(module.cache_read(folder,path,0,False))
+
+    def test_mptcp_socket_falls_back_only_for_unsupported_protocol(self):
+        import socket,errno
+        module=self.module()
+        with patch.object(module,'MultipathSocket',side_effect=OSError(errno.EPROTONOSUPPORT,'unsupported')) as factory,patch.object(module.socket,'socket') as fallback:
+            module.transport_socket((socket.AF_INET,socket.SOCK_STREAM,0))
+            self.assertEqual(factory.call_args.args[2],262)
+            self.assertEqual(fallback.call_args.args[2],0)
+        with patch.object(module,'MultipathSocket',side_effect=OSError(errno.EMFILE,'socket limit')):
+            with self.assertRaises(OSError):module.transport_socket((socket.AF_INET,socket.SOCK_STREAM,0))
+
+    def test_asyncio_can_connect_numeric_mptcp_addresses(self):
+        import asyncio,socket
+        module=self.module()
+        async def connect():
+            server=socket.socket();server.bind(('127.0.0.1',0));server.listen();server.setblocking(False)
+            sock=module.transport_socket((socket.AF_INET,socket.SOCK_STREAM,0));sock.setblocking(False)
+            try:
+                await asyncio.wait_for(asyncio.get_running_loop().sock_connect(sock,server.getsockname()),2)
+                self.assertEqual(sock.proto,socket.IPPROTO_TCP)
+            finally:sock.close();server.close()
+        asyncio.run(connect())
