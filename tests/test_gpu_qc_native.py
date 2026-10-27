@@ -7,6 +7,12 @@ from scripts import gpu_qc_native as native
 from scripts.launcher_agent import ResourceLease
 
 
+@pytest.fixture(autouse=True)
+def synthetic_machine_identity(monkeypatch):
+    read_bytes=Path.read_bytes
+    monkeypatch.setattr(Path,'read_bytes',lambda path:b'fixture-machine-id\n' if path==Path('/etc/machine-id') else read_bytes(path))
+
+
 def test_native_work_uses_the_shared_pool_and_releases_its_reservation(tmp_path,monkeypatch):
     identity=hashlib.sha256(Path('/etc/machine-id').read_bytes()).hexdigest()
     client=Mock();client.call.side_effect=[{'machine':identity,'ready':False,'worker_policy':{'accepting_jobs':True}},{'cpus':4,'memory_mb':8192,'available_mb':6000}]
