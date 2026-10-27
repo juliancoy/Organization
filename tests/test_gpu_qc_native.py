@@ -33,3 +33,25 @@ def test_paused_worker_does_not_admit_new_native_gpu_jobs(tmp_path,monkeypatch):
     with pytest.raises(RuntimeError,match='policy'):
         with native.admission({'local':True,'machine':identity},768,Mock()):pass
     assert not list(tmp_path.glob('*.json'));client.close.assert_called_once()
+
+
+def test_native_stream_preserves_dataset_metadata_and_derived_memory(tmp_path,monkeypatch):
+    import socket,threading
+    from contextlib import contextmanager
+    from scripts import wgs_stream_qc as qc
+    root=tmp_path/'gpu-qc';root.mkdir();output=tmp_path/'output';output.mkdir()
+    sock=socket.socket(socket.AF_UNIX);sock.bind(str(root/'service.sock'))
+    host={'host':'compai.local','cache':str(tmp_path/'cache')};item={'sample':'Venter','run':'run','filename':'reads.gz','bytes':100}
+    allocated=[];progress=[]
+    @contextmanager
+    def admission(host,memory,stop):allocated.append(memory);yield
+    def aggregate(folder,item,size,**kwargs):
+        assert kwargs['gpu']['verify_first'] is True and kwargs['gpu_parallel'] is True
+        kwargs['progress']({'phase':'streaming','gpu_batches':1})
+        return {'phase':'verified','gpu_batches':2}
+    monkeypatch.setattr(native,'admission',admission);monkeypatch.setattr(qc,'aggregate_qc',aggregate);monkeypatch.setattr(qc,'qc_memory_mb',lambda *a,**k:333)
+    try:result=native.run_native(host,item,'source',output,progress.append,threading.Event())
+    finally:sock.close()
+    assert allocated==[333]
+    assert result['sample']=='Venter' and result['host']=='compai.local' and result['memory_mb']==333
+    assert progress[0]['sample']=='Venter' and progress[0]['gpu_batches']==1

@@ -261,3 +261,16 @@ def test_parallel_gpu_drains_tail_before_publisher_verification(tmp_path):
     result=aggregate_qc(tmp_path,item,chunk_bytes=11,progress=progress,batch_bases=4,gpu_request=gpu_response,gpu_parallel=True)
     assert result['gpu_bases']==result['bases']==6 and result['gpu_batches']==2
     assert 'awaiting_publisher_receipt' in phases and result['phase']=='verified'
+
+
+def test_first_live_batch_is_crosschecked_then_gpu_only_batches_continue(tmp_path,monkeypatch):
+    from scripts import wgs_stream_qc as qc
+    data,item=source(tmp_path);receipt(tmp_path,item,data);seen=[]
+    def request(sequence,quality,config):
+        seen.append(config['verify'])
+        return {**gpu_response(sequence,quality),'cpu_crosschecked':config['verify'],'exact_match':True if config['verify'] else None,'validated_backend':True}
+    monkeypatch.setattr(qc,'request_gpu_batch',request)
+    result=aggregate_qc(tmp_path,item,batch_bases=3,gpu={'verify_first':True},gpu_parallel=True)
+    assert seen==[True,False]
+    assert result['gpu_batches']==2 and result['gpu_cpu_crosschecked_batches']==1
+    assert result['cpu_bases']==result['gpu_fallback_batches']==0

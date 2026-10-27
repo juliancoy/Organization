@@ -41,16 +41,21 @@ def admission(host,memory_mb,stop):
 
 
 def run_native(host,item,ident,output,changed,stop,verify=False):
-    from .wgs_stream_qc import aggregate_qc,CHUNK_BYTES
+    from .wgs_stream_qc import aggregate_qc,CHUNK_BYTES,qc_memory_mb
     from .wgs_swarm_download import atomic_json
     root=Path(host['cache']).parent/'gpu-qc'
-    config={'local_root':str(root),'host_root':str(root),'verify':verify}
+    config={'local_root':str(root),'host_root':str(root),'verify':verify,'verify_first':True}
+    memory=qc_memory_mb(min(CHUNK_BYTES,item['bytes']),gpu_parallel=True)
+    metadata={key:item[key] for key in ('sample','run','filename') if key in item}
+    metadata.update(host=host['host'],memory_mb=memory)
     if not (root/'service.sock').is_socket():raise RuntimeError('Local GPU service is not ready')
     def progress(value):
+        value={**value,**metadata}
         atomic_json(Path(output)/(ident+'.json'),value)
         if changed:changed(value)
-    with admission(host,768,stop):
+    with admission(host,memory,stop):
         result=aggregate_qc(Path(host['cache'])/ident,item,CHUNK_BYTES,progress=progress,stop=stop,gpu=config,gpu_parallel=True)
+    result={**result,**metadata}
     atomic_json(Path(output)/(ident+'.json'),result)
     return result
 

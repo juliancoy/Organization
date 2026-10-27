@@ -187,7 +187,11 @@ def aggregate_qc(folder,item,chunk_bytes=CHUNK_BYTES,progress=None,stop=None,gpu
     """Four-line ENA FASTQ, Phred+33; sequences and identifiers never leave the parser."""
     progress=progress or (lambda value:None);stop=stop or STOP;last=[0.];started=time.monotonic()
     counts={'reads':0,'bases':0,'gc_bases':0,'ambiguous_bases':0,'quality_sum':0,'q20_bases':0,'q30_bases':0,'min_length':None,'max_length':0}
-    batch=BatchCounts(counts,batch_bases,gpu_request or ((lambda sequence,quality:request_gpu_batch(sequence,quality,gpu)) if gpu else None),gpu_parallel)
+    checked_gpu=[False]
+    def gpu_call(sequence,quality):
+        config={**gpu,'verify':bool(gpu.get('verify') or gpu.get('verify_first') and not checked_gpu[0])}
+        result=request_gpu_batch(sequence,quality,config);checked_gpu[0]=True;return result
+    batch=BatchCounts(counts,batch_bases,gpu_request or (gpu_call if gpu else None),gpu_parallel)
     reader=None
     def report(phase,force=False):
         now=time.monotonic()
@@ -233,7 +237,8 @@ def run_remote(host,item,ident,output,mapping_reserve_mb=7000,changed=None,downl
     from scripts import genomics_distributed as distributed
     from scripts.wgs_swarm_download import AgentClient,atomic_json,release_after_cleanup
     name='genomics-'+uuid.uuid4().hex;lease=uuid.uuid4().hex;client=AgentClient(host);done=threading.Event();process=None;errors=[]
-    memory=qc_memory_mb(min(CHUNK_BYTES,item['bytes']));report_path=output/(ident+'.json')
+    gpu_enabled=host.get('gpu_qc') is True or host['host']=='julian-minipc.local'
+    memory=qc_memory_mb(min(CHUNK_BYTES,item['bytes']),gpu_parallel=gpu_enabled);report_path=output/(ident+'.json')
     try:
         status=client.call('status')
         if status.get('machine')!=host['machine'] or not distributed.eligible(status) or 'renewable-resources' not in status.get('capabilities',[]):raise RuntimeError('Worker identity, policy or renewable leases unavailable')
@@ -266,10 +271,11 @@ def run_remote(host,item,ident,output,mapping_reserve_mb=7000,changed=None,downl
         threading.Thread(target=cancel,daemon=True).start()
         payload={'item':item,'folder':'/input/'+ident,'chunk_bytes':CHUNK_BYTES}
         gpu_mount=[]
-        if host['host']=='julian-minipc.local':
+        if gpu_enabled:
             gpu_root=str(Path(host['cache']).parent/'gpu-qc')
             subprocess.run(distributed.shell_command(host,['mkdir','-p','--',gpu_root+'/batches']),check=True,timeout=20)
-            payload['gpu']={'local_root':'/gpu-qc','host_root':gpu_root,'verify':gpu_verify}
+            payload['gpu']={'local_root':'/gpu-qc','host_root':gpu_root,'verify':gpu_verify,'verify_first':True}
+            payload['gpu_parallel']=True
             gpu_mount=['--mount','type=bind,src='+gpu_root+',dst=/gpu-qc']
         worker=Path(__file__).read_text()
         argv=['docker','run','--rm','--pull=never','--name',name,'--label','org.lifetech.genomics=true','--label','org.lifetech.public-wgs-qc=true','--network','none','--read-only','--log-driver','none','--cpus','1','--memory',str(memory)+'m','--memory-swap',str(memory)+'m','--pids-limit','32','--cap-drop','ALL','--security-opt','no-new-privileges','--ulimit','core=0:0','--user',host.get('container_user','1000:1000'),'--mount','type=bind,src='+host['cache']+',dst=/input,readonly',*gpu_mount,'-i',host['image'],'python','-c',worker,'--worker']
@@ -443,7 +449,7 @@ def main():
     if args.worker:
         import sys
         job=json.load(sys.stdin)
-        result=aggregate_qc(job['folder'],job['item'],job.get('chunk_bytes',CHUNK_BYTES),progress=lambda value:print(json.dumps(value),flush=True),gpu=job.get('gpu'),batch_bases=job.get('batch_bases',BATCH_BASES))
+        result=aggregate_qc(job['folder'],job['item'],job.get('chunk_bytes',CHUNK_BYTES),progress=lambda value:print(json.dumps(value),flush=True),gpu=job.get('gpu'),batch_bases=job.get('batch_bases',BATCH_BASES),gpu_parallel=job.get('gpu_parallel',False))
         print(json.dumps(result),flush=True);return
     for sig in (signal.SIGTERM,signal.SIGINT):signal.signal(sig,lambda *_:STOP.set())
     if any(value is None for value in (args.manifest,args.hosts,args.download_state,args.output)):parser.error('Coordinator requires manifest, hosts, download-state and output')
