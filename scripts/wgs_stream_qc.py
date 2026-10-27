@@ -202,6 +202,9 @@ def qc_memory_mb(chunk_bytes=CHUNK_BYTES,rss_kib=None,batch_bases=BATCH_BASES):
 
 
 def run_remote(host,item,ident,output,mapping_reserve_mb=7000,changed=None,download_state=None,gpu_verify=False):
+    if host.get('local') and host.get('gpu_qc_native'):
+        from scripts.gpu_qc_native import run_native
+        return run_native(host,item,ident,output,changed,STOP,gpu_verify)
     from scripts import genomics_distributed as distributed
     from scripts.wgs_swarm_download import AgentClient,atomic_json,release_after_cleanup
     name='genomics-'+uuid.uuid4().hex;lease=uuid.uuid4().hex;client=AgentClient(host);done=threading.Event();process=None;errors=[]
@@ -357,7 +360,7 @@ def gpu_backfill(args):
     if any((p/'.git').exists() or p.is_symlink() for p in [args.output,*args.output.parents]):raise ValueError('Backfill state must remain private outside Git')
     lock=(args.output/'backfill.lock').open('a');fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
     catalog={file_id(item):item for item in json.loads(args.manifest.read_text())['files'] if item['sample']=='Watson'}
-    host=next(h for h in json.loads(args.hosts.read_text()) if h['host']=='julian-minipc.local')
+    host=next(h for h in json.loads(args.hosts.read_text()) if h['host']==args.gpu_host)
     state_path=args.output/'state.json'
     try:state=json.loads(state_path.read_text())
     except (FileNotFoundError,ValueError):state={'jobs':{}}
@@ -410,7 +413,7 @@ def validate_backfill(result,baseline):
 
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--worker',action='store_true');parser.add_argument('--gpu-backfill',action='store_true');parser.add_argument('--qc-baseline',type=Path);parser.add_argument('--sample',action='append');parser.add_argument('--manifest',type=Path);parser.add_argument('--hosts',type=Path);parser.add_argument('--download-state',type=Path);parser.add_argument('--output',type=Path)
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--worker',action='store_true');parser.add_argument('--gpu-backfill',action='store_true');parser.add_argument('--gpu-host',default='julian-minipc.local');parser.add_argument('--qc-baseline',type=Path);parser.add_argument('--sample',action='append');parser.add_argument('--manifest',type=Path);parser.add_argument('--hosts',type=Path);parser.add_argument('--download-state',type=Path);parser.add_argument('--output',type=Path)
     args=parser.parse_args();os.umask(0o077)
     if args.worker:
         import sys
