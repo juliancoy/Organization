@@ -42,9 +42,7 @@ def catalog(root, specs, repositories=None, bases=None):
         if not files:
             raise ValueError('No tracked test files found for ' + base)
         for path in files:
-            if base in ('monitor', 'workspace'):
-                command = ['python3', '-m', 'unittest', 'discover', '-s', str(Path(path).parent), '-p', Path(path).name, '-v']
-            elif base == 'identity-python':
+            if base in ('monitor', 'workspace', 'identity-python'):
                 command = ['python', '-m', 'pytest', path, '-q', '--tb=short']
             elif base == 'web':
                 command = ['npm', 'test', '--', path, '--maxWorkers=1']

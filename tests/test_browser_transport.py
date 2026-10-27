@@ -47,7 +47,8 @@ class BrowserTransportTests(unittest.TestCase):
             image='sha256:'+64*'a';client.images.get.return_value.id=image
             client.containers.run.return_value.id='owned-container'
             ident='20261024T221500Z-1234abcd'
-            with patch('launcher_agent.threading.Timer'):
+            with patch('launcher_agent.threading.Timer'), patch('launcher_agent.ResourceLease') as lease:
+                lease.return_value.try_acquire.return_value=True
                 agent.p2p_start({'id':ident,'image':image,'upload':'fixture'})
             folder=agent.folder(ident+'-p2p')
             self.assertEqual(folder.stat().st_mode & 0o777,0o755)

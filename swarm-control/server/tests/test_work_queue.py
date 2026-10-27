@@ -39,6 +39,10 @@ class FileQueueTests(unittest.TestCase):
         self.assertIn('tests/nested/two_test.py', files)
         self.assertNotIn('src/not-a-test.ts', files)
         self.assertEqual(len(files), 11)
+        for task in tasks:
+            if specs[task].get('base') in ('monitor','workspace','identity-python'):
+                self.assertEqual(specs[task]['test'][:3], ['python','-m','pytest'])
+                self.assertIn('pytest', specs[task]['prepare'])
         self.assertEqual({call[-1] for call in calls}, {r['commit'] for r in repos.values()})
         self.assertIn('web--build-bundle', tasks)
         self.assertIn('web--typecheck', tasks)
