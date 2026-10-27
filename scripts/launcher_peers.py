@@ -478,7 +478,7 @@ class JobGateway:
     def receive(self, peer, message):
         import base64,re
         config=json.loads(self.agent.config.read_text())
-        if peer not in config['peers'] and peer not in config.get('internet_nodes',{}).values():raise ValueError('Unenrolled RPC peer')
+        if peer not in config.get('peers',{}) and peer not in config.get('internet_nodes',{}).values():raise ValueError('Unenrolled RPC peer')
         ident=message['id'];reply=message['reply']
         if not isinstance(ident,str) or not re.fullmatch('[a-f0-9]{32}',ident) or type(reply)!=bool:raise ValueError('Invalid RPC frame')
         key=(peer,ident,reply)
