@@ -2,6 +2,13 @@ import {hostCpuDetail,hostCpuContext,cpuStatusLabel} from './cpu-report.js';
 export const valid=v=>typeof v==='number'&&Number.isFinite(v)&&v>=0;
 export function deviceLevels(data,metrics,mode,now=Date.now()) {
  const hosts=metrics.hosts||[],used=new Set(),rows=[];
+ if(mode==='disk')return hosts.flatMap(host=>(host.disks||[]).flatMap(disk=>['read','write'].map(direction=>{
+  const fresh=disk.status==='live'&&now/1000-disk.sampled_at<15,id=host.host+':disk:'+disk.identity;
+  return {id:id+':'+direction,deviceId:id,name:host.host+' · '+disk.name+' · '+direction,machine:host.host,disk:disk.name,model:disk.model,direction,
+   value:fresh&&valid(disk[direction+'_percent'])?disk[direction+'_percent']:null,throughput:fresh&&valid(disk[direction+'_bytes_per_second'])?disk[direction+'_bytes_per_second']/1e6:null,
+   unavailableLabel:fresh?'Observing…':'No data',linkLabel:disk.capacity_basis?`Observed sustained: ${(disk.capacity_bytes_per_second/1e6).toFixed(1)} MB/s`:'Observing sustained capacity (30 s under load)',
+   basis:'Read and write each use the same observed sustained combined-throughput baseline. Workload-dependent estimate, not a hardware limit; bursts can exceed 100%.'};
+ })));
  if(['gpu','vram'].includes(mode))return hosts.flatMap(h=>(h.hardware?.gpus||[]).map((gpu,index)=>{
   const fresh=h.status==='live'&&now/1000-h.sampled_at<15&&!h.hardware.stale;
   let value=mode==='gpu'?gpu.utilization_percent:valid(gpu.memory_total_mib)&&gpu.memory_total_mib>0&&valid(gpu.memory_free_mib)?100*(1-gpu.memory_free_mib/gpu.memory_total_mib):null;
