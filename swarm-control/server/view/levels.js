@@ -25,7 +25,7 @@ function legendButton(row,network=false){
  button.setAttribute('aria-label',`${row.name}: ${amount}${row.disk&&row.throughput!==null?' · '+row.throughput.toFixed(1)+' MB/s':''}`);button.title=row.basis;
  button.onmouseenter=button.onfocus=()=>{highlighted=row.id;draw();};
  button.onmouseleave=button.onblur=()=>{if(highlighted===row.id){highlighted=null;draw();}};
- const label=document.createElement('span');label.textContent=network?(row.direction==='send'?'↑ Send':row.direction==='receive'?'↓ Receive':row.direction==='read'?'Read · '+(row.throughput===null?'No data':row.throughput.toFixed(1)+' MB/s'):row.direction==='write'?'Write · '+(row.throughput===null?'No data':row.throughput.toFixed(1)+' MB/s'):'Total'):row.name;
+ const label=document.createElement('span');if(row.disk)label.style.whiteSpace='normal';label.textContent=network?(row.direction==='send'?'↑ Send':row.direction==='receive'?'↓ Receive':row.direction==='read'?'Read · '+(row.throughput===null?'No data':row.throughput.toFixed(1)+' MB/s'):row.direction==='write'?'Write · '+(row.throughput===null?'No data':row.throughput.toFixed(1)+' MB/s'):'Total'):row.name;
  const value=document.createElement('strong');value.textContent=amount;button.append(label,value);
  button.onclick=()=>{hidden.has(row.id)?hidden.delete(row.id):hidden.add(row.id);update(...lastData,false);};
  return button;
