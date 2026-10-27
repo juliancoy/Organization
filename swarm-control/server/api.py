@@ -58,7 +58,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         for k,v in {'Content-Type':kind,'Content-Length':str(len(raw)),'Cache-Control':'no-store',
                     'X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','X-Frame-Options':'DENY',
-                    'Content-Security-Policy':"default-src 'self'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self' data: blob:; frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'",'Strict-Transport-Security':'max-age=31536000'}.items():self.send_header(k,v)
+                    'Content-Security-Policy':"default-src 'self'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self' data: blob: https:; frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'",'Strict-Transport-Security':'max-age=31536000'}.items():self.send_header(k,v)
         if kind=='application/vnd.android.package-archive':self.send_header('Content-Disposition','attachment; filename="swarm-control-test.apk"')
         if cookie is not None:
             for item in cookie if isinstance(cookie,list) else [cookie]:self.send_header('Set-Cookie',item)
@@ -75,11 +75,10 @@ class Handler(BaseHTTPRequestHandler):
         if self.command=='GET' and path=='/health':return self.reply(200,{'service':'swarm-control','status':'ok'})
         if self.command=='GET' and path in ('/auth/login','/auth/callback'):
             try:
-                import identity
                 if path=='/auth/login':
                     query=parse_qs(urlsplit(self.path).query,keep_blank_values=True)
                     if set(query)-{'device_label'} or any(len(v)!=1 for v in query.values()):raise ValueError('Invalid sign-in parameters')
-                    target,cookie=identity.start(origin,self.device(),query.get('device_label',['Galaxy'])[0])
+                    target,cookie=identity.start(origin,self.device(),query.get('device_label',['Browser'])[0])
                     return self.reply(303,{},cookie=cookie,location=target)
                 cookies=SimpleCookie(self.headers.get('Cookie',''))
                 browser=cookies[identity.LOGIN_COOKIE].value if identity.LOGIN_COOKIE in cookies else None
@@ -92,12 +91,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(403,{'error':{'message':'PIdP sign-in failed. Use the CompAI owner account and restart at /auth/login.'}})
         if self.command=='GET' and path in ASSETS:
             name=ASSETS[path];return self.reply(200,(VIEW/name).read_bytes(),mimetypes.guess_type(name)[0] or 'application/octet-stream')
-        pairing=self.command=='POST' and path in ('/pair','/logout')
-        deployment=path in ('/api/v1/test-app/status','/api/v1/test-app/offer','/api/v1/test-app/download')
+        pairing=self.command=='POST' and path=='/logout'
+        deployment=path in ('/api/v1/test-app/status','/api/v1/test-app/download')
         valid_read=self.command=='GET' and (path in ('/api/v1/swarm/wgs','/api/v1/swarm/history','/api/v1/swarm/connections','/api/v1/swarm/task-manager','/api/v1/swarm/status','/api/v1/swarm/session','/api/v1/swarm/research','/api/v1/swarm/research/jobs') or path==API+'queue' or path==API+'threads' or path.startswith(API+'threads/') or path in ('/api/v1/test-app/status','/api/v1/test-app/download'))
-        valid_write=self.command=='POST' and path in (API+'commands',API+'queue',API+'queue/cancel',API+'transcribe','/api/v1/swarm/research/jobs','/api/v1/test-app/offer','/api/v1/swarm/tests/request')
+        valid_write=self.command=='POST' and path in (API+'commands',API+'queue',API+'queue/cancel',API+'transcribe','/api/v1/swarm/research/jobs','/api/v1/swarm/tests/request')
         if not (valid_read or valid_write or pairing):return self.reply(404,{'error':{'message':'Not found'}})
-        if path not in ('/pair','/logout') and not devices.valid(self.device()):return self.reply(401,{'error':{'message':'Sign in with PIdP to reconnect to CompAI'}})
+        if path!='/logout' and not devices.pidp_valid(self.device()):return self.reply(401,{'error':{'message':'Sign in with PIdP to reconnect to CompAI'}})
         if path==API+'transcribe':
             from voice import transcribe,VoiceError,MAX_AUDIO,TYPES
             try:
@@ -126,9 +125,7 @@ class Handler(BaseHTTPRequestHandler):
                 if path=='/logout':
                     if self.device():devices.revoke(self.device())
                     return self.reply(200,{'ok':True},cookie='__Host-compai_device=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0')
-                if path=='/pair' and (not isinstance(body,dict) or set(body)!={'token'}):raise ValueError()
-                token=devices.session(body['token'])
-                return self.reply(200,{'ok':True},cookie='__Host-compai_device='+token+'; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age='+str(devices.LIFETIME))
+
             if path=='/api/v1/swarm/wgs':
                 from wgs_progress import snapshot
                 return self.reply(200,snapshot())
@@ -156,20 +153,20 @@ class Handler(BaseHTTPRequestHandler):
                 from research import snapshot
                 try:return self.reply(200,snapshot())
                 except (OSError,ValueError):return self.reply(503,{'error':{'message':'Research status unavailable'}})
-            if path=='/api/v1/swarm/session':return self.reply(200,devices.describe(self.device()))
+            if path=='/api/v1/swarm/session':return self.reply(200,identity.session_info(origin,self.device()))
             if path=='/api/v1/swarm/tests/request':
                 if body!={}:raise ValueError('No command parameters accepted')
                 from status import request_tests
                 return self.reply(202,request_tests())
             if deployment:
-                from apk_delivery import manager,artifact
+                from apk_delivery import artifact
                 if path.endswith('/download'):
                     data,_=artifact()
                     return self.reply(200,data,'application/vnd.android.package-archive')
-                if path.endswith('/status'):return self.reply(200,manager().status())
-                device=self.device()
-                valid=lambda: devices.valid(device)
-                return self.reply(200,manager().offer(body,valid))
+                if path.endswith('/status'):
+                    try:_,info=artifact()
+                    except (OSError,ValueError):info=None
+                    return self.reply(200,{'app':info,'transport':'https','authentication':'pidp'})
             if path in (API+'queue',API+'queue/cancel'):
                 from message_queue import manager
                 try:
@@ -188,9 +185,9 @@ class Handler(BaseHTTPRequestHandler):
 
 def pairing_payload(origin):
     import base64,qrcode,qrcode.image.svg,time
-    url=origin+'/#pair='+devices.issue()
+    url=origin+'/auth/login'
     svg=qrcode.make(url,image_factory=qrcode.image.svg.SvgPathFillImage).to_string()
-    return {'url':url,'expires_at':time.time()+600,'qr':'data:image/svg+xml;base64,'+base64.b64encode(svg).decode()}
+    return {'url':url,'expires_at':None,'method':'pidp','qr':'data:image/svg+xml;base64,'+base64.b64encode(svg).decode()}
 
 
 class LocalPairingHandler(Handler):
@@ -220,8 +217,8 @@ if __name__=='__main__':
         origin=os.getenv('CODEX_PUBLIC_ORIGIN','https://compai.lifetech.fyi')
         path=Path.home()/'.config/map-master/codex-pairing-link'
         fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
-        with os.fdopen(fd,'w') as stream:stream.write(origin+'/#pair='+devices.issue()+'\n')
-        path.chmod(0o600);print('One-time setup link saved to '+str(path)+' (expires in ten minutes)');sys.exit(0)
+        with os.fdopen(fd,'w') as stream:stream.write(origin+'/auth/login\n')
+        path.chmod(0o600);print('PIdP sign-in link saved to '+str(path));sys.exit(0)
     origin=os.environ['CODEX_PUBLIC_ORIGIN']
     parsed=urlsplit(origin)
     if parsed.scheme!='https' or not parsed.hostname or parsed.path or parsed.query or parsed.fragment or parsed.username:raise ValueError('Configure one HTTPS origin')

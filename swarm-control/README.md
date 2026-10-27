@@ -8,7 +8,7 @@ application dependencies. PIdP remains the shared identity provider.
 ## Ownership
 
 - `server/`: coordinator, REST/MCP operator API, network collectors, remote API,
-  web console, controller sessions, and fixed-APK WebRTC delivery.
+  web console, controller sessions, and authenticated Android-launcher delivery.
 - `android/`: browser-based Android launcher; it shares the browser's authenticated
   session instead of maintaining a second WebView identity.
 - Root `scripts/launcher_*.py`: machine-local agent transport and enrollment.
@@ -57,7 +57,10 @@ Client credentials and controller records are owner-private under
 can remain signed in; reauthentication rotates only that browser’s session.
 Lock revokes only the current browser, including its transfer authorization.
 Controller records retain their label, creation, expiry, and last-seen times.
-Local QR enrollment remains available through the owner launcher.
+WAN controller sessions are issued only after PIdP sign-in. Legacy owner tokens,
+one-time pairing redemption and legacy unclassified sessions cannot authorize the
+public API. Local QR codes now link to `/auth/login`; they carry no credential.
+Existing browsers must sign in once again after this migration.
 
 ## Interfaces and state
 
@@ -266,3 +269,23 @@ literal text. Update the vendored module and license with the npm dependency.
 Run `npm --prefix swarm-control run test:markdown` for isolated desktop/mobile
 rendering, clipboard, unfinished-message and hostile-content checks. Screenshots
 are written to `artifacts/swarm-markdown/` without reading real conversations.
+
+
+The upper-right identity badge uses the verified PIdP person's public name and
+avatar, with initials when no image is available. Only the verified canonical ID
+is stored alongside the existing expiring controller session; no PIdP access or
+refresh token is retained. Lock deletes that browser session. Public-profile
+responses have a bounded 60-second in-memory cache and disappear on process exit.
+The optional `public_profile_endpoint` must be HTTPS on the configured issuer;
+OrgPortal's identity proxy uses `/pidp/auth/public/users`.
+
+`npm --prefix swarm-control run test:pidp-browser` uses isolated synthetic HTTPS
+sessions to check desktop/mobile sign-in, avatar rendering, retired pairing,
+independent devices and logout. PIdP protocol tests run locally with
+`python3 -m pytest tests/test_mcp_authorization.py tests/test_identity_urls.py -q`
+from the PIdP checkout; they use disposable fixtures rather than production login.
+
+WAN WebRTC offer/signaling for APK delivery is retired (`/api/v1/test-app/offer`
+returns 404). The launcher is delivered through PIdP-authenticated HTTPS. The
+local fleet agent protocol remains a separate machine execution boundary and is
+not published by the console tunnel.

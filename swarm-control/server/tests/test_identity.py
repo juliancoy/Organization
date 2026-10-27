@@ -75,11 +75,23 @@ class PIdPRecoveryTests(unittest.TestCase):
             exchange = parse_qs(fetch.call_args_list[0].args[1].decode())
             self.assertEqual(exchange['resource'], [self.cfg['resource']])
             self.assertIn('code_verifier', exchange)
-        self.assertTrue(devices.valid(session)); self.assertTrue(devices.valid(old))
+        self.assertTrue(devices.pidp_valid(session)); self.assertTrue(devices.valid(old)); self.assertFalse(devices.pidp_valid(old))
         self.assertTrue(devices.valid(devices.session(unused)))
         stored = devices.FILE.read_text()
         self.assertNotIn(token, stored); self.assertNotIn(session, stored)
         self.assertEqual(len(json.loads(stored)['sessions']), 3)
+
+    def test_verified_session_uses_pidp_profile_and_rejects_non_https_avatars(self):
+        with devices.state() as state:token=devices.new_session(state,'Laptop',pidp_identity='owner-person')
+        self.addCleanup(auth.PROFILE_CACHE.clear);auth.PROFILE_CACHE.clear()
+        with patch.object(auth,'fetch',return_value=[{'id':'owner-person','display_name':'Test Owner','avatar_url':'https://identity.example/avatar.png'}]):
+            profile=auth.session_info(ORIGIN,token)
+        self.assertEqual(profile['user'],{'name':'Test Owner','avatar_url':'https://identity.example/avatar.png'})
+        self.assertNotIn('pidp_identity',profile)
+        auth.PROFILE_CACHE.clear()
+        with patch.object(auth,'fetch',return_value=[{'id':'owner-person','avatar_url':'javascript:alert(1)'}]):
+            self.assertIsNone(auth.session_info(ORIGIN,token)['user']['avatar_url'])
+        with self.assertRaises(auth.Denied):auth.session_info(ORIGIN,devices.session(devices.issue()))
 
     def test_other_account_cannot_disconnect_owner(self):
         old = devices.session(devices.issue()); query, browser, _ = self.login()

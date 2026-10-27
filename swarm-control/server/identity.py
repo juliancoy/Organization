@@ -59,7 +59,7 @@ def config(origin):
     return value
 
 
-def start(origin,current_device=None,label='Galaxy'):
+def start(origin,current_device=None,label='Browser'):
     cfg = config(origin)
     if not isinstance(label,str) or not 1<=len(label.strip())<=64 or any(ord(c)<32 for c in label):
         raise Denied('Enter a device name of 1–64 characters.')
@@ -119,6 +119,7 @@ def verify(token, cfg):
     canonical=identity.get('canonical_user_id')
     if not isinstance(canonical,str) or not hmac.compare_digest(canonical,cfg['owner_canonical_user_id']):
         raise Denied('This PIdP account is not the CompAI owner.')
+    return canonical
 
 
 def complete(origin, query, browser):
@@ -139,9 +140,38 @@ def complete(origin, query, browser):
         'grant_type': 'authorization_code', 'code': query['code'][0], 'redirect_uri': cfg['redirect_uri'],
         'code_verifier': pending['verifier'], 'resource': cfg['resource']}).encode(),
         {'Content-Type': 'application/x-www-form-urlencoded', 'Authorization': 'Basic ' + basic})
-    verify(tokens['access_token'], cfg)
+    canonical=verify(tokens['access_token'], cfg)
     # No PIdP token is sent to the browser or retained as a remote credential.
     with devices.state() as value:
         # Reauthentication rotates this browser only; other controllers remain valid.
         if pending['device']:value['sessions'].pop(pending['device'],None)
-        return devices.new_session(value,pending['label'])
+        return devices.new_session(value,pending['label'],pidp_identity=canonical)
+
+
+PROFILE_CACHE = {}
+
+def session_info(origin, token):
+    record=devices.describe(token)
+    if not record or not devices.pidp_valid(token):raise Denied('Sign in with PIdP.')
+    cfg=config(origin)
+    if record['pidp_identity']!=cfg['owner_canonical_user_id']:raise Denied('This PIdP account is not the CompAI owner.')
+    key=(cfg['issuer'],record['pidp_identity']);cached=PROFILE_CACHE.get(key)
+    profile={'name':'PIdP user','avatar_url':None}
+    if cached and cached[0]>time.time():profile=cached[1]
+    else:
+        try:
+            endpoint=cfg.get('public_profile_endpoint',cfg['issuer']+'/auth/public/users')
+            parsed_endpoint=urlsplit(endpoint)
+            if parsed_endpoint.scheme!='https' or parsed_endpoint.netloc!=urlsplit(cfg['issuer']).netloc or parsed_endpoint.query or parsed_endpoint.fragment:raise Denied('Invalid PIdP public profile endpoint.')
+            rows=fetch(endpoint+'?'+urlencode({'ids':record['pidp_identity']}))
+            row=next((row for row in rows if isinstance(row,dict) and row.get('id')==record['pidp_identity']),{}) if isinstance(rows,list) else {}
+            name=row.get('display_name') or row.get('full_name')
+            if isinstance(name,str) and name.strip():profile['name']=name[:160]
+            avatar=row.get('avatar_url')
+            if isinstance(avatar,str) and len(avatar)<=2048:
+                parsed=urlsplit(avatar)
+                if parsed.scheme=='https' and parsed.hostname and not parsed.username and not parsed.password:profile['avatar_url']=avatar
+            PROFILE_CACHE.clear();PROFILE_CACHE[key]=(time.time()+60,profile)
+        except Exception:
+            PROFILE_CACHE.clear();PROFILE_CACHE[key]=(time.time()+60,profile)  # Profile outages do not block sign-in or cause retry storms.
+    return {**{key:record[key] for key in ('label','created','last_seen','expires')},'auth_method':'pidp','user':profile}

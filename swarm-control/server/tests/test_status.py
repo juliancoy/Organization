@@ -17,7 +17,7 @@ class RemoteStatusBoundaryTests(unittest.TestCase):
             self.assertEqual(self.request('/api/v1/swarm/status', 'POST', 'owner'*16, 'https://compai.example', body={}), 404)
             snapshot.assert_not_called()
             self.assertEqual(self.request('/api/v1/swarm/status', token='owner'*16), 401)
-            cookie='__Host-compai_device='+devices.session(devices.issue())
+            cookie=self.cookie
             self.assertEqual(self.request('/api/v1/swarm/status', cookie=cookie), 200)
             self.assertEqual(self.request('/api/v1/swarm/status', cookie=cookie, origin='https://evil.example'), 403)
 

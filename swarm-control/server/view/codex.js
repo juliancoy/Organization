@@ -16,12 +16,13 @@ const mapLink=el('a','Swarm status ↗','codex-map-link'); mapLink.href='/swarm-
 const taskLink=el('a','Task Manager','codex-map-link');taskLink.href='/task-manager';
 const researchLink=el('a','Research ↗','codex-map-link');researchLink.href='/research.html';
 const historyLink=el('a','History','codex-map-link');historyLink.href='/history';
-const headerActions=el('div','','codex-header-actions'); headerActions.append(taskLink,historyLink,mapLink,researchLink,lock); heading.append(title,headerActions);
+const headerActions=el('div','','codex-header-actions'); headerActions.append(taskLink,historyLink,mapLink,researchLink,lock);
+const userBadge=el('div','','pidp-user');userBadge.hidden=true;const userAvatar=el('img');userAvatar.width=36;userAvatar.height=36;userAvatar.referrerPolicy='no-referrer';const userInitials=el('span','','pidp-user-initials');const userName=el('span','','pidp-user-name');userBadge.append(userAvatar,userInitials,userName);headerActions.append(userBadge); heading.append(title,headerActions);
 const unlock = el('form', '', 'codex-unlock');
 const label = el('label', 'Codex owner token '), password = el('input'); password.type = 'password'; password.autocomplete = 'off'; password.required = true; password.placeholder = 'Enter your owner token'; label.append(password);
-const connect = el('button', 'Connect'); connect.type = 'submit'; unlock.append(label, connect, el('small', secureRemote ? 'Open a one-time pairing link from CompAI, or use your owner token once. This browser stays paired for 30 days; Lock revokes it.' : 'Use localhost or an SSH tunnel. This separate owner token is never shared with test workers.'));
+const connect = el('button', 'Connect'); connect.type = 'submit'; unlock.append(label, connect, el('small', secureRemote ? 'Sign in with PIdP on this device. Lock signs out this browser.' : 'Use localhost or an SSH tunnel. This separate owner token is never shared with test workers.'));
 if(!allowedBrowser){password.disabled=true;connect.disabled=true;}
-const deviceLabel=el('input');deviceLabel.value='Galaxy';deviceLabel.maxLength=64;deviceLabel.required=true;
+const deviceLabel=el('input');deviceLabel.value= /Android/i.test(navigator.userAgent)?'Android':/iPhone|iPad/i.test(navigator.userAgent)?'iOS': 'Browser';deviceLabel.maxLength=64;deviceLabel.required=true;
 if(secureRemote){const deviceName=el('label','Device name ');deviceName.append(deviceLabel);const signIn=el('button','Sign in with PIdP');signIn.type='submit';unlock.replaceChildren(deviceName,signIn,el('p','Use your authorized PIdP account. Multiple devices can stay signed in. Lock signs out this browser only.'));}
 const status = el('p', 'Connect to view your conversations.', 'codex-status'); status.setAttribute('role', 'status');
 const workspace = el('div', '', 'codex-workspace'); workspace.hidden = true;
@@ -56,7 +57,7 @@ function saveDraft(){if(selected){try{if(input.value)sessionStorage.setItem(draf
 function restoreDraft(){try{input.value=sessionStorage.getItem(draftsPrefix+selected)||'';}catch{input.value='';}}
 const queue=messageQueue(api,()=>selected);conversation.append(queue.root);
 const voice=voiceRecorder({input,onDraft:()=>{requestId=null;saveDraft();input.dispatchEvent(new Event('input'));},onSend:()=>form.requestSubmit(),onBusy:value=>{voiceBusy=value;input.readOnly=value||busy;send.disabled=value||busy||screenshots.processing||(!input.value.trim()&&!screenshots.count);},transcribe:async(audio,signal)=>{
- const response=await fetch('/api/v1/master/codex/transcribe',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':audio.type},body:audio,signal:AbortSignal.any([signal,AbortSignal.timeout(150000)])});
+ const response=await fetch('/api/v1/master/codex/transcribe',{method:'POST',headers:{...(!secureRemote?{Authorization:'Bearer '+token}:{}),'Content-Type':audio.type},body:audio,signal:AbortSignal.any([signal,AbortSignal.timeout(150000)])});
  const result=await response.json();if(!response.ok)throw Error(result.error?.message||'Transcription failed.');return result;
 }});form.insertBefore(voice.root,actions);
 
@@ -64,7 +65,7 @@ const voice=voiceRecorder({input,onDraft:()=>{requestId=null;saveDraft();input.d
 function uuid() { const b = crypto.getRandomValues(new Uint8Array(16)); b[6] = (b[6] & 15) | 64; b[8] = (b[8] & 63) | 128; return [...b].map((x, i) => ([4,6,8,10].includes(i) ? '-' : '') + x.toString(16).padStart(2, '0')).join(''); }
 async function api(path, body) {
   if(!allowedBrowser)throw Error('Open this page through localhost or an SSH tunnel before entering a Codex owner token.');
-  const response = await fetch('/api/v1/master/codex/' + path, { method: body ? 'POST' : 'GET', cache: 'no-store', headers: { Authorization: 'Bearer ' + token, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(20000) });
+  const response = await fetch('/api/v1/master/codex/' + path, { method: body ? 'POST' : 'GET', cache: 'no-store', headers: { ...(!secureRemote?{Authorization:'Bearer '+token}:{}), ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(20000) });
   const value = await response.json();
   if (!response.ok) throw new Error(value.error?.message || 'Codex connection failed');
   return value;
@@ -87,7 +88,7 @@ async function load() {
   filterThreads();
   status.dataset.state=value.connected?'connected':'disconnected';
   status.textContent = value.machine + (value.connected ? ' · VS Code socket available' : ' · VS Code disconnected');
-  if(secureRemote){const r=await fetch('/api/v1/swarm/session',{cache:'no-store'});if(r.ok){const d=await r.json();deviceStatus.textContent=d?`This controller: ${d.label} · Last seen ${new Date(d.last_seen*1000).toLocaleString()}`:'';}}
+  if(secureRemote){const r=await fetch('/api/v1/swarm/session',{cache:'no-store'});if(r.ok){const d=await r.json();deviceStatus.textContent=d?`This controller: ${d.label} · Last seen ${new Date(d.last_seen*1000).toLocaleString()}`:'';const name=d.user?.name||'PIdP user';userName.textContent=name;userBadge.title='Signed in with PIdP as '+name;userBadge.hidden=false;userInitials.textContent=name.split(/\s+/).slice(0,2).map(part=>part[0]).join('').toUpperCase();userAvatar.hidden=true;userInitials.hidden=false;userAvatar.onload=()=>{userAvatar.hidden=false;userInitials.hidden=true;};userAvatar.onerror=()=>{userAvatar.hidden=true;userInitials.hidden=false;};userAvatar.alt=name+' avatar';if(d.user?.avatar_url&&userAvatar.getAttribute('src')!==d.user.avatar_url)userAvatar.src=d.user.avatar_url;else if(d.user?.avatar_url&&userAvatar.complete&&userAvatar.naturalWidth){userAvatar.hidden=false;userInitials.hidden=true;}}}
 }
 async function choose(id) {
   if (busy || voiceBusy) return;
@@ -139,7 +140,7 @@ unlock.onsubmit = async event => {
     await load(); password.value = ''; unlock.hidden = true; workspace.hidden = false; lock.hidden = false; form.hidden = !selected; }
   catch (error) { token = ''; failure(error); } finally { connect.disabled = false; }
 };
-lock.onclick = async () => { voice.cancel();queue.clear();screenshots.clear();for(const key of Object.keys(sessionStorage))if(key.startsWith(draftsPrefix))sessionStorage.removeItem(key); if(secureRemote){const response=await fetch('/logout',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(!response.ok){failure(Error('Could not revoke this device. Try Lock again.'));return;}} generation++; token = ''; selected = null; input.value = ''; requestId = null; list.replaceChildren(); transcript.replaceChildren(); info.replaceChildren(); workspace.hidden = true; workspace.classList.remove('codex-reading'); empty.hidden=false; transcript.hidden=true; form.hidden=true; renderedThread=''; renderedMessages=''; observedActivity=''; search.value=''; activity.hidden=true; latest.hidden=true; lock.hidden = true; unlock.hidden = false; status.dataset.state=''; status.textContent = 'Locked'; };
+lock.onclick = async () => { voice.cancel();queue.clear();screenshots.clear();for(const key of Object.keys(sessionStorage))if(key.startsWith(draftsPrefix))sessionStorage.removeItem(key); if(secureRemote){const response=await fetch('/logout',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(!response.ok){failure(Error('Could not revoke this device. Try Lock again.'));return;}} userBadge.hidden=true;userAvatar.removeAttribute('src');generation++; token = ''; selected = null; input.value = ''; requestId = null; list.replaceChildren(); transcript.replaceChildren(); info.replaceChildren(); workspace.hidden = true; workspace.classList.remove('codex-reading'); empty.hidden=false; transcript.hidden=true; form.hidden=true; renderedThread=''; renderedMessages=''; observedActivity=''; search.value=''; activity.hidden=true; latest.hidden=true; lock.hidden = true; unlock.hidden = false; status.dataset.state=''; status.textContent = 'Locked'; };
 refresh.onclick = () => { load().then(readThread).catch(failure); };
 let newChatRequest = null;
 newChat.onclick = async () => {
@@ -178,9 +179,9 @@ form.onsubmit = async event => {
 open.onclick = async () => { if (!selected || busy) return; open.disabled = true; try { const result = await api('commands', { thread_id: selected, action: 'open' }); status.textContent = result.message; } catch (error) { failure(error); } finally { open.disabled = false; } };
 async function restoreDevice(){
   if(!secureRemote)return;
-  const pair=new URLSearchParams(location.hash.slice(1)).get('pair');
-  if(pair){history.replaceState(null,'',location.pathname);try{const response=await fetch('/pair',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:pair})});if(!response.ok)throw Error('This pairing link expired or was already used. Request a fresh one from CompAI.');}catch(error){failure(error);return;}}
-  try{await load();unlock.hidden=true;workspace.hidden=false;lock.hidden=false;form.hidden=!selected;}catch(error){if(pair)failure(error);}
+  if(new URLSearchParams(location.hash.slice(1)).has('pair')){history.replaceState(null,'',location.pathname);status.textContent='Pairing links are retired. Sign in with PIdP.';}
+  try{await load();unlock.hidden=true;workspace.hidden=false;lock.hidden=false;form.hidden=!selected;}catch{userBadge.hidden=true;}
+
 }
 window.addEventListener('hashchange',()=>void restoreDevice());
 void restoreDevice();

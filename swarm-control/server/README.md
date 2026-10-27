@@ -650,7 +650,14 @@ Execution reuse remains based on verified passing results with matching relevant
 source, dependencies, image contents and machine identity. A forced run bypasses
 reuse and is labeled as such in the aggregate.
 
-### Swarm Control test deployment through the paired console
+### Swarm Control launcher delivery through PIdP
+
+Current WAN access is PIdP-only. `/pair` and WAN WebRTC offers are retired;
+legacy pairing sessions and owner bearer tokens cannot authorize remote access.
+Download the Android launcher through authenticated HTTPS. The following older
+WebRTC delivery description is retained as historical implementation context:
+
+### Retired paired-console WebRTC delivery
 
 `https://compai.lifetech.fyi/swarm-control` provides a paired-owner-authorized
 WebRTC connection to receive the fixed Swarm Control APK, verify SHA-256, and

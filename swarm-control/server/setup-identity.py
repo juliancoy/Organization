@@ -31,6 +31,7 @@ def main():
     if secret.stat().st_mode&0o077:raise RuntimeError('Resource credential must be owner-private')
     cfg={key:metadata[key] for key in ('issuer','authorization_endpoint','token_endpoint','jwks_uri','introspection_endpoint')}
     cfg.update({key:registration[key] for key in ('client_id','client_secret')})
+    cfg['public_profile_endpoint']=args.issuer+('/pidp' if args.issuer=='https://orgportal.cc' else '')+'/auth/public/users'
     cfg.update(redirect_uri=redirect,resource=args.origin+'/api/swarm',scope='swarm:control',owner_subject=args.owner_subject,
                owner_canonical_user_id=args.owner_canonical_id,resource_secret=secret.read_text().strip())
     identity.CONFIG.parent.mkdir(parents=True,exist_ok=True,mode=0o700)

@@ -38,10 +38,10 @@ def issue():
         value['pairs']={digest(token):time.time()+600};save(value)
     return token
 
-def new_session(value,label='QR-paired browser'):
+def new_session(value,label='Browser',pidp_identity=None):
     token=secrets.token_urlsafe(32)
     now=time.time()
-    value['sessions'][digest(token)]={'label':label,'created':now,'last_seen':now,'expires':now+LIFETIME};save(value)
+    value['sessions'][digest(token)]={'label':label,'created':now,'last_seen':now,'expires':now+LIFETIME,**({'auth_method':'pidp','pidp_identity':pidp_identity} if pidp_identity else {})};save(value)
     return token
 
 def session(pair):
@@ -69,3 +69,10 @@ def revoke(token=None):
         if token is None:value={'pairs':{},'sessions':{}}
         else:value['sessions'].pop(digest(token),None)
         save(value)
+
+
+def pidp_valid(token):
+    if not valid(token):return False
+    with state() as value:
+        record=value['sessions'].get(digest(token),{})
+        return record.get('auth_method')=='pidp' and isinstance(record.get('pidp_identity'),str) and bool(record['pidp_identity'])
