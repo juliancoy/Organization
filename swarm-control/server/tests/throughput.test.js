@@ -19,3 +19,11 @@ test('script filenames label process groups without claiming transferred filenam
  const m=throughputSources({...data,process_resources:resources,link_traffic:{...data.link_traffic,flows:{records}}},'download','',now,'process');
  assert.match(m.sources[0].name,/recovery\.py/);assert.equal(m.total,8);
 });
+test('uplink ledger includes unknown owners without adding duplicate client-side flows',()=>{
+ const uplink_flows={records:[{device_mac:'uplink-unattributed',local_ip:'10.0.0.1',remote_ip:'1.1.1.1',upload_mbps:2,download_mbps:3}]};
+ const value={...data,link_traffic:{...data.link_traffic,uplink_flows}};
+ const m=throughputSources(value,'upload','',now,'process','uplink');
+ assert.equal(m.total,2);assert.equal(m.rows[0].deviceName,'Unattributed uplink');
+ assert.equal(throughputSources(value,'upload','',now).total,5);
+ assert.equal(throughputSources(data,'upload','',now,'sender','uplink').fresh,false);
+});

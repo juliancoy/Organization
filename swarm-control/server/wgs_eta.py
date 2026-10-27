@@ -76,3 +76,54 @@ def estimate_eta(observations, total, *, now, blocked=False, window=900,
             'seconds_remaining':result['remaining']/rate,
             'optimistic_seconds':result['remaining']/high,
             'pessimistic_seconds':result['remaining']/low if low>0 else None}
+
+
+class TransferEstimator:
+    """Bounded per-source history; shared by API requests, never writes job state."""
+
+    def __init__(self):
+        from threading import Lock
+        self._lock = Lock()
+        self._history = {}
+
+    def sample(self, key, rows, *, now, generation=None):
+        estimates = []
+        with self._lock:
+            # Expire inactive histories and bound the number of retained sources.
+            self._history = {k:v for k,v in self._history.items() if now-v[0] < 3600}
+            for ident, row in rows:
+                total = row.get('bytes')
+                if not _finite(total) or total <= 0:
+                    continue
+                progress = row.get('progress') or {}
+                verified = row.get('status') == 'verified'
+                completed = total if verified else progress.get('bytes_completed', row.get('bytes_completed'))
+                timestamp = now if verified else progress.get('updated')
+                history_key = (key, ident)
+                history = self._history.get(history_key, (now, []))[1]
+                if _finite(completed) and _finite(timestamp):
+                    point = {'timestamp':timestamp, 'completed':completed,
+                             'generation':(generation, total)}
+                    if not history or point != history[-1]:
+                        history = (history + [point])[-240:]
+                self._history[history_key] = (now, history)
+                blocked = not verified and row.get('status') in (
+                    'failed', 'stopped', 'queued', 'waiting_capacity', 'waiting_for_worker')
+                estimates.append(estimate_eta(history, total, now=now, blocked=blocked))
+            if len(self._history) > 4096:
+                self._history = dict(list(self._history.items())[-4096:])
+        base = {'scope':'transfer_only', 'includes_analysis':False,
+                'seconds_remaining':None, 'optimistic_seconds':None,
+                'pessimistic_seconds':None, 'status':'insufficient_data'}
+        if not estimates:
+            return base
+        for state in ('blocked', 'stale', 'stalled', 'insufficient_data'):
+            if any(e['status'] == state for e in estimates):
+                return {**base, 'status':state}
+        # Parallel receivers finish when the slowest does, using their observed
+        # rates under current sharing. Subsequent capacity changes need new data.
+        return {**base, 'status':'complete' if all(e['status']=='complete' for e in estimates) else 'estimating',
+                'seconds_remaining':max(e['seconds_remaining'] for e in estimates),
+                'optimistic_seconds':max(e['optimistic_seconds'] for e in estimates),
+                'pessimistic_seconds':None if any(e['pessimistic_seconds'] is None for e in estimates) else max(e['pessimistic_seconds'] for e in estimates),
+                'bounds_kind':'observed_rate_sensitivity'}

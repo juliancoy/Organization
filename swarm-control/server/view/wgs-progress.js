@@ -3,11 +3,22 @@ const section=document.createElement('section');section.className='panel wgs-pro
 const title=document.createElement('h2');title.textContent='Whole-genome processing';const status=document.createElement('p');status.setAttribute('role','status');status.textContent='Loading work streams…';const streams=document.createElement('div');streams.className='connection-grid';const phases=document.createElement('p');phases.className='muted';const details=document.createElement('details');const summary=document.createElement('summary');summary.textContent='Cluster storage allocation';const storage=document.createElement('div');storage.className='wgs-storage';details.append(summary,storage);section.append(title,status,streams,phases,details);document.getElementById('device-levels').before(section);
 let timer,busy=false,controller;
 function text(tag,value){const node=document.createElement(tag);node.textContent=value;return node}
+function duration(seconds){return seconds<3600?Math.max(1,Math.ceil(seconds/60))+' min':(seconds/3600).toFixed(1)+' h'}
+function etaLabel(eta){
+ if(!eta)return 'Transfer ETA: collecting observations';
+ if(eta.status==='complete')return 'Transfer complete · analysis and validation have separate completion times';
+ if(eta.status==='estimating'){
+  const range=eta.pessimistic_seconds===null?'upper duration unknown':duration(eta.optimistic_seconds)+'–'+duration(eta.pessimistic_seconds);
+  return `Transfer ETA: about ${duration(eta.seconds_remaining)} · observed-rate range ${range}. Excludes analysis and capacity changes.`;
+ }
+ const labels={blocked:'waiting for capacity or receiver retry',stale:'progress report stale',stalled:'no recent completed-chunk progress',insufficient_data:'collecting at least 60 seconds of progress'};
+ return 'Transfer ETA unavailable · '+(labels[eta.status]||'collecting observations');
+}
 async function refresh(){
  if(document.hidden||busy)return;busy=true;controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),8000);
  try{const response=await fetch('/api/v1/swarm/wgs',{cache:'no-store',signal:controller.signal});if(!response.ok)throw Error(response.status===401?'Sign in to view processing progress.':'Processing feed unavailable · retrying');const data=await response.json();section.hidden=!data.available;if(!data.available)return;
  status.textContent=`${data.download_status==='running'?'Streaming downloads and analysis':data.download_status.replaceAll('_',' ')} · updates every 5 seconds`;
- streams.replaceChildren(...data.samples.map(sample=>{const card=document.createElement('article');card.className='connection-card';const progress=document.createElement('progress');progress.max=sample.bytes_total||1;progress.value=sample.bytes_received;progress.setAttribute('aria-label',sample.sample+' bytes received');card.append(text('strong',sample.sample),text('span',`${sample.files_verified} / ${sample.files_total} files checksum verified · ${sample.files_active} downloading${sample.files_failed?' · '+sample.files_failed+' awaiting retry':''}`),progress,text('small',`${gib(sample.bytes_received)} received / ${gib(sample.bytes_total)} expected`));return card}));
+ streams.replaceChildren(...data.samples.map(sample=>{const card=document.createElement('article');card.className='connection-card';const progress=document.createElement('progress');progress.max=sample.bytes_total||1;progress.value=sample.bytes_received;progress.setAttribute('aria-label',sample.sample+' bytes received');card.append(text('strong',sample.sample),text('span',`${sample.files_verified} / ${sample.files_total} files checksum verified · ${sample.files_active} downloading${sample.files_failed?' · '+sample.files_failed+' awaiting retry':''}`),progress,text('small',`${gib(sample.bytes_received)} received / ${gib(sample.bytes_total)} expected`),text('small',etaLabel(sample.eta)));return card}));
  const index=data.index.characters_processed&&data.index.characters_total?` · BWT pass ${(data.index.characters_processed/data.index.characters_total*100).toFixed(1)}%`:'';
  const gpu=data.gpu_qc&&data.gpu_qc.status!=='not_started'?` · Vulkan QC: ${data.gpu_qc.status.replaceAll('_',' ')} · ${(data.qc.gpu_bases||0).toLocaleString()} bases in ${(data.qc.gpu_batches||0).toLocaleString()} streaming batches`:'';
  const backfill=data.gpu_backfill&&data.gpu_backfill.status!=='not_started'?` · GPU histogram backfill: ${data.gpu_backfill.verified_files} files verified · ${data.gpu_backfill.bases.toLocaleString()} bases · ${data.gpu_backfill.cpu_crosschecked_batches} batches independently CPU checked`:'';

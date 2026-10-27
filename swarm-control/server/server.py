@@ -330,6 +330,7 @@ class Handler(BaseHTTPRequestHandler):
             data['docker_downloads'] = docker_downloads.view()
             own_mac = next((d.get('mac') for d in data.get('devices', []) if d.get('self')), None)
             data['host_attribution'] = socket_owners.annotate((data.get('link_traffic') or {}).get('flows', {}).get('records', []), own_mac)
+            socket_owners.annotate((data.get('link_traffic') or {}).get('uplink_flows', {}).get('records', []), own_mac)
             # Resolve observed remote destinations in the background, including unselected nodes.
             relationships = (data.get('link_traffic') or {}).get('outbound', {}).get('relationships', [])
             if parse_qs(urlsplit(self.path).query).get('resolve', ['1'])[0] != '0':
@@ -383,7 +384,21 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if handle_master(self,master_api):return
         path = urlsplit(self.path).path
-        if path in ('/api/mobile-tests/start','/api/distributed-tests/start','/api/distributed-tests/stop','/api/distributed-tests/rerun') and not authorize_dashboard(self):return
+        if path in ('/api/mobile-tests/start','/api/distributed-tests/start','/api/distributed-tests/stop','/api/distributed-tests/rerun','/api/telemetry/transport') and not authorize_dashboard(self):return
+        if path=='/api/telemetry/transport':
+            if self.headers.get('Origin')!='http://'+self.headers.get('Host',''):
+                self.send_error(403);return
+            try:
+                length=int(self.headers.get('Content-Length','0'))
+                if not 0<length<=256:raise ValueError('Invalid policy body')
+                options=json.loads(self.rfile.read(length))
+                if not isinstance(options,dict) or set(options)!={'transport'}:raise ValueError('Choose TCP or WebRTC')
+                body=json.dumps(cpu_monitor.set_telemetry_transport(options['transport'])).encode()
+            except ValueError as error:self.send_error(400,str(error));return
+            except (OSError,RuntimeError):self.send_error(503,'Launcher transport settings are unavailable');return
+            self.send_response(200);self.send_header('Content-Type','application/json')
+            self.send_header('Cache-Control','no-store');self.send_header('Content-Length',str(len(body)))
+            self.end_headers();self.wfile.write(body);return
         if path=='/api/mobile-tests/start':
             if self.headers.get('Origin')!='http://'+self.headers.get('Host',''):
                 self.send_error(403);return

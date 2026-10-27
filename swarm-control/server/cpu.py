@@ -35,6 +35,7 @@ class CpuMonitor:
         self.sampler=ResourceSampler()
         self.activity=activity
         self.network=network
+        self.telemetry_policy=None
 
     def sample(self, target):
         local=target.get('local',False)
@@ -56,6 +57,7 @@ class CpuMonitor:
                 client=AgentClient({**target,'agent_endpoint':'http://'+address+':8790'})
                 try:values=client.call('metrics',timeout=8)
                 finally:client.close()
+            if values.get('telemetry_transport')=='launcher-push':return {'host':target['host'],**values}
             sampler=self.interfaces.setdefault(target['host'],InterfaceSampler())
             values['network_interfaces']=sampler.sample(target)
             values['disks']=self.disks.setdefault(target['host'],DiskSampler()).sample(target)
@@ -94,10 +96,11 @@ class CpuMonitor:
             host.update(activity.get(host['host'],{'running_test_jobs':0,'scheduled_cpu_slots':0,'workload_phase':'idle' if activity_status=='available' else 'unknown'}))
             if host['sample_age_seconds']>15:
                 host.update(status='stale',percent=None,logical_cpus=[],ram_percent=None,disk_busy_percent=None,network_mbps=None)
-                if host.get('hardware'):host['hardware']={**host['hardware'],'stale':True}
+            if host.get('hardware'):
+                host['hardware']={**host['hardware'],'stale':now-host['hardware'].get('sampled_at',host['sampled_at'])>15}
         live=[h for h in hosts if h['status']=='live' and h.get('percent') is not None]
         active=[h for h in hosts if h['running_test_jobs']>0] if activity_status=='available' else []
-        return {'hosts':hosts,'history':history,'history_window_seconds':300,'total_percent':aggregate(hosts),'live_hosts':len(live),
+        return {'telemetry_policy':self.telemetry_policy,'hosts':hosts,'history':history,'history_window_seconds':300,'total_percent':aggregate(hosts),'live_hosts':len(live),
                 'measured_logical_cpus':sum(h['cpus'] for h in live),
                 'active_test_percent':aggregate(active),'test_hosts':len(active),'measured_test_hosts':sum(h['status']=='live' for h in active),
                 'activity_status':activity_status,
@@ -105,18 +108,63 @@ class CpuMonitor:
                 'sampling_method':'Counter deltas across the full interval; first sample and counter resets warm up without reporting zero.',
                 'scope':'Whole-machine executing CPU time, weighted by logical CPU count. I/O wait and stolen time are separate. Test-active machines include all their processes, not only tests. Unavailable and stale hosts are excluded.'}
 
+    def set_telemetry_transport(self, transport):
+        if transport not in ('tcp','webrtc'):raise ValueError('Choose TCP or WebRTC')
+        config=json.loads(CONFIG.read_text());name=config['name']
+        client=AgentClient({'host':name,'agent_endpoint':'http://'+config['peers'][name]+':8790'})
+        try:policy=client.call('metrics.transport',{'transport':transport},timeout=5)
+        finally:client.close()
+        with self.lock:self.telemetry_policy=policy
+        return policy
+
     def worker(self):
-        while True:
-            start=time.monotonic()
-            try:
-                inventory=targets()
-            except (OSError,ValueError):
-                inventory=[]
-            hosts=[{'host':'compai.local','local':True}]+[h for h in inventory if h['host']!='compai.local']
-            with concurrent.futures.ThreadPoolExecutor(max_workers=9) as pool:
-                samples=list(pool.map(self.sample,hosts))
-            network=self.network() if self.network else None
-            with self.lock:
-                self.hosts=samples
-                self.history.append(samples,time.time(),network)
-            time.sleep(max(0.1,5-(time.monotonic()-start)))
+        # Push updates and legacy polls progress independently. A slow machine
+        # cannot hold back another machine's measurements.
+        pending={};attempted={};fleet_cursor={};last_inventory=0;hosts=[]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=9) as pool:
+            while True:
+                now=time.time()
+                if now-last_inventory>=30:
+                    try:inventory=targets()
+                    except (OSError,ValueError):inventory=[]
+                    hosts=[{'host':'compai.local','local':True}]+[h for h in inventory if h['host']!='compai.local']
+                    last_inventory=now
+                try:
+                    config=json.loads(CONFIG.read_text());name=config['name']
+                    client=AgentClient({'host':name,'agent_endpoint':'http://'+config['peers'][name]+':8790'})
+                    try:fleet=client.call('metrics.fleet',fleet_cursor,timeout=1)
+                    finally:client.close()
+                    fleet_cursor={'session':fleet['session'],'after':fleet['revision']}
+                    with self.lock:
+                        policy=fleet.get('policy')
+                        if policy and policy.get('updated_at',0)>=(self.telemetry_policy or {}).get('updated_at',0):self.telemetry_policy=policy
+                        current={h['host']:h for h in self.hosts}
+                        for host in fleet['hosts']:
+                            if host['sampled_at']>=current.get(host['host'],{}).get('sampled_at',0):current[host['host']]=host
+                        self.hosts=list(current.values())
+                        for frame in fleet['events']:self.history.append(frame['hosts'],frame['sampled_at'],partial=True)
+                except (OSError,ValueError,TypeError,RuntimeError,KeyError):pass
+                for name,future in list(pending.items()):
+                    if not future.done():continue
+                    del pending[name]
+                    try:sample=future.result()
+                    except Exception:continue
+                    with self.lock:
+                        current={h['host']:h for h in self.hosts}
+                        previous=current.get(name,{})
+                        if previous and sample.get('status') in ('unavailable','authentication_denied','permission_denied'):continue
+                        if sample['sampled_at']>previous.get('sampled_at',0):
+                            current[name]=sample;self.hosts=list(current.values())
+                            self.history.append([sample],sample['sampled_at'],partial=True)
+                with self.lock:current={h['host']:h for h in self.hosts}
+                for target in hosts:
+                    name=target['host'];previous=current.get(name,{})
+                    if previous.get('telemetry_transport')=='launcher-push' and now-previous.get('sampled_at',0)<15:continue
+                    if name not in pending and now-attempted.get(name,0)>=5:
+                        attempted[name]=now;pending[name]=pool.submit(self.sample,target)
+                if self.network:
+                    try:network=self.network()
+                    except (OSError,ValueError,RuntimeError):network=None
+                    if network is not None:
+                        with self.lock:self.history.append([],time.time(),network)
+                time.sleep(1)

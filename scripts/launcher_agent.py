@@ -157,7 +157,7 @@ class ResourceLease:
 
 VERSION = 'lifetech-agent.v1'
 LIMIT = 1024 * 1024
-UNPRIVILEGED_OPS={'status','metrics','worker.policy','image.inspect','registry.read','tests.request','tests.status'}
+UNPRIVILEGED_OPS={'status','metrics','metrics.publish','metrics.fleet','worker.policy','image.inspect','registry.read','tests.request','tests.status'}
 
 
 def hardware_sample(root=Path('/sys/bus/pci/devices'), disk=Path.home()):
@@ -439,6 +439,378 @@ class ResourceSampler:
             return result
 
 
+# Local telemetry collectors live in the atomic launcher release. They never SSH.
+import copy
+import math
+import tempfile
+PROFILE_LOCK=threading.Lock()
+
+
+def telemetry_capture(script):
+    result=subprocess.run([sys.executable,'-c',script],capture_output=True,text=True,timeout=4,check=True)
+    if len(result.stdout)>65536:raise ValueError('Telemetry response exceeds limit')
+    return json.loads(result.stdout)
+
+
+INTERFACE_SCRIPT = r'''import json,time,re,subprocess
+from pathlib import Path
+interfaces={}
+for device in sorted(Path('/sys/class/net').iterdir()):
+ if device.name=='lo' or '/virtual/' in str(device.resolve()):continue
+ if len(interfaces)>=32:break
+ try:
+  interfaces[device.name]={'ifindex':int((device/'ifindex').read_text()),'state':(device/'operstate').read_text().strip(),
+   'rx_bytes':int((device/'statistics/rx_bytes').read_text()),'tx_bytes':int((device/'statistics/tx_bytes').read_text())}
+ except (OSError,ValueError):continue
+ row=interfaces[device.name]
+ try:
+  speed=int((device/'speed').read_text())
+  if speed>0:row['link_speed_mbps']=speed
+ except (OSError,ValueError):pass
+ try:
+  duplex=(device/'duplex').read_text().strip()
+  if duplex in ('full','half'):row['link_duplex']=duplex
+ except OSError:pass
+ if (device/'wireless').exists() or (device/'phy80211').exists():
+  row.pop('link_speed_mbps',None);row.pop('link_duplex',None)
+  try:
+   result=subprocess.run(['iw','dev',device.name,'link'],capture_output=True,text=True,timeout=.5)
+   for direction,rate in re.findall(r'(rx|tx) bitrate:\s*([0-9.]+) MBit/s',result.stdout):
+    value=float(rate)
+    if value>0:row['link_'+direction+'_mbps']=value
+  except (OSError,ValueError,subprocess.SubprocessError):pass
+print(json.dumps({'monotonic':time.monotonic(),'sampled_at':time.time(),
+ 'boot_id':Path('/proc/sys/kernel/random/boot_id').read_text().strip(),'interfaces':interfaces}))
+'''
+
+
+class InterfaceSampler:
+    def __init__(self,reader=None):
+        self.reader=reader or (lambda target: telemetry_capture(INTERFACE_SCRIPT));self.previous=None;self.seen={}
+
+    def sample(self,target):
+        try:current=self.reader(target)
+        except (OSError,ValueError,subprocess.SubprocessError):return []
+        previous=self.previous;self.previous=current
+        elapsed=current['monotonic']-previous['monotonic'] if previous else 0
+        valid=previous and previous.get('boot_id')==current.get('boot_id') and 0<elapsed<=30
+        rows=[]
+        for name,counters in list(current.get('interfaces',{}).items())[:32]:
+            row={'name':name,'ifindex':counters.get('ifindex'),'state':counters.get('state'),
+                 'status':'warming','sampled_at':current['sampled_at'],'window_seconds':elapsed if valid else None,
+                 'rx_mbps':None,'tx_mbps':None,'network_mbps':None}
+            for field in ('link_speed_mbps','link_rx_mbps','link_tx_mbps'):
+                value=counters.get(field)
+                if isinstance(value,(int,float)) and not isinstance(value,bool) and 0<value<1000000:row[field]=value
+            if counters.get('link_duplex') in ('full','half'):row['link_duplex']=counters['link_duplex']
+            before=(previous.get('interfaces') or {}).get(name) if previous else None
+            if valid and before and before.get('ifindex')==counters.get('ifindex'):
+                changes=[counters[key]-before[key] for key in ('rx_bytes','tx_bytes')]
+                if min(changes)>=0:
+                    rx,tx=[round(change*8/elapsed/1000000,4) for change in changes]
+                    row.update(status='live',rx_mbps=rx,tx_mbps=tx,network_mbps=round(rx+tx,4))
+            if row['state'] in ('down','lowerlayerdown','notpresent'):
+                row.update(status='disconnected',rx_mbps=None,tx_mbps=None,network_mbps=None)
+            rows.append(row)
+            self.seen[name]=dict(row)
+        present={row['name'] for row in rows}
+        for name,row in self.seen.items():
+            if name not in present and len(rows)<32:
+                rows.append({**row,'state':'notpresent','status':'disconnected','sampled_at':current['sampled_at'],
+                             'rx_mbps':None,'tx_mbps':None,'network_mbps':None})
+        self.seen={row['name']:dict(row) for row in rows}
+        return rows
+
+
+DISK_SCRIPT=r'''import json,time,hashlib
+from pathlib import Path
+rows={}
+for device in Path('/sys/block').iterdir():
+ if '/virtual/' in str(device.resolve()):continue
+ try:
+  stat=[int(value) for value in (device/'stat').read_text().split()]
+  size=int((device/'size').read_text())*512
+  if size<=0:continue
+  try:
+   if (device/'device/type').read_text().strip()=='5':continue
+  except OSError:pass
+  identity=''
+  for key in ('device/wwid','device/serial','wwid'):
+   try:identity=(device/key).read_text().strip();break
+   except OSError:pass
+  model=''
+  try:model=(device/'device/model').read_text().strip()
+  except OSError:pass
+  rows[device.name]={'identity':hashlib.sha256((device.name+':'+str(size)+':'+identity+':'+model).encode()).hexdigest(),'model':model,'read_bytes':stat[2]*512,'write_bytes':stat[6]*512,'busy_ms':stat[9]}
+ except (OSError,ValueError,IndexError):continue
+print(json.dumps({'monotonic':time.monotonic(),'sampled_at':time.time(),'boot_id':Path('/proc/sys/kernel/random/boot_id').read_text().strip(),'disks':rows}))
+'''
+
+
+class DiskSampler:
+    def __init__(self,reader=None,capacities=None):
+        self.reader=reader or (lambda target:telemetry_capture(DISK_SCRIPT));self.previous=None;self.capacities=Path(capacities or Path.home()/'.config/lifetech-launcher/disk-capacities.json');self.windows={}
+
+    def sample(self,target):
+        try:current=self.reader(target)
+        except (OSError,ValueError,TypeError,KeyError,RuntimeError,subprocess.SubprocessError):return []
+        previous=self.previous;self.previous=current
+        try:profiles=json.loads(self.capacities.read_text())
+        except (OSError,ValueError):profiles={}
+        elapsed=current['monotonic']-previous['monotonic'] if previous else 0
+        valid=bool(previous and previous['boot_id']==current['boot_id'] and 0<elapsed<=30)
+        rows=[]
+        for name,after in list(current['disks'].items())[:32]:
+            profile=profiles.get(target['host'],{}).get(after['identity'],{})
+            capacity=profile.get('total_bytes_per_second')
+            calibrated=isinstance(capacity,(int,float)) and not isinstance(capacity,bool) and 0<capacity<1e13 and profile.get('busy_percent',0)>=50
+            row={'name':name,'model':after.get('model',''),'identity':after['identity'],'sampled_at':current['sampled_at'],'status':'warming',
+                 'read_bytes_per_second':None,'write_bytes_per_second':None,'read_percent':None,'write_percent':None,'total_percent':None,'busy_percent':None,
+                 'capacity_basis':profile.get('basis') if calibrated else None}
+            if calibrated:row['capacity_bytes_per_second']=capacity
+            before=previous.get('disks',{}).get(name) if valid else None
+            if before and before.get('identity')==after['identity']:
+                changes={key:after[key]-before[key] for key in ('read_bytes','write_bytes','busy_ms')}
+                if min(changes.values())>=0:
+                    row.update(status='live',busy_percent=round(min(100,100*changes['busy_ms']/elapsed/1000),1))
+                    for direction in ('read','write'):row[direction+'_bytes_per_second']=round(changes[direction+'_bytes']/elapsed,1)
+                    frames=self.windows.setdefault(after['identity'],collections.deque())
+                    frames.append((elapsed,changes['read_bytes']+changes['write_bytes'],elapsed*row['busy_percent']))
+                    while len(frames)>1 and sum(frame[0] for frame in frames)-frames[0][0]>=30:frames.popleft()
+                    duration=sum(frame[0] for frame in frames)
+                    busy=sum(frame[2] for frame in frames)/duration
+                    if duration>=30 and busy>=50:
+                        observed=sum(frame[1] for frame in frames)/duration
+                        if observed>0 and (not calibrated or observed>capacity):
+                            capacity=observed;calibrated=True
+                            row.update(capacity_basis='observed sustained',capacity_bytes_per_second=capacity)
+                            self.save_profile(target['host'],after['identity'],capacity,current['sampled_at'],duration,busy)
+                    if calibrated:
+                        parts={direction:100*row[direction+'_bytes_per_second']/capacity for direction in ('read','write')}
+                        row.update({direction+'_percent':round(value,1) for direction,value in parts.items()});row['total_percent']=round(sum(parts.values()),1)
+                else:self.windows.pop(after['identity'],None)
+            else:self.windows.pop(after['identity'],None)
+            rows.append(row)
+        return rows
+
+    def save_profile(self,host,identity,capacity,sampled_at,window_seconds,busy_percent):
+        try:
+            with PROFILE_LOCK:
+                try:profiles=json.loads(self.capacities.read_text())
+                except (OSError,ValueError):profiles={}
+                previous=profiles.setdefault(host,{}).get(identity,{})
+                if previous.get('busy_percent',0)>=50 and previous.get('total_bytes_per_second',0)>=capacity:return
+                profiles[host][identity]={'total_bytes_per_second':capacity,'basis':'observed sustained','sampled_at':sampled_at,'window_seconds':window_seconds,'busy_percent':busy_percent}
+                self.capacities.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+                with tempfile.NamedTemporaryFile(mode='w',dir=self.capacities.parent,delete=False) as stream:
+                    json.dump(profiles,stream);pending=Path(stream.name)
+                pending.replace(self.capacities)
+        except OSError:pass
+
+
+GPU_SCRIPT=r'''import json,time,re
+from pathlib import Path
+cards={};clients={}
+for card in Path('/sys/class/drm').glob('card[0-9]*'):
+ if '-' in card.name:continue
+ try:
+  device=(card/'device').resolve();pci=device.name
+  if not re.fullmatch(r'[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]',pci):continue
+  row={'pci_id':pci,'vendor_id':(device/'vendor').read_text().strip()}
+  for file,key in [('gpu_busy_percent','busy'),('mem_info_vram_total','memory_total'),('mem_info_vram_used','memory_used')]:
+   try:row[key]=int((device/file).read_text())
+   except (OSError,ValueError):pass
+  cards[pci]=row
+ except OSError:pass
+reads=0
+for proc in Path('/proc').glob('[0-9]*'):
+ if reads>=4096:break
+ try:
+  for fd in (proc/'fd').iterdir():
+   if reads>=4096:break
+   try:
+    if not str(fd.readlink()).startswith('/dev/dri/'):continue
+    reads+=1;text=(proc/'fdinfo'/fd.name).read_text()
+    values=dict(line.split(':',1) for line in text.splitlines() if ':' in line)
+    pci=values.get('drm-pdev','').strip();ident=values.get('drm-client-id','').strip()
+    if pci not in cards or not ident:continue
+    engines={}
+    for key,value in values.items():
+     if key.startswith('drm-engine-') and not key.startswith('drm-engine-capacity-'):
+      match=re.fullmatch(r'\s*(\d+) ns\s*',value)
+      if match:engines[key[11:]]=int(match.group(1))
+    clients[pci+':'+ident]={'pci_id':pci,'engines':engines,'capacity':{k[20:]:int(v) for k,v in values.items() if k.startswith('drm-engine-capacity-') and v.strip().isdigit()}}
+   except (OSError,ValueError):pass
+ except OSError:pass
+print(json.dumps({'monotonic':time.monotonic(),'boot_id':Path('/proc/sys/kernel/random/boot_id').read_text().strip(),'cards':cards,'clients':clients}))
+'''
+
+
+def activity(previous,current):
+    elapsed=current['monotonic']-previous['monotonic'] if previous else 0
+    valid=previous and current.get('boot_id')==previous.get('boot_id') and 0<elapsed<=30
+    results={}
+    for pci,card in current.get('cards',{}).items():
+        row={}
+        if card.get('busy') is not None:
+            row.update(utilization_percent=max(0,min(100,card['busy'])),utilization_basis='Driver GPU busy counter')
+        elif valid:
+            engines={};capacities={}
+            for ident,client in current.get('clients',{}).items():
+                before=previous.get('clients',{}).get(ident)
+                if client['pci_id']!=pci or not before:continue
+                for engine,value in client['engines'].items():
+                    prior=before.get('engines',{}).get(engine)
+                    if prior is None or value<prior:continue
+                    engines[engine]=engines.get(engine,0)+value-prior
+                    capacities[engine]=max(1,capacities.get(engine,1),client.get('capacity',{}).get(engine,1))
+            if engines:
+                row.update(utilization_percent=round(min(100,max(value/(elapsed*1e9*capacities[engine])*100 for engine,value in engines.items())),1),utilization_basis='Busiest GPU engine across visible DRM clients; other users may be excluded')
+        if card.get('memory_total',0)>0 and 0<=card.get('memory_used',-1)<=card['memory_total']:
+            row.update(memory_total_mib=card['memory_total']/2**20,memory_free_mib=(card['memory_total']-card['memory_used'])/2**20)
+        results[pci]=row
+    return results
+
+
+class GpuSampler:
+    def __init__(self,reader=None):
+        self.reader=reader or (lambda target:telemetry_capture(GPU_SCRIPT));self.previous=None
+
+    def sample(self,target,hardware):
+        try:
+            current=self.reader(target);rows=activity(self.previous,current);self.previous=current
+        except (OSError,ValueError,KeyError,TypeError,subprocess.SubprocessError):return hardware
+        return {**hardware,'gpus':[{**gpu,**rows.get(gpu.get('pci_id'),{})} for gpu in hardware.get('gpus',[])]}
+
+
+class LauncherTelemetry:
+    """Independent local collectors and bounded, acknowledged five-minute replay."""
+    def __init__(self, agent):
+        self.agent=agent
+        self.lock=threading.RLock()
+        self.stopped=threading.Event()
+        self.session=secrets.token_hex(16)
+        self.sequence=0
+        self.revision=0
+        self.samples=collections.deque(maxlen=256)
+        self.received={}
+        self.latest={}
+        self.threads=[]
+
+    def record(self, kind, value, sampled_at=None):
+        sampled_at=time.time() if sampled_at is None else sampled_at
+        with self.lock:
+            self.sequence+=1
+            self.samples.append({'sequence':self.sequence,'kind':kind,'sampled_at':sampled_at,'value':copy.deepcopy(value)})
+            self.latest[kind]={'sampled_at':sampled_at,'value':copy.deepcopy(value)}
+
+    def pending(self, acknowledged):
+        with self.lock:
+            rows=[row for row in self.samples if row['sequence'] not in acknowledged and row['sampled_at']>=time.time()-295]
+            # Prioritize the newest measurement of each kind after reconnecting.
+            newest={row['kind']:row for row in rows}
+            selected={row['sequence']:row for row in list(newest.values())+rows[:12]}
+            return {'session':self.session,'samples':copy.deepcopy(list(selected.values()))}
+
+    def accept(self, sender, args):
+        session=args.get('session');rows=args.get('samples')
+        if not isinstance(session,str) or not re.fullmatch('[a-f0-9]{32}',session):raise ValueError('Invalid telemetry session')
+        if not isinstance(rows,list) or not 1<=len(rows)<=16 or len(json.dumps(args,allow_nan=False))>262144:raise ValueError('Invalid telemetry batch')
+        now=time.time()
+        for row in rows:
+            if (not isinstance(row,dict) or type(row.get('sequence')) is not int or row['sequence']<1
+                    or row.get('kind') not in ('cpu','hardware','disks','network_interfaces')
+                    or type(row.get('sampled_at')) not in (int,float) or not math.isfinite(row['sampled_at'])
+                    or not now-300<=row['sampled_at']<=now+5):raise ValueError('Invalid telemetry sample')
+            value=row.get('value')
+            if row['kind'] in ('disks','network_interfaces'):
+                if not isinstance(value,list) or len(value)>32 or any(not isinstance(item,dict) for item in value):raise ValueError('Invalid telemetry rows')
+            elif not isinstance(value,dict):raise ValueError('Invalid telemetry value')
+            elif row['kind']=='hardware' and (not isinstance(value.get('gpus',[]),list) or len(value.get('gpus',[]))>16 or any(not isinstance(gpu,dict) for gpu in value.get('gpus',[]))):raise ValueError('Invalid GPU telemetry')
+            elif row['kind']=='cpu' and (value.get('status') not in ('live','warming','permission_denied','unavailable')
+                    or type(value.get('sampled_at')) not in (int,float) or value['sampled_at']!=row['sampled_at']):raise ValueError('Invalid CPU telemetry')
+            if row['kind']=='cpu' and value['status']=='live':
+                if (type(value.get('cpus')) is not int or not 1<=value['cpus']<=65536
+                        or type(value.get('percent')) not in (int,float) or not math.isfinite(value['percent'])
+                        or not 0<=value['percent']<=100):raise ValueError('Invalid live CPU measurement')
+        with self.lock:
+            entry=self.received.setdefault(sender,{'events':collections.deque(maxlen=256),'seen':set(),'latest':{}})
+            for row in rows:
+                ident=(session,row['sequence'])
+                if ident in entry['seen']:continue
+                self.revision+=1
+                event={**copy.deepcopy(row),'session':session,'revision':self.revision}
+                entry['events'].append(event)
+                before=entry['latest'].get(row['kind'])
+                if before is None or row['sampled_at']>before['sampled_at']:entry['latest'][row['kind']]=event
+                entry['seen'].add(ident)
+            entry['events']=collections.deque((row for row in entry['events'] if row['sampled_at']>=now-300),maxlen=256)
+            entry['seen']={(row['session'],row['sequence']) for row in entry['events']}
+        return {'session':session,'sequences':[row['sequence'] for row in rows]}
+
+    @staticmethod
+    def host(name, latest):
+        cpu=latest.get('cpu',{})
+        value={'status':'warming',**cpu.get('value',{}),'host':name,'sampled_at':cpu.get('sampled_at',0)}
+        for kind in ('hardware','disks','network_interfaces'):
+            if kind in latest:
+                value[kind]=copy.deepcopy(latest[kind]['value'])
+                if kind=='hardware':value[kind]['sampled_at']=latest[kind]['sampled_at']
+        value['telemetry_transport']='launcher-push'
+        return value
+
+    def fleet(self, enrolled, after=0):
+        now=time.time()
+        with self.lock:
+            hosts=[];events=[]
+            for name,entry in self.received.items():
+                if name not in enrolled:continue
+                hosts.append(self.host(name,entry['latest']))
+                # Each event carries a snapshot evaluated at its own measurement time.
+                latest={}
+                for row in sorted(entry['events'],key=lambda row:row['sampled_at']):
+                    latest[row['kind']]=row
+                    if row['sampled_at']>=now-300 and row['revision']>after:
+                        # Historical charts need aggregate counters, not a copy of
+                        # every logical CPU in every peripheral event.
+                        snapshot=self.host(name,latest)
+                        snapshot.pop('logical_cpus',None)
+                        if 'hardware' in snapshot:
+                            snapshot['hardware']={key:value for key,value in snapshot['hardware'].items() if key in ('gpus','sampled_at','stale')}
+                        events.append({'revision':row['revision'],'sampled_at':row['sampled_at'],'hosts':[snapshot]})
+            events=sorted(events,key=lambda row:row['revision'])[:128]
+            cursor=events[-1]['revision'] if events else self.revision
+            return {'hosts':hosts,'events':events,'session':self.session,'revision':cursor}
+
+    def start(self):
+        try:config=json.loads(self.agent.config.read_text())
+        except (OSError,ValueError):config={}
+        target={'local':True,'host':config.get('name','local')}
+        interfaces=InterfaceSampler();disks=DiskSampler();gpu=GpuSampler()
+        def hardware():
+            value=gpu.sample(target,hardware_sample(disk=self.agent.root))
+            value['sampled_at']=time.time()
+            return value
+        collectors={'cpu':self.agent.metrics_sampler.sample,'hardware':hardware,
+                    'network_interfaces':lambda:interfaces.sample(target),'disks':lambda:disks.sample(target)}
+        def run(kind, collect):
+            import logging
+            while not self.stopped.is_set():
+                started=time.monotonic()
+                try:
+                    value=collect()
+                    # A failed collector does not renew the previous measurement's timestamp.
+                    if value!=[]:self.record(kind,value,value.get('sampled_at') if isinstance(value,dict) else None)
+                except Exception as error:logging.debug('Telemetry %s failed: %s',kind,type(error).__name__)
+                self.stopped.wait(max(.1,5-(time.monotonic()-started)))
+        for kind,collect in collectors.items():
+            thread=threading.Thread(target=run,args=(kind,collect),name='telemetry-'+kind,daemon=True)
+            thread.start();self.threads.append(thread)
+
+    def snapshot(self, name):
+        with self.lock:return self.host(name,self.latest)
+
+
 class Agent:
     def __init__(self, config, root):
         self.config = config
@@ -450,6 +822,7 @@ class Agent:
         self.changed = threading.Condition(self.lock)
         self.nonces = {}
         self.metrics_sampler=ResourceSampler()
+        self.telemetry=LauncherTelemetry(self)
         self.gpu_lock=threading.Lock()
         self.gpu_validation=None
         self.hardware_cache=None
@@ -479,6 +852,7 @@ class Agent:
                 path.write_text(json.dumps(state))
                 self.remove_containers(path.parent.name)
         threading.Thread(target=self.maintain_storage,daemon=True).start()
+        self.telemetry.start()
 
     def cleanup_workspaces(self):
         """Fail closed if container ownership cannot be inspected."""
@@ -563,7 +937,12 @@ class Agent:
                     raise ValueError('Replayed request or request limit')
                 self.nonces[value['nonce']] = time.time()+120
             try:
-                result = await asyncio.to_thread(self.dispatch, value['op'], value.get('args',{}))
+                if value['op']=='metrics.publish':
+                    if config['name']!=config.get('master','compai.local'):raise ValueError('Telemetry receiver is not the master')
+                    result=self.telemetry.accept(value['from'],value.get('args',{}))
+                    result['policy']=self.telemetry_policy()
+                else:
+                    result = await asyncio.to_thread(self.dispatch, value['op'], value.get('args',{}))
                 reply = {'ok':True, 'result':result}
             except Exception as error:
                 reply = {'ok':False,'error':type(error).__name__+': '+str(error)[:800]}
@@ -599,7 +978,26 @@ class Agent:
                         entry['timer']=timer;timer.start();return
             self.dispatch('resource.release',{'id':ident})
 
+    def telemetry_policy(self):
+        try:policy=json.loads((self.config.parent/'telemetry-transport.json').read_text())
+        except FileNotFoundError:return {'transport':'tcp','updated_at':0}
+        if policy.get('transport') not in ('tcp','webrtc'):raise ValueError('Invalid telemetry transport policy')
+        return policy
+
+    def save_telemetry_policy(self, policy):
+        if not isinstance(policy,dict) or policy.get('transport') not in ('tcp','webrtc'):raise ValueError('Invalid telemetry transport policy')
+        with self.lock:
+            path=self.config.parent/'telemetry-transport.json'
+            temporary=path.with_suffix('.tmp')
+            temporary.write_text(json.dumps(policy));temporary.chmod(0o600);temporary.replace(path)
+        return policy
+
     def dispatch(self, op, args):
+        if op=='metrics.transport':
+            config=json.loads(self.config.read_text())
+            if config['name']!=config.get('master','compai.local'):raise ValueError('Telemetry policy requires the master')
+            if not isinstance(args,dict) or set(args)!={'transport'} or args['transport'] not in ('tcp','webrtc'):raise ValueError('Choose TCP or WebRTC')
+            return self.save_telemetry_policy({'transport':args['transport'],'updated_at':time.time()})
         if op=='resource.capacity':
             if set(args)-{'group'}:raise ValueError('Invalid capacity request')
             return ResourceLease.pool_capacity(directory=os.getenv('SWARM_RESOURCE_DIR',str(self.root/'.resources')),group=args.get('group'))
@@ -675,7 +1073,13 @@ class Agent:
             finally:
                 with self.lock:self.registry_transfers-=1;self.busy()
         if op == 'metrics':
-            return {**self.metrics_sampler.sample(),'hardware':self.hardware()}
+            return self.telemetry.snapshot(json.loads(self.config.read_text())['name'])
+        if op == 'metrics.fleet':
+            config=json.loads(self.config.read_text())
+            if config['name']!=config.get('master','compai.local'):raise ValueError('Telemetry receiver is not the master')
+            after=args.get('after',0) if args.get('session')==self.telemetry.session else 0
+            if type(after) is not int or after<0:raise ValueError('Invalid telemetry cursor')
+            return {**self.telemetry.fleet(config['peers'],after),'policy':self.telemetry_policy()}
         if op == 'gpu.probe':
             if args:raise ValueError('GPU probe does not accept commands or image overrides')
             if not self.gpu_lock.acquire(blocking=False):raise RuntimeError('GPU validation already running')
@@ -717,7 +1121,7 @@ class Agent:
             return {'protocol':VERSION,'source_revision':self.source_revision,'node':config['name'],'ready':bool(shutil.which('docker')) and not Path('/tmp/launcher-agent-draining').exists(),'time':time.time(),
                     'machine':hashlib.sha256(machine.read_bytes()).hexdigest(),'hostname':socket.gethostname(),
                     'addresses':addresses,'platform':info['OSType']+'/'+info['Architecture'],
-                    'worker_policy':policy,'capabilities':['controller-signature','github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','peer-layer-cache','mptcp-transport','file-queue','snapshot-stage','event-wait','shared-resources','renewable-resources','encrypted-backup','gpu-kernel'],
+                    'worker_policy':policy,'capabilities':['controller-signature','github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','peer-layer-cache','mptcp-transport','file-queue','snapshot-stage','event-wait','shared-resources','renewable-resources','encrypted-backup','gpu-kernel','telemetry-push'],
                     'enrolled_peers':sorted(config['peers']),'storage':self.storage_status,
                     'hardware':self.hardware(info),
                     'preparations':[key for key,j in self.jobs.items() if j['status']=='running' and j.get('prepare_only')],
@@ -1199,6 +1603,7 @@ class Agent:
         return value
 
     def close(self):
+        self.telemetry.stopped.set()
         self.storage_stop.set()
         for ident in list(getattr(self,'resource_leases',{})):self.expire_resource(ident)
         for timer in self.browser_timers.values():timer.cancel()

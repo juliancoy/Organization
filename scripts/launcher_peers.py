@@ -26,6 +26,21 @@ def owner_launcher_url(path=CONFIG):
     return url+'#owner='+token
 
 
+def telemetry_tcp_socket(address_info):
+    """Plain TCP with bounded failure detection; independent of ICE and signaling."""
+    import socket
+    family,kind,_,*_=address_info
+    sock=socket.socket(family,kind,socket.IPPROTO_TCP)
+    try:
+        sock.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,1)
+        sock.setsockopt(socket.SOL_SOCKET,socket.SO_KEEPALIVE,1)
+        for option,value in (('TCP_KEEPIDLE',15),('TCP_KEEPINTVL',5),('TCP_KEEPCNT',3),('TCP_USER_TIMEOUT',10000)):
+            if hasattr(socket,option):sock.setsockopt(socket.IPPROTO_TCP,getattr(socket,option),value)
+        return sock
+    except Exception:
+        sock.close();raise
+
+
 class Mesh:
     def __init__(self, config, prefix, agent=None):
         self.agent = agent
@@ -426,7 +441,7 @@ LAUNCHER_PAGE = '''<!doctype html><html lang="en"><meta charset="utf-8"><meta na
 class JobGateway:
     """Loopback gateway and bounded encrypted agent RPC over WebRTC data channels."""
     def __init__(self, agent):
-        self.agent=agent;self.mesh=None;self.pending={};self.parts={};self.inflight=set();self.runner=None;self.reconnect_generation=0;self.owner_sessions={}
+        self.agent=agent;self.telemetry_session=None;self.mesh=None;self.lan_mesh=None;self.pending={};self.parts={};self.inflight=set();self.runner=None;self.reconnect_generation=0;self.owner_sessions={}
 
     def owner_session_valid(self,headers):
         import hashlib
@@ -449,7 +464,7 @@ class JobGateway:
 
     async def send(self, peer, ident, data, reply):
         import base64
-        channel=self.mesh.channels.get(peer) if self.mesh else None
+        channel=next((mesh.channels[peer] for mesh in (self.lan_mesh,self.mesh) if mesh and peer in mesh.channels and mesh.channels[peer].readyState=='open'),None)
         if not channel or channel.readyState!='open':raise RuntimeError('Remote launcher is not connected')
         if len(data)>8*1024*1024:raise ValueError('RPC exceeds transport limit')
         async with asyncio.timeout(120):
@@ -463,7 +478,7 @@ class JobGateway:
     def receive(self, peer, message):
         import base64,re
         config=json.loads(self.agent.config.read_text())
-        if peer not in config.get('internet_nodes',{}).values():raise ValueError('Unenrolled RPC peer')
+        if peer not in config['peers'] and peer not in config.get('internet_nodes',{}).values():raise ValueError('Unenrolled RPC peer')
         ident=message['id'];reply=message['reply']
         if not isinstance(ident,str) or not re.fullmatch('[a-f0-9]{32}',ident) or type(reply)!=bool:raise ValueError('Invalid RPC frame')
         key=(peer,ident,reply)
@@ -490,7 +505,7 @@ class JobGateway:
             task=asyncio.create_task(respond());self.inflight.add(task);task.add_done_callback(self.inflight.discard)
 
     async def remote(self, node, raw):
-        config=json.loads(self.agent.config.read_text());peer=config.get('internet_nodes',{}).get(node)
+        config=json.loads(self.agent.config.read_text());peer=node if self.lan_mesh and node in self.lan_mesh.channels and self.lan_mesh.channels[node].readyState=='open' else config.get('internet_nodes',{}).get(node)
         if not peer:raise RuntimeError('No internet enrollment for this node')
         if len(self.pending)>=8:raise RuntimeError('Remote request limit')
         ident=secrets.token_hex(16);future=asyncio.get_running_loop().create_future();self.pending[(peer,ident)]=future
@@ -508,9 +523,10 @@ class JobGateway:
         if node not in config['peers']:raise web.HTTPForbidden()
         raw=await request.read()
         try:
+            timeout=max(1,min(180,float(request.headers.get('X-Lifetech-RPC-Timeout','180'))))
             if request.headers.get('X-Lifetech-Transport')!='webrtc':
                 try:
-                    async with ClientSession(timeout=ClientTimeout(total=180,connect=3),trust_env=False,connector=TCPConnector(socket_factory=transport_socket)) as session:
+                    async with ClientSession(timeout=ClientTimeout(total=timeout,connect=min(3,timeout)),trust_env=False,connector=TCPConnector(socket_factory=transport_socket)) as session:
                         async with session.post('http://'+config['peers'][node]+':8790/agent/v1',data=raw,allow_redirects=False) as response:
                             if response.status!=200:raise RuntimeError('Agent rejected request')
                             data=bytearray()
@@ -521,7 +537,7 @@ class JobGateway:
                             if len(data)>8*1024*1024:raise ValueError('RPC response too large')
                             return web.Response(body=data)
                 except (ClientConnectorError,ConnectionTimeoutError):pass
-            return web.Response(body=await self.remote(node,raw))
+            return web.Response(body=await asyncio.wait_for(self.remote(node,raw),timeout))
         except Exception as error:raise web.HTTPBadGateway(text=type(error).__name__+': '+str(error)[:200])
 
     def local_browser(self, request):
@@ -530,22 +546,84 @@ class JobGateway:
         if request.host not in ('127.0.0.1:8791','localhost:8791') or (origin and origin not in ('http://127.0.0.1:8791','http://localhost:8791')):
             raise web.HTTPForbidden()
 
-    async def master_call(self, op, args, transport='auto'):
+    async def master_call(self, op, args, transport='auto', timeout=190):
         from aiohttp import ClientSession,ClientTimeout
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         config=json.loads(self.agent.config.read_text());node=config.get('master','compai.local')
         cipher=AESGCM(bytes.fromhex(config['key']));ident=secrets.token_hex(16);nonce=secrets.token_bytes(12)
         value={'from':config['name'],'to':node,'time':time.time(),'nonce':ident,'op':op,'args':args}
         raw=nonce+cipher.encrypt(nonce,json.dumps(value).encode(),b'lifetech-agent.v1')
-        async with ClientSession(timeout=ClientTimeout(total=190),trust_env=False) as session:
-            async with session.post('http://127.0.0.1:8791/agent/v1',data=raw,
-                    headers={'X-Lifetech-Peer':node,'X-Lifetech-Transport':transport}) as response:
+        async def read(session,url,headers):
+            async with session.post(url,data=raw,headers=headers,allow_redirects=False,
+                    timeout=ClientTimeout(total=timeout,connect=min(2,timeout),sock_read=min(4,timeout))) as response:
                 if response.status!=200:raise RuntimeError((await response.text())[:300])
-                raw=await response.read()
+                result=bytearray()
+                async for chunk in response.content.iter_chunked(65536):
+                    result.extend(chunk)
+                    if len(result)>8*1024*1024:raise ValueError('Master response exceeds limit')
+                return bytes(result)
+        if transport=='tcp':
+            from aiohttp import TCPConnector
+            if self.telemetry_session is None or self.telemetry_session.closed:
+                self.telemetry_session=ClientSession(trust_env=False,
+                    connector=TCPConnector(socket_factory=telemetry_tcp_socket,limit=2,limit_per_host=1,keepalive_timeout=30))
+            raw=await read(self.telemetry_session,'http://'+config['peers'][node]+':8790/agent/v1',
+                           {'Content-Type':'application/octet-stream'})
+        else:
+            async with ClientSession(timeout=ClientTimeout(total=timeout),trust_env=False) as session:
+                raw=await read(session,'http://127.0.0.1:8791/agent/v1',
+                    {'X-Lifetech-Peer':node,'X-Lifetech-Transport':transport,'X-Lifetech-RPC-Timeout':str(min(timeout,180))})
         value=json.loads(cipher.decrypt(raw[:12],raw[12:],b'lifetech-agent.v1'))
         if value.get('nonce')!=ident or value.get('node')!=node or abs(time.time()-value['time'])>60:raise ValueError('Master response identity mismatch')
         if not value.get('ok'):raise RuntimeError(value.get('error','Master request failed'))
         return value['result']
+
+    async def publish_telemetry(self, stopped):
+        try:
+            await self._publish_telemetry(stopped)
+        finally:
+            if self.telemetry_session is not None:
+                await self.telemetry_session.close()
+                self.telemetry_session=None
+
+    async def _publish_telemetry(self, stopped):
+        from aiohttp import ClientError
+        acknowledged=set();delay=1
+        preferred=self.agent.telemetry_policy()['transport']
+        while not stopped.is_set():
+            try:
+                batch=self.agent.telemetry.pending(acknowledged)
+                if not batch['samples']:
+                    await asyncio.sleep(.25);continue
+                config=json.loads(self.agent.config.read_text())
+                if config['name']==config.get('master','compai.local'):
+                    reply=self.agent.telemetry.accept(config['name'],batch)
+                    reply['policy']=self.agent.telemetry_policy()
+                else:
+                    node=config.get('master','compai.local')
+                    peer=config.get('internet_nodes',{}).get(node)
+                    channel=next((mesh.channels[p] for mesh,p in ((self.lan_mesh,node),(self.mesh,peer)) if mesh and p in mesh.channels and mesh.channels[p].readyState=='open'),None)
+                    try:
+                        reply=await asyncio.wait_for(self.master_call('metrics.publish',batch,preferred,timeout=6),7)
+                    except (OSError,RuntimeError,asyncio.TimeoutError,ClientError):
+                        fallback='webrtc' if preferred=='tcp' else 'tcp'
+                        if fallback=='webrtc' and (not channel or channel.readyState!='open' or channel.bufferedAmount>=65536):raise
+                        reply=await asyncio.wait_for(self.master_call('metrics.publish',batch,fallback,timeout=6),7)
+                if reply.get('session')!=batch['session'] or reply.get('sequences')!=[row['sequence'] for row in batch['samples']]:
+                    raise ValueError('Telemetry acknowledgement mismatch')
+                policy=reply.get('policy')
+                if policy is not None and policy!=self.agent.telemetry_policy():self.agent.save_telemetry_policy(policy)
+                preferred=self.agent.telemetry_policy()['transport']
+                acknowledged.update(reply['sequences'])
+                floor=self.agent.telemetry.sequence-256
+                acknowledged={sequence for sequence in acknowledged if sequence>floor}
+                delay=1
+                await asyncio.sleep(.05)
+            except asyncio.CancelledError:raise
+            except Exception as error:
+                logging.debug('Telemetry delivery retry: %s',type(error).__name__)
+                await asyncio.sleep(delay+secrets.randbelow(250)/1000)
+                delay=min(10,delay*2)
 
     async def browser(self, request):
         from aiohttp import web
@@ -715,6 +793,7 @@ async def supervise(path,prefix,stopped):
     gateway=JobGateway(agent)
     await gateway.start()
     tasks = {}
+    telemetry_task=asyncio.create_task(gateway.publish_telemetry(stopped),name='launcher-telemetry-push')
     try:
         while not stopped.is_set():
             try:
@@ -736,7 +815,9 @@ async def supervise(path,prefix,stopped):
                     if name in tasks:
                         continue
                     mesh = Mesh(value,prefix,agent) if name=='lan' else InternetMesh(value,prefix)
-                    if name=='internet':mesh.gateway=gateway;gateway.mesh=mesh
+                    mesh.gateway=gateway
+                    if name=='internet':gateway.mesh=mesh
+                    else:gateway.lan_mesh=mesh
                     task = asyncio.create_task(mesh.run(stopped),name='launcher-'+name)
                     tasks[name] = (json.dumps(value,sort_keys=True),task)
                     def completed(done):
@@ -753,6 +834,8 @@ async def supervise(path,prefix,stopped):
                 if stopped.is_set():break
                 await asyncio.sleep(1)
     finally:
+        telemetry_task.cancel()
+        await asyncio.gather(telemetry_task,return_exceptions=True)
         await gateway.runner.cleanup()
         for task in gateway.inflight:task.cancel()
         await asyncio.gather(*gateway.inflight,return_exceptions=True)

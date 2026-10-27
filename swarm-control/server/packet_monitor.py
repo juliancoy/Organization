@@ -73,7 +73,14 @@ def parse_frame(frame, wire_length=None):
     ports = None
     if not fragment and protocol in (6, 17) and transport+4 <= min(len(frame), offset+length):
         ports = struct.unpack('!HH', frame[transport:transport+4])
-    return {'source_ip': src, 'destination': dst, 'source_mac': src_mac.hex(':'),
+    tcp_payload = None
+    ack_only = False
+    if not fragment and protocol == 6 and transport+20 <= min(len(frame), offset+length):
+        tcp_header = (frame[transport+12] >> 4)*4
+        if tcp_header >= 20 and transport+tcp_header <= offset+length:
+            tcp_payload = offset+length-transport-tcp_header
+            ack_only = tcp_payload == 0 and frame[transport+13] == 0x10
+    return {'tcp_payload_bytes':tcp_payload, 'tcp_ack_only':ack_only, 'source_ip': src, 'destination': dst, 'source_mac': src_mac.hex(':'),
             'destination_mac': dst_mac.hex(':'), 'ip_bytes': length,
             'protocol': protocol, 'socket': (protocol, src, ports[0], dst, ports[1]) if ports else None}
 
@@ -173,13 +180,59 @@ def flow_observation(packet, interface, outgoing, config, sockets):
             'protocol': packet['protocol'], 'direction': direction, 'interface': interface, 'basis': basis}
 
 
+def uplink_observation(packet, interface, outgoing, config, sockets):
+    """Independent uplink ledger: never add this to client-side NAT totals."""
+    if interface == config['lan_interface']:
+        return None
+    upload = configured_internet(packet['destination'], config)
+    download = configured_internet(packet['source_ip'], config)
+    if upload == download or outgoing != upload:
+        return None
+    info = config['interfaces'].get(interface, {})
+    if packet['source_mac' if upload else 'destination_mac'] != info.get('mac'):
+        return None
+    known = flow_observation(packet, interface, outgoing, config, sockets)
+    if known:
+        return known
+    key = packet['socket']
+    normalized = key if upload or key is None else (key[0], key[3], key[4], key[1], key[2])
+    return {'device_mac':'uplink-unattributed',
+            'local_ip':packet['source_ip'] if upload else packet['destination'],
+            'remote_ip':packet['destination'] if upload else packet['source_ip'],
+            'local_port':normalized[2] if normalized else None,
+            'remote_port':normalized[4] if normalized else None,
+            'protocol':packet['protocol'], 'direction':'upload' if upload else 'download',
+            'interface':interface, 'basis':'Uplink packet; host, container or forwarded owner unknown'}
+
+
+class InterfaceRates:
+    def __init__(self, root='/sys/class/net'):
+        self.root = Path(root)
+        self.previous = {}
+
+    def sample(self, interfaces, now):
+        result = {}
+        for interface in interfaces:
+            try:
+                values = tuple(int((self.root/interface/'statistics'/k).read_text()) for k in ('tx_bytes','rx_bytes'))
+            except (OSError, ValueError):
+                continue
+            old = self.previous.get(interface)
+            self.previous[interface] = (now, values)
+            if old is None or now <= old[0] or any(a < b for a,b in zip(values,old[1])):
+                continue
+            result[interface] = {direction+'_mbps':(value-before)*8/(now-old[0])/1e6
+                                 for direction,value,before in zip(('upload','download'),values,old[1])}
+        return result
+
+
 class Flows:
     """Bounded bidirectional 5-tuple counters; no payload, DNS-query, or TLS content."""
     def __init__(self):
         self.records = {}
         self.evictions = 0
 
-    def observe(self, flow, count, now, stamp):
+    def observe(self, flow, count, now, stamp, packet=None):
         key = tuple(flow[k] for k in ('device_mac','local_ip','remote_ip','local_port','remote_port','protocol','interface'))
         if key not in self.records:
             if len(self.records) >= MAX_PAIRS:
@@ -193,6 +246,11 @@ class Flows:
         row['_seen'] = now
         row[flow['direction']+'_bytes'] += count
         row['_'+flow['direction']] += count
+        if packet:
+            for kind, value in (('tcp_payload',packet.get('tcp_payload_bytes') or 0),
+                                ('tcp_ack_only',count if packet.get('tcp_ack_only') else 0)):
+                field = '_'+flow['direction']+'_'+kind
+                row[field] = row.get(field,0)+value
 
     def view(self, now, elapsed):
         self.records = {k:v for k,v in self.records.items() if now-v['_seen'] < IDLE_SECONDS}
@@ -202,6 +260,10 @@ class Flows:
             for direction in ('upload', 'download'):
                 row[direction+'_mbps'] = record['_'+direction]*8/elapsed/1e6
                 record['_'+direction] = 0
+                for kind in ('tcp_payload','tcp_ack_only'):
+                    field = '_'+direction+'_'+kind
+                    row[direction+'_'+kind+'_mbps'] = record.get(field,0)*8/elapsed/1e6
+                    record[field] = 0
             rows.append(row)
         return {'records':rows, 'evictions':self.evictions, 'max_flows':MAX_PAIRS, 'idle_seconds':IDLE_SECONDS,
                 'scope':'Observed Internet IP bytes including IP headers. Client side of NAT for LAN devices; exact connected socket matches for this host. Excludes switched LAN traffic, other gateways, unconnected host UDP and missed short-lived sockets. Rates use the latest capture interval; retained bytes cover each record lifetime, not the displayed chart window. Hosting provider and PTR names do not identify an application.'}
@@ -241,6 +303,8 @@ class Destinations:
 def main():
     sockets, connections, config = {}, set(), None
     records, counts, flows = Destinations(), {}, Flows()
+    uplink_flows, interface_rates = Flows(), InterfaceRates()
+    uplink_history = []
     previous = time.monotonic(); refreshed = 0; sockets_refreshed = 0
     dropped_total = 0
     buffer = bytearray(256)
@@ -297,7 +361,10 @@ def main():
                 continue
             flow = flow_observation(packet, interface, outgoing, config, connections)
             if flow:
-                flows.observe(flow, packet['ip_bytes'], now, datetime.datetime.now(datetime.timezone.utc).isoformat())
+                flows.observe(flow, packet['ip_bytes'], now, datetime.datetime.now(datetime.timezone.utc).isoformat(), packet)
+            uplink = uplink_observation(packet, interface, outgoing, config, connections)
+            if uplink:
+                uplink_flows.observe(uplink, packet['ip_bytes'], now, datetime.datetime.now(datetime.timezone.utc).isoformat(), packet)
             if configured_internet(packet['destination'], config):
                 source = attribute(packet, interface, outgoing, config, connections)
                 if source:
@@ -318,6 +385,15 @@ def main():
             data = {'capture_statistics': capture_stats, 'kernel_drops_since_start': dropped_total, 'interface':'enp7s0', 'peers':{mac:{'rx_mbps':v[0]*8/elapsed/1e6,'tx_mbps':v[1]*8/elapsed/1e6} for mac,v in counts.items()},
                     'sample_seconds':elapsed, 'updated':stamp, 'basis':'Gateway-observed Ethernet frame bytes; excludes switched traffic',
                     'outbound':records.view(now, elapsed), 'flows':flows.view(now, elapsed), 'capture_error':error}
+            data['uplink_flows'] = uplink_flows.view(now, elapsed)
+            data['uplink_flows']['scope'] = 'Independent uplink IP ledger; includes unmatched packets. Never sum with client-side NAT flows.'
+            data['interface_rates'] = interface_rates.sample(sockets, now)
+            data['uplink_interfaces'] = [name for name in sockets if config and name != config['lan_interface']]
+            if not uplink_history or now-uplink_history[-1]['monotonic'] >= 5:
+                uplink_history.append({'updated':stamp,'monotonic':now,'interface_rates':data['interface_rates'],
+                    'internet_rates':{direction:sum(r[direction+'_mbps'] for r in data['uplink_flows']['records']) for direction in ('upload','download')}})
+            uplink_history = [row for row in uplink_history if now-row['monotonic'] <= 1800]
+            data['uplink_history'] = [{k:v for k,v in row.items() if k != 'monotonic'} for row in uplink_history]
             data['outbound'].update(updated=stamp, interfaces=list(sockets), local_networks=config['local_networks'] if config else [], available=config is not None)
             temporary = Path('/state/link-traffic.tmp'); temporary.write_text(json.dumps(data)); os.replace(temporary,'/state/link-traffic.json')
             counts = {}; previous = now

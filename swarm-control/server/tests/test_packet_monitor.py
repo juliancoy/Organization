@@ -153,3 +153,44 @@ class BidirectionalTests(unittest.TestCase):
         flow=flow_observation(packet,'lan',True,self.config,set())
         self.assertEqual(flow['direction'],'download')
         self.assertEqual(flow['protocol'],17)
+
+class UplinkAccountingTests(unittest.TestCase):
+    def test_unmatched_nat_packet_visible_without_claiming_host_or_double_counting_lan(self):
+        from packet_monitor import uplink_observation
+        config={'lan_interface':'lan','interfaces':{'lan':{'mac':HOST,'networks':['10.42.0.0/24']},'wan':{'mac':HOST}},
+                'local_networks':['10.42.0.0/24','172.20.20.0/24'],'host_addresses':['172.20.20.20'],'host_mac':HOST}
+        packet=parse_frame(ethernet(ipv4(src='172.20.20.20')))
+        packet['source_mac']=HOST
+        flow=uplink_observation(packet,'wan',True,config,set())
+        self.assertEqual(flow['device_mac'],'uplink-unattributed')
+        self.assertEqual(flow['direction'],'upload')
+        self.assertIsNone(uplink_observation(packet,'lan',True,config,set()))
+        known=uplink_observation(packet,'wan',True,config,{packet['socket']})
+        self.assertEqual(known['device_mac'],HOST)
+        packet['source_ip'],packet['destination']=packet['destination'],packet['source_ip']
+        packet['destination_mac']=HOST
+        self.assertEqual(uplink_observation(packet,'wan',False,config,set())['direction'],'download')
+        self.assertIsNone(uplink_observation(packet,'wan',True,config,set()))
+
+    def test_interface_counter_reset_is_not_a_traffic_spike(self):
+        import tempfile
+        from pathlib import Path
+        from packet_monitor import InterfaceRates
+        with tempfile.TemporaryDirectory() as root:
+            folder=Path(root)/'wan/statistics';folder.mkdir(parents=True)
+            def write(tx,rx):
+                (folder/'tx_bytes').write_text(str(tx));(folder/'rx_bytes').write_text(str(rx))
+            meter=InterfaceRates(root);write(10,20)
+            self.assertEqual(meter.sample(['wan'],1),{})
+            write(1000010,2000020)
+            self.assertEqual(meter.sample(['wan'],5)['wan'],{'upload_mbps':2,'download_mbps':4})
+            write(0,0);self.assertEqual(meter.sample(['wan'],6),{})
+
+class TcpTrafficBreakdownTests(unittest.TestCase):
+    def test_ack_only_and_payload_are_distinct(self):
+        import struct
+        tcp=bytearray(20);struct.pack_into('!HH',tcp,0,1234,443);tcp[12]=0x50;tcp[13]=0x10
+        packet=parse_frame(ethernet(ipv4(payload=bytes(tcp[4:]))))
+        self.assertTrue(packet['tcp_ack_only']);self.assertEqual(packet['tcp_payload_bytes'],0)
+        packet=parse_frame(ethernet(ipv4(payload=bytes(tcp[4:])+b'abcd')))
+        self.assertFalse(packet['tcp_ack_only']);self.assertEqual(packet['tcp_payload_bytes'],4)

@@ -6,16 +6,19 @@ export function recordResourceHistory(histories,data,metrics,now,rowsFor){
   const history=histories[metric];
   for(const frame of [...frames,{sampled_at:now/1000,hosts:metrics.hosts||[],current:true}]){
    const time=frame.sampled_at*1000;
+   if(!frame.current&&!frame.hosts?.length&&!['network','split'].includes(metric))continue;
    for(const row of rowsFor(frame.current?data:frame.network||historicalNetwork,{hosts:frame.hosts},metric,time)){
+    if(frame.partial&&['cpu','ram'].includes(metric)&&!row.telemetryHost)continue;
     // Older frames never saved gateway counters. Their absence must not
     // overwrite actual live readings with alternating artificial gaps.
     if(!frame.current&&!frame.network&&['network','split'].includes(metric)&&row.value===null)continue;
     if(!history.has(row.id))history.set(row.id,[]);
     const points=history.get(row.id);
+    const measuredTime=Number.isFinite(row.sampleTime)&&row.value!==null?row.sampleTime:time;
     // Repeated reads of the same server frame must not duplicate points.
-    const existing=points.findIndex(point=>point.time===time);
-    if(existing>=0)points[existing]={time,value:row.value};
-    else points.push({time,value:row.value});
+    const existing=points.findIndex(point=>point.time===measuredTime);
+    if(existing>=0)points[existing]={time:measuredTime,value:row.value};
+    else points.push({time:measuredTime,value:row.value});
    }
   }
   for(const [id,points] of history){

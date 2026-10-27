@@ -5,15 +5,16 @@ export function deviceLevels(data,metrics,mode,now=Date.now()) {
  if(mode==='disk')return hosts.flatMap(host=>(host.disks||[]).flatMap(disk=>['read','write'].map(direction=>{
   const fresh=disk.status==='live'&&now/1000-disk.sampled_at<15,id=host.host+':disk:'+disk.identity;
   return {id:id+':'+direction,deviceId:id,name:host.host+' · '+disk.name+' · '+direction,machine:host.host,disk:disk.name,model:disk.model,direction,
-   value:fresh&&valid(disk[direction+'_percent'])?disk[direction+'_percent']:null,throughput:fresh&&valid(disk[direction+'_bytes_per_second'])?disk[direction+'_bytes_per_second']/1e6:null,
+   sampleTime:disk.sampled_at*1000,value:fresh&&valid(disk[direction+'_percent'])?disk[direction+'_percent']:null,throughput:fresh&&valid(disk[direction+'_bytes_per_second'])?disk[direction+'_bytes_per_second']/1e6:null,
    unavailableLabel:fresh?'Observing…':'No data',linkLabel:disk.capacity_basis?`Observed sustained: ${(disk.capacity_bytes_per_second/1e6).toFixed(1)} MB/s`:'Observing sustained capacity (30 s under load)',
    basis:'Read and write each use the same observed sustained combined-throughput baseline. Workload-dependent estimate, not a hardware limit; bursts can exceed 100%.'};
  })));
  if(['gpu','vram'].includes(mode))return hosts.flatMap(h=>(h.hardware?.gpus||[]).map((gpu,index)=>{
-  const fresh=h.status==='live'&&now/1000-h.sampled_at<15&&!h.hardware.stale;
+  const sampledAt=h.hardware.sampled_at??h.sampled_at;
+  const fresh=now/1000-sampledAt<15&&(h.hardware.sampled_at!==undefined||h.status==='live'&&!h.hardware.stale);
   let value=mode==='gpu'?gpu.utilization_percent:valid(gpu.memory_total_mib)&&gpu.memory_total_mib>0&&valid(gpu.memory_free_mib)?100*(1-gpu.memory_free_mib/gpu.memory_total_mib):null;
   if(!fresh||!valid(value))value=null;
-  return {id:h.host+':gpu:'+(gpu.pci_id||index),name:h.host+' · '+gpu.name,value,basis:mode==='gpu'?(gpu.utilization_basis||'Live GPU utilization; unavailable backends remain unmeasured'):'GPU memory used, including reserved UMA where reported; unavailable counters remain unmeasured'};
+  return {id:h.host+':gpu:'+(gpu.pci_id||index),name:h.host+' · '+gpu.name,sampleTime:sampledAt*1000,value,basis:mode==='gpu'?(gpu.utilization_basis||'Live GPU utilization; unavailable backends remain unmeasured'):'GPU memory used, including reserved UMA where reported; unavailable counters remain unmeasured'};
  }));
 
  if(['network','send','receive'].includes(mode))for(const host of hosts){
@@ -24,7 +25,7 @@ export function deviceLevels(data,metrics,mode,now=Date.now()) {
    const recent=now/1000-iface.sampled_at<15,disconnected=recent&&(iface.status==='disconnected'||['down','lowerlayerdown','notpresent'].includes(iface.state));
    const fresh=recent&&iface.status==='live'&&!disconnected;
    rows.push({id:`${host.host}:interface:${iface.ifindex}:${iface.name}`,name:`${host.host} · ${iface.name}`,machine:host.host,interface:iface.name,linkLabel:networkLinkLabel(iface,recent,disconnected),
-    value:fresh&&valid(iface[field])?iface[field]:null,throughput:fresh&&valid(iface.network_mbps)?iface.network_mbps:null,disconnected,unavailableLabel:disconnected?'Not connected':'No data',basis:`Physical interface ${iface.name} · ${iface.state||'unknown state'} · ${iface.window_seconds??'unknown'}s counter interval`});
+    sampleTime:iface.sampled_at*1000,value:fresh&&valid(iface[field])?iface[field]:null,throughput:fresh&&valid(iface.network_mbps)?iface.network_mbps:null,disconnected,unavailableLabel:disconnected?'Not connected':'No data',basis:`Physical interface ${iface.name} · ${iface.state||'unknown state'} · ${iface.window_seconds??'unknown'}s counter interval`});
   }
  }
  const field={network:'network_mbps',disk:'disk_busy_percent',ram:'ram_percent',cpu:'percent',send:'network_tx_mbps',receive:'network_rx_mbps'}[mode];
@@ -43,10 +44,10 @@ export function deviceLevels(data,metrics,mode,now=Date.now()) {
    basis=d.self?'Coordinator LAN interface only':'Gateway-observed device traffic; switched traffic may be missing';
   }
   if(d.hostname_source==='cached_mdns')basis+=' · Name from the last mDNS observation; connectivity is measured separately';
-  if(['network','send','receive'].includes(mode)&&value===null)continue;
-  rows.push({id:d.mac||d.ip,name:(d.hostname||d.ip)+(['network','send','receive'].includes(mode)?(h?' · interface unavailable':' · gateway only'):''),value,basis,...cpuInfo(h)});
+  if(['network','send','receive'].includes(mode)&&value===null&&!data.link_traffic?.capture_error)continue;
+  rows.push({id:d.mac||d.ip,name:(d.hostname||d.ip)+(['network','send','receive'].includes(mode)?(h?' · interface unavailable':' · gateway only'):''),value,basis,telemetryHost:h?.host,sampleTime:['cpu','ram'].includes(mode)?h?.sampled_at*1000:undefined,...cpuInfo(h)});
  }
- for(const h of hosts)if(!used.has(h.host)&&!['network','send','receive'].includes(mode))rows.push({id:h.host,name:h.host+(['network','send','receive'].includes(mode)?' · interface unavailable':''),value:hostValue(h),basis:'Host telemetry',...cpuInfo(h)});
+ for(const h of hosts)if(!used.has(h.host)&&!['network','send','receive'].includes(mode))rows.push({id:h.host,name:h.host+(['network','send','receive'].includes(mode)?' · interface unavailable':''),telemetryHost:h.host,sampleTime:h.sampled_at*1000,value:hostValue(h),basis:'Host telemetry',...cpuInfo(h)});
  return rows;
 }
 export function deviceColor(id){let hash=0;for(const c of id)hash=(hash*31+c.charCodeAt(0))|0;return `hsl(${(hash>>>0)%360} 78% 68%)`;}

@@ -3,7 +3,7 @@ from collections import deque
 from copy import deepcopy
 
 WINDOW_SECONDS = 300
-MAX_SAMPLES = 61
+MAX_SAMPLES = 2048
 HOST_FIELDS = 'host observed_hostname addresses status sampled_at window_seconds percent cpus ram_percent ram_used_bytes ram_total_bytes disk_busy_percent disk_basis network_mbps network_tx_mbps network_rx_mbps cpu_iowait_percent cpu_steal_percent cpu_pressure_some_percent'
 GPU_FIELDS = 'pci_id vendor name backend utilization_percent utilization_basis memory_total_mib memory_free_mib'
 
@@ -23,7 +23,7 @@ def project_host(row):
     host['network_interfaces']=project_interfaces(row.get('network_interfaces',[]))
     host['disks']=project_disks(row.get('disks',[]))
     hardware = row.get('hardware') or {}
-    host['hardware'] = {key: hardware[key] for key in ('stale',) if key in hardware}
+    host['hardware'] = {key: hardware[key] for key in ('stale','sampled_at') if key in hardware}
     host['hardware']['gpus'] = [{key: gpu[key] for key in GPU_FIELDS.split() if key in gpu}
                                 for gpu in hardware.get('gpus', [])[:16]]
     return host
@@ -43,11 +43,14 @@ class ResourceHistory:
     def __init__(self):
         self.samples = deque(maxlen=MAX_SAMPLES)
 
-    def append(self, hosts, now, network=None):
+    def append(self, hosts, now, network=None, partial=False):
         frame={'sampled_at': now, 'hosts': [project_host(host) for host in hosts[:64]]}
+        if partial:frame['partial']=True
         if network is not None:frame['network']=project_network(network)
-        self.samples.append(frame)
-        self.prune(now)
+        frames=[*self.samples,frame]
+        frames.sort(key=lambda row:row['sampled_at'])
+        latest=frames[-1]['sampled_at']
+        self.samples=deque((row for row in frames if row['sampled_at']>=latest-WINDOW_SECONDS),maxlen=MAX_SAMPLES)
 
     def prune(self, now):
         while self.samples and self.samples[0]['sampled_at'] < now - WINDOW_SECONDS:

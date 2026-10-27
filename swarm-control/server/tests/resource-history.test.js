@@ -37,3 +37,23 @@ test('historical directional gateway samples form a continuous measured series',
  recordResourceHistory(histories,network(now),{hosts:[],history:frames},now,splitRows);
  assert.equal(histories.split.get('aa:receive')[1].value,null);
 });
+
+test('independent host events do not insert gaps for other hosts or duplicate unchanged samples',()=>{
+ const histories={cpu:new Map(),gpu:new Map()};
+ const data={devices:[{hostname:'worker.local',mac:'aa'},{hostname:'other.local',mac:'bb'}]};
+ const first={...host(now-5000,25),hardware:{sampled_at:(now-4000)/1000,gpus:[{pci_id:'1',name:'GPU',utilization_percent:40}]}};
+ const other={...host(now-3000,50),host:'other.local'};
+ const metrics={hosts:[first,other],history:[{sampled_at:(now-5000)/1000,hosts:[first],partial:true},{sampled_at:(now-3000)/1000,hosts:[other],partial:true},{sampled_at:(now-2000)/1000,hosts:[],network:{devices:data.devices}}]};
+ recordResourceHistory(histories,data,metrics,now,rowsFor);
+ assert.deepEqual(histories.cpu.get('aa'),[{time:now-5000,value:25}]);
+ assert.deepEqual(histories.cpu.get('bb'),[{time:now-3000,value:50}]);
+ assert.deepEqual(histories.gpu.get('worker.local:gpu:1'),[{time:now-4000,value:40}]);
+ recordResourceHistory(histories,data,metrics,now+1000,rowsFor);
+ assert.equal(histories.gpu.get('worker.local:gpu:1').length,1);
+});
+
+test('fresh GPU samples survive a stale CPU timestamp and expire on their own timestamp',()=>{
+ const worker={...host(now-20000,25),status:'stale',hardware:{stale:true,sampled_at:(now-3000)/1000,gpus:[{name:'GPU',utilization_percent:40}]}};
+ assert.equal(deviceLevels({}, {hosts:[worker]},'gpu',now)[0].value,40);
+ assert.equal(deviceLevels({}, {hosts:[worker]},'gpu',now+15000)[0].value,null);
+});

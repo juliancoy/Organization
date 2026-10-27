@@ -40,3 +40,17 @@ def test_invalid_duplicates_and_out_of_order_samples():
     assert value['rate_per_second']==2
     with pytest.raises(ValueError):estimate_eta([],float('nan'),now=0)
     with pytest.raises(ValueError):estimate_eta([],100,now=0,min_span=0)
+
+
+def test_live_tracker_parallel_sources_block_missing_counters_and_restarts():
+    from wgs_eta import TransferEstimator
+    tracker=TransferEstimator()
+    def row(t,n,status='downloading'):
+        return {'bytes':1000,'status':status,'progress':{'updated':t,'bytes_completed':n}}
+    assert tracker.sample('sample',[('a',row(0,0)),('b',row(0,0))],now=0)['status']=='insufficient_data'
+    value=tracker.sample('sample',[('a',row(60,120)),('b',row(60,60))],now=60)
+    assert value['seconds_remaining']==940  # slower parallel receiver
+    assert tracker.sample('sample',[('a',row(65,120)),('b',row(65,60,'failed'))],now=65)['status']=='blocked'
+    assert tracker.sample('sample',[('a',row(70,130))],now=70,generation='new')['status']=='insufficient_data'
+    assert tracker.sample('other',[('b',{'bytes':1000,'status':'downloading'})],now=70)['status']=='insufficient_data'
+    assert tracker.sample('complete',[('a',{'bytes':1000,'status':'verified'})],now=70)['status']=='complete'

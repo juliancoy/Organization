@@ -7,6 +7,9 @@ from pathlib import Path
 import re
 import time
 from wgs_evidence import verified_sources
+from wgs_eta import TransferEstimator
+
+_TRANSFER_ETA = TransferEstimator()
 
 ROOT=Path(os.getenv('SWARM_WGS_ROOT','/mnt/PILEDRIVE/genomics-workbench/wgs'))
 
@@ -46,7 +49,8 @@ def snapshot(root=ROOT):
             progress=row.get('progress') if isinstance(row.get('progress'),dict) else {}
             received+=number(row.get('bytes')) if row.get('status')=='verified' else min(number(row.get('bytes')),max(number(row.get('bytes_completed')),number(progress.get('bytes_completed')),number(progress.get('bytes_received'))))
         samples.append({'sample':sample,'files_total':len(rows),'files_verified':len(verified),'files_active':sum(row.get('status')=='downloading' for row in rows),'files_failed':sum(row.get('status')=='failed' for row in rows),
-                        'bytes_total':sum(number(row.get('bytes')) for row in rows),'bytes_verified':sum(number(row.get('bytes')) for row in verified),'bytes_received':received})
+                        'bytes_total':sum(number(row.get('bytes')) for row in rows),'bytes_verified':sum(number(row.get('bytes')) for row in verified),'bytes_received':received,
+                        'eta':_TRANSFER_ETA.sample((str(root),sample),[(ident,row) for ident,row in jobs.items() if isinstance(row,dict) and row.get('sample')==sample],now=time.time(),generation=downloads.get('started'))})
     storage=[]
     workers=downloads.get('workers',[])
     for worker in workers if isinstance(workers,list) else []:
