@@ -59,11 +59,12 @@ class TaskManagerProjectionTests(unittest.TestCase):
         metrics={'total_percent':42,'live_hosts':1,'hosts':[{'host':'worker.local','status':'live','percent':42,
                  'sampled_at':123,'network_interfaces':[{'name':'eth0','rx_mbps':2,'tx_mbps':3,'secret':'private'}],'ram_percent':40,'disk_busy_percent':25,'network_mbps':5,
                  'session':{'token':'private'},'hardware':{'storage':{'path':'private'},'gpus':[{'name':'GPU','utilization_percent':12,'memory_total_mib':100,'memory_free_mib':50,'secret':'private'}]}}]}
-        metrics['history']=[{'sampled_at':123,'hosts':[metrics['hosts'][0]],'network':network}]
+        metrics['history']=[{'sampled_at':123,'partial':True,'hosts':[metrics['hosts'][0]],'network':network}]
         tests={'run':{'id':'fixture','status':'running','hosts':[],'credentials':'private'}}
         with patch('status.urlopen',side_effect=[io.BytesIO(json.dumps(v).encode()) for v in [network,metrics,tests]]) as fetch:
             result=status.task_manager()
         self.assertEqual([call.args[0].full_url for call in fetch.call_args_list],['http://127.0.0.1:8089/api/devices?resolve=0','http://127.0.0.1:8089/api/cpu','http://127.0.0.1:8089/api/distributed-tests'])
+        self.assertTrue(result['metrics']['history'][0]['partial'])
         host=result['metrics']['hosts'][0]
         for key in ['percent','ram_percent','disk_busy_percent','network_mbps']:
             self.assertEqual(host[key],metrics['hosts'][0][key])

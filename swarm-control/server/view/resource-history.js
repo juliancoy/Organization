@@ -22,7 +22,7 @@ export function recordResourceHistory(histories,data,metrics,now,rowsFor){
    }
   }
   for(const [id,points] of history){
-   const bounded=points.filter(point=>point.time>=now-300000).sort((a,b)=>a.time-b.time).slice(-180);
+   const bounded=points.filter(point=>point.time>=now-300000).sort((a,b)=>a.time-b.time).slice(-2048);
    if(bounded.length)history.set(id,bounded);else history.delete(id);
   }
  }

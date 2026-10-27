@@ -57,3 +57,14 @@ test('fresh GPU samples survive a stale CPU timestamp and expire on their own ti
  assert.equal(deviceLevels({}, {hosts:[worker]},'gpu',now)[0].value,40);
  assert.equal(deviceLevels({}, {hosts:[worker]},'gpu',now+15000)[0].value,null);
 });
+
+
+test('five-minute histories retain dense telemetry instead of truncating at 180 points',()=>{
+ const histories={cpu:new Map()};
+ const frames=Array.from({length:240},(_,i)=>{const time=now-299000+i*1250;return {sampled_at:time/1000,hosts:[host(time,25)],partial:true};});
+ recordResourceHistory(histories,{}, {hosts:[],history:frames},now,rowsFor);
+ const points=histories.cpu.get('worker.local');
+ assert.equal(points.length,240);
+ assert.equal(points[0].time,now-299000);
+ assert.ok(points.every(point=>point.value===25));
+});

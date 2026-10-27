@@ -105,11 +105,11 @@ def task_manager():
         hardware = row.get('hardware') or {}
         host['network_interfaces']=project_interfaces(row.get('network_interfaces',[]))
         host['disks']=project_disks(row.get('disks',[]))
-        host['hardware'] = pick(hardware, 'stale')
+        host['hardware'] = pick(hardware, 'stale sampled_at')
         host['hardware']['gpus'] = [pick(gpu, 'pci_id vendor name backend utilization_percent memory_total_mib memory_free_mib') for gpu in hardware.get('gpus', [])[:16]]
         summary['hosts'].append(host)
     # Reapply the same field allowlist at the authenticated boundary.
-    summary['history'] = [{'sampled_at': frame['sampled_at'], 'hosts': [project_host(host) for host in frame.get('hosts', [])[:64]],
+    summary['history'] = [{'sampled_at': frame['sampled_at'], 'partial': frame.get('partial') is True, 'hosts': [project_host(host) for host in frame.get('hosts', [])[:64]],
                            **({'network':project_network(frame['network'])} if 'network' in frame else {})}
                           for frame in metrics.get('history', [])[-MAX_SAMPLES:]]
     summary['history_window_seconds'] = WINDOW_SECONDS
