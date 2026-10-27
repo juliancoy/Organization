@@ -82,7 +82,7 @@ class PIdPRecoveryTests(unittest.TestCase):
         self.assertEqual(len(json.loads(stored)['sessions']), 3)
 
     def test_verified_session_uses_pidp_profile_and_rejects_non_https_avatars(self):
-        with devices.state() as state:token=devices.new_session(state,'Laptop',pidp_identity='owner-person')
+        with devices.state() as state:token=devices.new_session(state,'Laptop',pidp_identity='owner-person',pidp_subject=self.cfg['owner_subject'])
         self.addCleanup(auth.PROFILE_CACHE.clear);auth.PROFILE_CACHE.clear()
         with patch.object(auth,'fetch',return_value=[{'id':'owner-person','display_name':'Test Owner','avatar_url':'https://identity.example/avatar.png'}]):
             profile=auth.session_info(ORIGIN,token)
@@ -92,6 +92,21 @@ class PIdPRecoveryTests(unittest.TestCase):
         with patch.object(auth,'fetch',return_value=[{'id':'owner-person','avatar_url':'javascript:alert(1)'}]):
             self.assertIsNone(auth.session_info(ORIGIN,token)['user']['avatar_url'])
         with self.assertRaises(auth.Denied):auth.session_info(ORIGIN,devices.session(devices.issue()))
+
+    def test_other_linked_email_identity_cannot_use_the_same_canonical_owner(self):
+        query,browser,_=self.login()
+        with patch.object(auth,'fetch',side_effect=[{'access_token':self.token(sub='website:app:other-email')},{'keys':[self.jwk]},self.introspection('website:app:other-email')]):
+            with self.assertRaisesRegex(auth.Denied,'identity is not allowed'):auth.complete(ORIGIN,query,browser)
+        with devices.state() as state:
+            allowed=devices.new_session(state,pidp_identity='owner-person',pidp_subject=self.cfg['owner_subject'])
+            other=devices.new_session(state,pidp_identity='owner-person',pidp_subject='website:app:other-email')
+            old=devices.new_session(state,pidp_identity='owner-person')
+        self.assertTrue(auth.valid_session(ORIGIN,allowed))
+        self.assertFalse(auth.valid_session(ORIGIN,other))
+        self.assertFalse(auth.valid_session(ORIGIN,old))
+        self.cfg['allowed_subjects']=['website:app:replacement']
+        auth.CONFIG.write_text(json.dumps(self.cfg));auth.CONFIG.chmod(0o600)
+        self.assertFalse(auth.valid_session(ORIGIN,allowed))
 
     def test_other_account_cannot_disconnect_owner(self):
         old = devices.session(devices.issue()); query, browser, _ = self.login()
@@ -150,6 +165,7 @@ class PIdPRecoveryTests(unittest.TestCase):
 
     def test_only_pidp_verified_linked_identity_can_use_the_owner_account(self):
         subject='owner:owner-person'
+        self.cfg['allowed_subjects']=[subject,self.cfg['owner_subject']]
         with patch.object(auth,'fetch',side_effect=[{'keys':[self.jwk]},self.introspection(subject)]):
             auth.verify(self.token(sub=subject),self.cfg)
         with patch.object(auth,'fetch',side_effect=[{'keys':[self.jwk]},self.introspection(subject,active=False)]):

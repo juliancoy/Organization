@@ -289,3 +289,12 @@ WAN WebRTC offer/signaling for APK delivery is retired (`/api/v1/test-app/offer`
 returns 404). The launcher is delivered through PIdP-authenticated HTTPS. The
 local fleet agent protocol remains a separate machine execution boundary and is
 not published by the console tunnel.
+
+WAN authorization also checks the signed PIdP subject against the private
+`allowed_subjects` policy on every request. The production policy is pinned to
+the active, verified PIdP account identities for `julian@codecollective.us`,
+confirmed against the authoritative identity directory. Other linked sign-in
+identities are denied even if they share a canonical person ID. Sessions retain
+the verified sign-in subject under their existing expiry/revocation lifecycle;
+older sessions without that proof require a fresh sign-in. Email text provided
+by the browser never grants access.

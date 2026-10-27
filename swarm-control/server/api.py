@@ -96,7 +96,7 @@ class Handler(BaseHTTPRequestHandler):
         valid_read=self.command=='GET' and (path in ('/api/v1/swarm/wgs','/api/v1/swarm/history','/api/v1/swarm/connections','/api/v1/swarm/task-manager','/api/v1/swarm/status','/api/v1/swarm/session','/api/v1/swarm/research','/api/v1/swarm/research/jobs') or path==API+'queue' or path==API+'threads' or path.startswith(API+'threads/') or path in ('/api/v1/test-app/status','/api/v1/test-app/download'))
         valid_write=self.command=='POST' and path in (API+'commands',API+'queue',API+'queue/cancel',API+'transcribe','/api/v1/swarm/research/jobs','/api/v1/swarm/tests/request')
         if not (valid_read or valid_write or pairing):return self.reply(404,{'error':{'message':'Not found'}})
-        if path!='/logout' and not devices.pidp_valid(self.device()):return self.reply(401,{'error':{'message':'Sign in with PIdP to reconnect to CompAI'}})
+        if path!='/logout' and not identity.valid_session(origin,self.device()):return self.reply(401,{'error':{'message':'Sign in with PIdP to reconnect to CompAI'}})
         if path==API+'transcribe':
             from voice import transcribe,VoiceError,MAX_AUDIO,TYPES
             try:

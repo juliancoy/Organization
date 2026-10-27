@@ -38,10 +38,10 @@ def issue():
         value['pairs']={digest(token):time.time()+600};save(value)
     return token
 
-def new_session(value,label='Browser',pidp_identity=None):
+def new_session(value,label='Browser',pidp_identity=None,pidp_subject=None):
     token=secrets.token_urlsafe(32)
     now=time.time()
-    value['sessions'][digest(token)]={'label':label,'created':now,'last_seen':now,'expires':now+LIFETIME,**({'auth_method':'pidp','pidp_identity':pidp_identity} if pidp_identity else {})};save(value)
+    value['sessions'][digest(token)]={'label':label,'created':now,'last_seen':now,'expires':now+LIFETIME,**({'auth_method':'pidp','pidp_identity':pidp_identity,'pidp_subject':pidp_subject} if pidp_identity else {})};save(value)
     return token
 
 def session(pair):

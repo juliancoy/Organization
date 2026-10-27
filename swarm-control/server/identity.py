@@ -56,6 +56,8 @@ def config(origin):
         raise Denied('Swarm Control requires its own resource and permission.')
     if not value.get('owner_canonical_user_id') or len(value.get('resource_secret',''))<32:
         raise Denied('Configure the verified PIdP owner and resource credential.')
+    allowed=value.get('allowed_subjects',[value['owner_subject']])
+    if not isinstance(allowed,list) or not 1<=len(allowed)<=16 or any(not isinstance(subject,str) or not subject or len(subject)>512 for subject in allowed):raise Denied('Invalid PIdP identity allowlist.')
     return value
 
 
@@ -119,6 +121,8 @@ def verify(token, cfg):
     canonical=identity.get('canonical_user_id')
     if not isinstance(canonical,str) or not hmac.compare_digest(canonical,cfg['owner_canonical_user_id']):
         raise Denied('This PIdP account is not the CompAI owner.')
+    if claims.get('sub') not in cfg.get('allowed_subjects',[cfg['owner_subject']]):
+        raise Denied('This PIdP sign-in identity is not allowed.')
     return canonical
 
 
@@ -145,14 +149,14 @@ def complete(origin, query, browser):
     with devices.state() as value:
         # Reauthentication rotates this browser only; other controllers remain valid.
         if pending['device']:value['sessions'].pop(pending['device'],None)
-        return devices.new_session(value,pending['label'],pidp_identity=canonical)
+        return devices.new_session(value,pending['label'],pidp_identity=canonical,pidp_subject=json.loads(decode(tokens['access_token'].split('.')[1]))['sub'])
 
 
 PROFILE_CACHE = {}
 
 def session_info(origin, token):
     record=devices.describe(token)
-    if not record or not devices.pidp_valid(token):raise Denied('Sign in with PIdP.')
+    if not record or not valid_session(origin,token):raise Denied('Sign in with the allowed PIdP account.')
     cfg=config(origin)
     if record['pidp_identity']!=cfg['owner_canonical_user_id']:raise Denied('This PIdP account is not the CompAI owner.')
     key=(cfg['issuer'],record['pidp_identity']);cached=PROFILE_CACHE.get(key)
@@ -175,3 +179,11 @@ def session_info(origin, token):
         except Exception:
             PROFILE_CACHE.clear();PROFILE_CACHE[key]=(time.time()+60,profile)  # Profile outages do not block sign-in or cause retry storms.
     return {**{key:record[key] for key in ('label','created','last_seen','expires')},'auth_method':'pidp','user':profile}
+
+
+def valid_session(origin,token):
+    if not devices.pidp_valid(token):return False
+    try:
+        cfg=config(origin);record=devices.describe(token) or {}
+        return record.get('pidp_identity')==cfg['owner_canonical_user_id'] and record.get('pidp_subject') in cfg.get('allowed_subjects',[cfg.get('owner_subject')])
+    except (OSError,ValueError,KeyError):return False

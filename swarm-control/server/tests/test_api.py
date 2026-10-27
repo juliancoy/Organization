@@ -17,7 +17,8 @@ class RemoteBoundaryTests(unittest.TestCase):
         p=Path(self.temp.name)/'token';p.write_text('owner'*16)
         env=patch.dict(os.environ,{'MAP_CODEX_TOKEN_FILE':str(p)});env.start();self.addCleanup(env.stop)
         device_path=patch.object(devices,'FILE',Path(self.temp.name)/'devices.json');device_path.start();self.addCleanup(device_path.stop)
-        with devices.state() as state:self.cookie='__Host-compai_device='+devices.new_session(state,pidp_identity='owner-person')
+        with devices.state() as state:self.cookie='__Host-compai_device='+devices.new_session(state,pidp_identity='owner-person',pidp_subject='test-owner')
+        policy=patch('identity.config',return_value={'owner_canonical_user_id':'owner-person','allowed_subjects':['test-owner']});policy.start();self.addCleanup(policy.stop)
         self.server=ThreadingHTTPServer(('127.0.0.1',0),Handler);self.server.public_origin='https://compai.example'
         threading.Thread(target=self.server.serve_forever,daemon=True).start()
         self.addCleanup(self.server.server_close);self.addCleanup(self.server.shutdown)
@@ -117,7 +118,7 @@ class RemoteBoundaryTests(unittest.TestCase):
             rest.assert_not_called()
 
     def test_pidp_keeps_both_browsers_and_logout_revokes_only_one(self):
-        with devices.state() as state:replacement='__Host-compai_device='+devices.new_session(state,pidp_identity='owner-person')
+        with devices.state() as state:replacement='__Host-compai_device='+devices.new_session(state,pidp_identity='owner-person',pidp_subject='test-owner')
         with patch('api.codex.rest',return_value=(200,{'threads':[]})):
             self.assertEqual(self.request('/api/v1/master/codex/threads',cookie=self.cookie),200)
             self.assertEqual(self.request('/api/v1/master/codex/threads',cookie=replacement),200)
