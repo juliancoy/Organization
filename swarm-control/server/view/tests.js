@@ -4,6 +4,7 @@ import {authorizedAction} from './authorized-action.js';
 import {snapshotFetch} from './snapshot-fetch.js';
 import {renderVisualArtifacts} from './visual-artifacts.js';
 import {renderActivity} from './run-activity.js';
+import {renderRunWork} from './run-work.js';
 import './machine-heat.js';
 import './host-terminal.js';
 import {summarizeFailure} from './failure-summary.js';
@@ -24,7 +25,7 @@ async function loadHistoryReasons(){
   for(let i=0;i<wanted.length;i+=2){
    await Promise.all(wanted.slice(i,i+2).map(async item=>{
     historyPending.add(item.id);
-    try{const response=await snapshotFetch('/api/distributed-tests?id='+encodeURIComponent(item.id),{cache:'no-store',signal:AbortSignal.timeout(5000)});if(!response.ok)throw Error();const result=await response.json();if(result.run)historyReports.set(item.id,{stamp:historyStamp(item),summary:summarizeFailure(result.run)});}
+    try{const response=await snapshotFetch('/api/distributed-tests?id='+encodeURIComponent(item.id),{cache:'no-store',signal:AbortSignal.timeout(5000)});if(!response.ok)throw Error();const result=await response.json();if(result.run)historyReports.set(item.id,{stamp:historyStamp(item),summary:summarizeFailure(result.run),work:result.run.hosts?.map(host=>({host:host.host,jobs:host.jobs}))});}
     catch{historyReports.set(item.id,{stamp:historyStamp(item),unavailable:true});}
     finally{historyPending.delete(item.id);}
    }));
@@ -77,6 +78,8 @@ function renderHistory(){
   heading.append(el('strong',new Date(item.started).toLocaleString()),el('span',seconds(elapsed)+(!terminal.has(item.status)&&elapsed!==null?' elapsed':''),'suite-duration'));
   button.append(heading,badge(item.status),el('code',item.id));
   button.append(el('small',Number.isInteger(item.suites)?item.passed+' / '+item.suites+' jobs passed'+(item.reused?' · '+item.reused+' unchanged':'')+(item.failed?' · '+item.failed+' failed / unavailable':''):'Open recorded results'));
+  const work=item.id===data.run?.id?data.run.hosts:historyReports.get(item.id)?.work;
+  if(work)button.append(renderRunWork(work));
   const reason=item.id===data.run?.id?summarizeFailure(data.run):historyReports.get(item.id)?.summary;
   if(reason){const preview=el('span',reason.headline.slice(0,200),'run-failure-preview');preview.title=reason.headline;button.append(preview);}
   else button.append(el('span',historyReports.get(item.id)?.unavailable?'Saved explanation unavailable · open run to retry':'Loading saved reason…','run-failure-preview muted'));
