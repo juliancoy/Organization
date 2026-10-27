@@ -1,4 +1,5 @@
 import data from './genome-data.js';
+import {categoryPercent,categoryMean as meanPercent,categoryDelta,deviationScale} from './genome-comparison.js';
 const $=s=>document.querySelector(s),fmt=n=>Number(n).toLocaleString('en-US');
 const colors=['#a8ecc6','#bdacfa','#f5bb83','#8fcce8','#eb97b9'];
 const names={SNV:'Single-letter changes',indel:'Insertions / deletions',MNV:'Multi-letter changes',mixed:'Mixed changes',symbolic:'Other variants',heterozygous:'Different alleles',hom_alternate:'Matching alternate alleles',alternate_haploid:'Single-copy alternate',hom_reference:'Matching reference alleles',missing_or_partial:'Unknown / incomplete'};
@@ -7,10 +8,6 @@ const svgNode=(tag,attrs={})=>{const n=document.createElementNS('http://www.w3.o
 function svg(label,w=800,h=210){const n=svgNode('svg',{viewBox:`0 0 ${w} ${h}`,role:'img','aria-label':label});const title=svgNode('title');title.textContent=label;n.append(title);return n}
 function bars(target,entries,{color=colors[1],suffix='',denominator=null}={}){const parent=$(target);parent.replaceChildren();const max=denominator||Math.max(1,...entries.map(([,v])=>v));for(const [name,value]of entries){const row=node('div'),label=node('div',undefined,'bar-label');label.append(node('span',names[name]||name.replaceAll('_',' ')),node('span',fmt(value)+suffix));const track=node('div',undefined,'track'),fill=node('span');fill.style.width=`${value/max*100}%`;fill.style.background=color;track.append(fill);row.append(label,track);parent.append(row)}}
 const samples=data.samples;
-let referenceSample=samples.find(s=>s.name===new URLSearchParams(location.search).get('reference'))||samples[0];
-function selectReference(sample){referenceSample=sample;const url=new URL(location.href);url.searchParams.set('reference',sample.name);history.replaceState(null,'',url);renderComposition();$('#ring-readout').textContent=sample.name+' selected as the chart comparison reference.';}
-function referenceControl(element,sample){element.setAttribute('role','button');element.setAttribute('tabindex','0');element.setAttribute('aria-label','Use '+sample.name+' as chart reference');element.setAttribute('aria-pressed',String(sample===referenceSample));element.addEventListener('click',()=>selectReference(sample));element.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();selectReference(sample);document.querySelector('[data-ring-label="'+sample.name+'"]').focus();}});}
-
 const sampleColor=i=>['#a8ecc6','#bdacfa','#f5bb83','#8fcce8','#eb97b9','#f6df83'][i];
 function legend(){const parent=$('#dataset-legend');for(const [i,s] of samples.entries()){const row=node('div',undefined,'dataset-key'),dot=node('span',undefined,'dot');dot.style.background=sampleColor(i);row.append(dot,node('span',`${s.name} · ${s.assembly}`));parent.append(row)}}
 // Every category shares a scale across datasets. Missing values are never zeroes.
@@ -22,41 +19,87 @@ const alternateColors=['#009e73','#cc79a7','#56b4e9','#e69f00','#f0e442','#77859
 let categoryPalette=false,logStrength=8;
 const percentText=n=>n===0?'0%':n<0.0001?'<0.0001%':n.toFixed(4)+'%';
 const compositionColor=key=>{const i=genomeCategories.findIndex(c=>c[0]===key);return categoryPalette?alternateColors[i]:genomeCategories[i][2]};
-// One shared rarest-first order, based on mean true percentage across sources.
-const categoryMean=key=>samples.reduce((sum,s)=>sum+(s.genome_composition.counts[key]||0)/s.genome_composition.reference_positions,0)/samples.length;
+// The same rarest-first category order is used on every dataset ring.
+const categoryMean=key=>meanPercent(samples,key);
 const sharedCategoryOrder=genomeCategories.slice().sort((a,b)=>categoryMean(a[0])-categoryMean(b[0]));
-function orderedCategories(){return sharedCategoryOrder}
-const genomeScale=pct=>logStrength===0?pct:Math.log1p(pct/100*10**logStrength)/Math.log1p(10**logStrength)*100;
-function percentageGuide(chart){const guide=svgNode('g',{'class':'percentage-guide','aria-label':'Shared cumulative genome percentage scale, clockwise from the top'});guide.append(svgNode('circle',{cx:320,cy:320,r:316,fill:'none',stroke:'#a8b5c7','stroke-width':1.5}));const ticks=logStrength===0?[0,25,50,75,100]:[0,.0001,.001,.01,.1,1,10,50,100];const labeled=[];for(const pct of ticks){const fraction=genomeScale(pct)/100,angle=fraction*2*Math.PI-Math.PI/2,x=Math.cos(angle),y=Math.sin(angle);guide.append(svgNode('line',{x1:320+x*310,y1:320+y*310,x2:320+x*324,y2:320+y*324,stroke:'#eef3f7','stroke-width':2,'data-tick':pct,'data-position':fraction}));if(pct===100)continue;const tx=320+x*350,ty=320+y*350;if(labeled.some(p=>Math.hypot(p.x-tx,p.y-ty)<85))continue;labeled.push({x:tx,y:ty});const text=svgNode('text',{x:tx,y:ty,'text-anchor':'middle','dominant-baseline':'central',fill:'#eef3f7','font-size':23,'font-weight':500,stroke:'#10151d','stroke-width':5,'paint-order':'stroke','data-tick-label':pct});text.textContent=pct===0?'0 / 100%':`${pct}%`;guide.append(text)}chart.append(guide)}
-function categorySectors(){let cumulative=0;return orderedCategories().map(([key,label])=>{const mean=categoryMean(key)*100,start=genomeScale(cumulative);cumulative+=mean;const end=genomeScale(cumulative);return {key,label,mean,start,end,arc:end-start};});}
-function sectionTitles(chart){
- const group=svgNode('g',{'class':'ring-section-titles','pointer-events':'none','aria-label':'Shared category endpoints positioned by cumulative mean percentages'});
- for(const sector of categorySectors()){
-  const {key,label,mean,end}=sector,angle=end/100*2*Math.PI-Math.PI/2,x=Math.cos(angle),y=Math.sin(angle);
-  group.append(svgNode('line',{x1:320+x*92,y1:320+y*92,x2:320+x*309,y2:320+y*309,stroke:compositionColor(key),'stroke-opacity':.45,'stroke-dasharray':'2 4','data-endpoint-guide':key,'data-endpoint':end}));
-  const radius=key==='single'||key==='same'?465:key==='deletions'?415:365;
-  const text=svgNode('text',{x:320+x*radius,y:320+y*radius,'text-anchor':x<-.1?'end':x>.1?'start':'middle','dominant-baseline':'middle',fill:compositionColor(key),'font-size':22,'font-weight':600,stroke:'#10151d','stroke-width':6,'paint-order':'stroke','data-section-title':key});
-  const title=svgNode('tspan',{x:text.getAttribute('x'),dy:'-.3em'});title.textContent=label;
-  const quantity=svgNode('tspan',{x:text.getAttribute('x'),dy:'1.3em','font-size':17});quantity.textContent='Mean '+percentText(mean);text.append(title,quantity);group.append(text);
+const orderedCategories=()=>sharedCategoryOrder;
+const maximumDelta=Math.max(...samples.flatMap(sample=>genomeCategories.map(([key])=>Math.abs(categoryDelta(samples,sample,key)||0))));
+const signedText=(value,suffix=' pp')=>value===null?'N/A':value===0?'0'+suffix:(value>0?'+':'−')+(Math.abs(value)<.0001?'<0.0001':Math.abs(value).toFixed(4))+suffix;
+function categorySectors(){return orderedCategories().map(([key,label],i)=>({key,label,mean:categoryMean(key),center:(i+.5)*100/6,half:100/6*.43}));}
+function percentageGuide(chart){
+ const guide=svgNode('g',{'class':'percentage-guide','aria-label':'Each category uses the same symmetric difference scale. Counterclockwise is below the mean; clockwise is above.'});
+ guide.append(svgNode('circle',{cx:320,cy:320,r:312,fill:'none',stroke:'#a8b5c7','stroke-width':1}));
+ for(const {center,half} of categorySectors()){
+  for(const [fraction,label] of [[-1,'−'],[0,'0'],[1,'+']]){
+   const angle=(center+fraction*half)/100*2*Math.PI-Math.PI/2,x=Math.cos(angle),y=Math.sin(angle);
+   guide.append(svgNode('line',{x1:320+x*304,y1:320+y*304,x2:320+x*318,y2:320+y*318,stroke:'#eef3f7','stroke-width':fraction===0?2:1}));
+   const text=svgNode('text',{x:320+x*332,y:320+y*332,'text-anchor':'middle','dominant-baseline':'central',fill:'#eef3f7','font-size':19,'font-weight':600});text.textContent=label;guide.append(text);
+  }
  }
- chart.append(group);
+ chart.append(guide);
 }
-function renderComposition(){const totals=$('#metrics');totals.replaceChildren();const ringSamples=[referenceSample,...samples.filter(s=>s!==referenceSample)];const chart=svg('Six concentric DNA dataset rings. Outer to inner: '+ringSamples.map(s=>s.name).join(', ')+'. All rings share category endpoints based on cumulative mean percentages; labels report each dataset’s true percentage.',640,640);chart.classList.add('genome-rings');chart.setAttribute('viewBox','-300 -210 1240 1060');const labels=svgNode('g',{'class':'ring-labels'}),legend=node('div',undefined,'ring-legend');orderedCategories().forEach(([key,label])=>{const item=node('div',undefined,'category-bubble'),dot=node('span',undefined,'dot');const color=compositionColor(key);dot.style.background=color;item.style.setProperty('--category-color',color);item.dataset.category=key;item.append(dot,node('span',label));legend.append(item)});const details=node('details',undefined,'ring-details');details.append(node('summary','Exact genome percentages for every source'));for(const [i,s] of ringSamples.entries()){const c=s.genome_composition,r=289-i*36,group=svgNode('g',{'data-source':s.name,'data-reference':String(s===referenceSample)}),row=node('div',undefined,'genome-row');const ringLabel=svgNode('g',{'data-ring-label':s.name});const labelX=320+r*.5,labelY=320-r*Math.sqrt(3)/2;const backing=svgNode('rect',{x:labelX-56,y:labelY-15,width:112,height:30,rx:6,fill:'#10151d'});const text=svgNode('text',{x:labelX,y:labelY,'text-anchor':'middle','dominant-baseline':'central',fill:'#ffffff','font-size':26,'font-weight':600});text.textContent=s.name;referenceControl(ringLabel,s);ringLabel.append(backing,text);labels.append(ringLabel);row.append(node('h4',`${i+1}. ${s.name} · ${s.assembly}`));const exact=node('div',undefined,'composition-values');for(const [key,label] of orderedCategories()){const pct=key==='same'&&c.same===null?null:(c.counts[key]||0)/c.reference_positions*100,color=compositionColor(key),value=node('div',undefined,'composition-value'),dot=node('span',undefined,'dot');dot.style.background=color;const ref=referenceSample.genome_composition,refPct=key==='same'&&ref.same===null?null:(ref.counts[key]||0)/ref.reference_positions*100;const delta=pct===null||refPct===null?'comparison unavailable':((pct-refPct)>=0?'+':'')+(pct-refPct).toFixed(4)+' percentage points';value.append(dot,node('span',label),node('strong',pct===null?'Unavailable':percentText(pct)));if(s!==referenceSample)value.append(node('span',delta,'reference-delta'));exact.append(value)}for(const {key,label,arc,start,end} of categorySectors()){
- const pct=key==='same'&&c.same===null?null:(c.counts[key]||0)/c.reference_positions*100;
- if(!arc)continue;
- const segment=svgNode('circle',{cx:320,cy:320,r,fill:'none',stroke:compositionColor(key),'stroke-width':27,pathLength:100,'stroke-dasharray':`${arc} ${100-arc}`,'stroke-dashoffset':-start,transform:'rotate(-90 320 320)','data-category':key,'data-percent':pct??'unavailable','data-arc':arc,'data-endpoint':end});
- const title=svgNode('title');title.textContent=`${s.name} · ${label}: ${pct===null?'Unavailable':percentText(pct)}. Shared endpoint uses the mean across datasets.`;segment.append(title);
- const show=()=>{$('#ring-readout').textContent=title.textContent};referenceControl(segment,s);segment.setAttribute('aria-label',title.textContent+' Click to use '+s.name+' as chart reference.');segment.addEventListener('pointerenter',show);segment.addEventListener('focus',show);group.append(segment);
- const angle=end/100*360-90,rad=angle*Math.PI/180,bottom=Math.sin(rad)>0;
- const value=svgNode('text',{x:0,y:0,transform:`translate(${320+r*Math.cos(rad)} ${320+r*Math.sin(rad)}) rotate(${angle+90+(bottom?180:0)})`,dx:bottom?5:-5,dy:5,'text-anchor':bottom?'start':'end',fill:'#fff','font-size':16,'font-weight':600,stroke:'#10151d','stroke-width':4,'paint-order':'stroke','pointer-events':'none','data-endpoint-value':key,'data-endpoint':end});value.textContent=pct===null?'N/A':percentText(pct);group.append(value);
+function differenceScale(){
+ const key=node('div',undefined,'difference-scale'),title=node('p','Shared difference scale · percentage points','footnote');
+ const axis=svg('Signed percentage-point scale used in every category',700,86);
+ axis.append(svgNode('line',{x1:40,x2:660,y1:25,y2:25,stroke:'#a8b5c7','stroke-width':2}));
+ const ticks=logStrength===0?[-maximumDelta,-maximumDelta/2,0,maximumDelta/2,maximumDelta]:[-maximumDelta,-1,-.01,-.0001,0,.0001,.01,1,maximumDelta];
+ const drawn=[],minGap=window.innerWidth<480?136:62;
+ for(const value of [0,...ticks.filter(value=>value!==0)]){
+  const x=350+deviationScale(value,maximumDelta,logStrength)*310;
+  axis.append(svgNode('line',{x1:x,x2:x,y1:17,y2:33,stroke:'#eef3f7','stroke-width':1,'data-difference-tick':value}));
+  if(drawn.some(previous=>Math.abs(previous-x)<minGap))continue;drawn.push(x);
+  const text=svgNode('text',{x,y:57,'text-anchor':'middle',fill:'#eef3f7','font-size':16});text.textContent=value===0?'0':(value>0?'+':'−')+(Math.abs(value)===maximumDelta?Math.abs(value).toFixed(1):Number(Math.abs(value).toPrecision(2)));axis.append(text);
  }
- chart.append(group);row.append(node('p',`100% = ${fmt(c.reference_positions)} reference positions`,'footnote'),exact);if(c.reference_evidence){const evidence=c.reference_evidence;row.append(node('p',evidence.summary,'footnote'));if(evidence.source_url){const link=node('a','Official benchmark confidence regions');link.href=evidence.source_url;row.append(link)}}details.append(row)}const center=svgNode('text',{x:320,y:315,'text-anchor':'middle',fill:'#eef3f7','font-size':22});center.textContent=logStrength===0?'Linear scale':'Log scale';const sub=svgNode('text',{x:320,y:344,'text-anchor':'middle',fill:'#a8b5c7','font-size':14});sub.textContent='Ref: '+referenceSample.name;chart.append(center,sub,labels);percentageGuide(chart);sectionTitles(chart);const choice=node('label','Chart reference: '+referenceSample.name,'reference-choice');const select=node('select');select.setAttribute('aria-label','Chart reference dataset');for(const sample of samples){const option=node('option',sample.name+' · '+sample.assembly);option.value=sample.name;option.selected=sample===referenceSample;select.append(option)}select.onchange=()=>selectReference(samples.find(s=>s.name===select.value));choice.append(select);totals.append(choice,chart,legend,details);$('#dna-comparison-title').textContent='Dataset composition · compared with '+referenceSample.name;$('#ring-reference-note').textContent='All rings share endpoints based on the cumulative mean category percentages; numbers at each endpoint are dataset percentages. Chart reference: '+referenceSample.name+' ('+referenceSample.assembly+'), shown on the outer ring. Exact values include percentage-point differences from this dataset. These compare category proportions, not DNA sequence identity; variant calls retain their original reference assemblies.';$('#composition-palette').textContent=categoryPalette?'Palette: colorblind-friendly · switch palette':'Palette: high contrast · switch palette';$('#log-value').textContent=logStrength===0?'Linear · true angular proportions':`Log strength ${logStrength} / 8`;}
+ key.append(title,axis);return key;
+}
+function renderComposition(){
+ const totals=$('#metrics'),expanded=totals.querySelector('.ring-details')?.open;totals.replaceChildren();
+ const chart=svg('Dataset percentages minus their category mean, in percentage points. Six concentric datasets; positive differences extend clockwise and negative differences counterclockwise from each category zero.',640,640);
+ chart.classList.add('genome-rings');chart.setAttribute('viewBox','-40 -40 720 720');
+ const labels=svgNode('g',{'class':'ring-labels'}),legend=node('div',undefined,'ring-legend');
+ for(const [key,label] of orderedCategories()){
+  const item=node('div',undefined,'category-bubble'),dot=node('span',undefined,'dot'),copy=node('span',undefined,'category-copy');
+  const color=compositionColor(key);dot.style.background=color;item.style.setProperty('--category-color',color);item.dataset.category=key;
+  copy.append(node('span',label),node('strong',percentText(categoryMean(key))));item.append(dot,copy);legend.append(item);
+ }
+ const details=node('details',undefined,'ring-details');details.open=!!expanded;details.append(node('summary','Exact percentages and differences from the mean'));
+ for(const [i,sample] of samples.entries()){
+  const c=sample.genome_composition,r=289-i*36,group=svgNode('g',{'data-source':sample.name}),row=node('div',undefined,'genome-row');
+  row.append(node('h4',`${sample.name} · ${sample.assembly}`));const exact=node('div',undefined,'composition-values');
+  for(const {key,label,mean,center,half} of categorySectors()){
+   const pct=categoryPercent(sample,key),delta=categoryDelta(samples,sample,key),position=delta===null?0:deviationScale(delta,maximumDelta,logStrength)*half;
+   const track=svgNode('circle',{cx:320,cy:320,r,fill:'none',stroke:'#26313e','stroke-width':27,pathLength:100,'stroke-dasharray':`${half*2} ${100-half*2}`,'stroke-dashoffset':-(center-half),transform:'rotate(-90 320 320)','data-category-track':key});group.append(track);
+   if(delta!==null&&delta!==0){
+    const arc=Math.abs(position),start=delta<0?center+position:center;
+    const segment=svgNode('circle',{cx:320,cy:320,r,fill:'none',stroke:compositionColor(key),'stroke-width':27,pathLength:100,'stroke-dasharray':`${arc} ${100-arc}`,'stroke-dashoffset':-start,transform:'rotate(-90 320 320)','data-category':key,'data-percent':pct,'data-delta':delta,'data-arc':arc,tabindex:0});
+    const title=svgNode('title');title.textContent=`${sample.name} · ${label}: ${percentText(pct)}; ${signedText(delta)} from the mean (${percentText(mean)}).`;segment.append(title);segment.setAttribute('aria-label',title.textContent);
+    const show=()=>{$('#ring-readout').textContent=title.textContent};segment.addEventListener('pointerenter',show);segment.addEventListener('focus',show);group.append(segment);
+   }
+   const angle=center/100*360-90,rad=angle*Math.PI/180,bottom=Math.sin(rad)>0;
+   const zero=svgNode('line',{x1:320+(r-14)*Math.cos(rad),y1:320+(r-14)*Math.sin(rad),x2:320+(r+14)*Math.cos(rad),y2:320+(r+14)*Math.sin(rad),stroke:'#d0dae5','stroke-opacity':.65,'stroke-width':1});group.append(zero);
+   const value=svgNode('text',{transform:`translate(${320+r*Math.cos(rad)} ${320+r*Math.sin(rad)}) rotate(${angle+90+(bottom?180:0)})`,'text-anchor':'middle','dominant-baseline':'central',fill:'#fff','font-size':15,'font-weight':600,stroke:'#10151d','stroke-width':4,'paint-order':'stroke','pointer-events':'none','data-delta-label':key,'data-delta':delta??'unavailable'});value.textContent=signedText(delta,'');group.append(value);
+   const cell=node('div',undefined,'composition-value'),dot=node('span',undefined,'dot');dot.style.background=compositionColor(key);cell.append(dot,node('span',label),node('strong',pct===null?'Unavailable':percentText(pct)),node('span',signedText(delta)+' from mean','reference-delta'));exact.append(cell);
+  }
+  const ringLabel=svgNode('g',{'data-ring-label':sample.name}),y=320-r;
+  ringLabel.append(svgNode('rect',{x:269,y:y-13,width:102,height:26,rx:6,fill:'#10151d'}));
+  const name=svgNode('text',{x:320,y,'text-anchor':'middle','dominant-baseline':'central',fill:'#fff','font-size':23,'font-weight':600});name.textContent=sample.name;ringLabel.append(name);labels.append(ringLabel);chart.append(group);
+  row.append(node('p',`100% = ${fmt(c.reference_positions)} reference positions`,'footnote'),exact);
+  if(c.reference_evidence){row.append(node('p',c.reference_evidence.summary,'footnote'));if(c.reference_evidence.source_url){const link=node('a','Official benchmark confidence regions');link.href=c.reference_evidence.source_url;row.append(link)}}details.append(row);
+ }
+ const center=svgNode('text',{x:320,y:305,'text-anchor':'middle',fill:'#eef3f7','font-size':22});center.textContent='± from mean';
+ const unit=svgNode('text',{x:320,y:333,'text-anchor':'middle',fill:'#a8b5c7','font-size':16});unit.textContent='percentage points';chart.append(center,unit,labels);percentageGuide(chart);
+ totals.append(chart,differenceScale(),node('h4','Category mean','ring-legend-title'),legend,details);
+ $('#dna-comparison-title').textContent='DNA datasets · differences from the mean';
+ $('#ring-reference-note').textContent='Each category has the same zero-centered scale on every ring: counterclockwise is below the mean, clockwise is above. Numbers show signed percentage-point differences. Legend percentages are unweighted means across datasets with available values; missing confirmed-match evidence is N/A. Confirmed-same means use 4 datasets; other means use 6, so legend values do not sum to 100%. Category proportions compare recorded evidence, not person-to-person sequence identity. Sources use different assemblies and methods.';
+ $('#composition-palette').textContent=categoryPalette?'Palette: colorblind-friendly · switch palette':'Palette: high contrast · switch palette';
+ $('#log-value').textContent=logStrength===0?'Linear differences':`Log strength ${logStrength} / 8`;
+}
 function render(){legend();renderComposition();$('#overview-takeaway').textContent='All six datasets appear together below. Percentages describe called variant sites within each dataset, not the whole genome. Different sources and methods limit comparisons.';comparison('#types',['SNV','indel','MNV','mixed','symbolic'],(s,k)=>(s.variant_types[k]||0)/s.records*100,{percent:true});comparison('#genotypes',[...new Set(samples.flatMap(s=>Object.keys(s.genotypes)))],(s,k)=>Object.keys(s.genotypes).every(k=>k==='missing_or_partial')?null:(s.genotypes[k]||0)/s.records*100,{percent:true});const label=node('label','Choose a chromosome'),picker=node('select');label.htmlFor='chromosome';picker.id='chromosome';const chromosomes=[...new Set(samples.flatMap(s=>Object.keys(s.chromosomes)))];for(const c of chromosomes){const option=node('option',`Chromosome ${c}`);option.value=c;picker.append(option)}picker.onchange=()=>{chrom=picker.value;plot()};$('#chromosomes').replaceChildren(label,picker);plot();comparison('#satellite-stat',['Satellite overlaps'],s=>s.satellite_overlaps?Object.values(s.satellite_overlaps).reduce((a,b)=>a+b,0):null);comparison('#depth',['0','1-9','10-19','20-29','30-59','60+'],(s,k)=>Object.keys(s.depth_bins).every(k=>k==='missing')?null:(s.depth_bins[k]||0)/s.records*100,{percent:true});$('#depth-note').textContent=samples.map(s=>`${s.name}: ${fmt(s.depth_bins.missing||0)} sites with unavailable depth`).join(' · ');const consequences=[...new Set(samples.flatMap(s=>Object.keys(s.consequences)))].sort((a,b)=>samples.reduce((n,s)=>n+(s.consequences[b]||0)-(s.consequences[a]||0),0));comparison('#consequences',consequences.slice(0,6),(s,k)=>s.consequences[k]??null);$('#annotation-note').textContent=samples.map(s=>`${s.name}: ${s.engine}; ${fmt(s.annotated)} annotated records`).join(' · ')+'. Categories overlap. VEP and bcftools csq use different annotation models; counts are not equivalent or disease predictions.'}
 bars('#satellite-chart',Object.entries(data.satellites.reference_bp).sort((a,b)=>b[1]-a[1]).slice(0,8).map(([c,v])=>['Chr '+c,v]),{color:colors[0],suffix:' bp'});$('#provenance').textContent=`Snapshot generated ${new Date(data.generated_at).toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})}. Charts use completed QC / annotation results and an independent chromosome count check. Repeat source: UCSC hg38 rmsk; SHA-256 ${data.satellites.sha256}.`;if(data.reference_analysis_at)$('#provenance').textContent+=` Reference-match evidence analyzed ${new Date(data.reference_analysis_at).toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})}; only aggregate counts are published.`;$('#present').onclick=async()=>{document.body.classList.toggle('presentation');if(document.body.classList.contains('presentation')&&document.documentElement.requestFullscreen){try{await document.documentElement.requestFullscreen()}catch{}}else if(document.fullscreenElement)await document.exitFullscreen()};const helix=svg('Decorative DNA helix',400,300);for(let i=0;i<23;i++){const y=15+i*12,x1=200+92*Math.sin(i*.43),x2=200-92*Math.sin(i*.43);helix.append(svgNode('line',{x1,x2,y1:y,y2:y,stroke:i%2?colors[1]:colors[0],'stroke-opacity':'.4','stroke-width':3}),svgNode('circle',{cx:x1,cy:y,r:5,fill:colors[0]}),svgNode('circle',{cx:x2,cy:y,r:5,fill:colors[1]}))}$('#helix').append(helix);render();
 $('#composition-palette').onclick=()=>{categoryPalette=!categoryPalette;renderComposition()};
 $('#composition-scale').oninput=e=>{logStrength=Number(e.target.value);renderComposition()};
 
-window.addEventListener('resize',plot);
+window.addEventListener('resize',()=>{plot();renderComposition()});
 
 // Navigation follows location; it does not claim that visitors understood a step.
 const journeyLinks=[...document.querySelectorAll('.journey a')];

@@ -28,6 +28,9 @@ class RemoteBoundaryTests(unittest.TestCase):
         if origin:headers['Origin']=origin
         if body is not None:headers['Content-Type']='application/json';body=json.dumps(body)
         c.request(method,path,body=body,headers=headers);r=c.getresponse();status=r.status;self.last_cookie=r.getheader('Set-Cookie');r.read();c.close();return status
+    def test_genome_difference_module_is_a_public_asset(self):
+        self.assertEqual(self.request('/genome-comparison.js'),200)
+
     def test_wgs_progress_requires_owner(self):
         with patch('wgs_progress.snapshot',return_value={'available':True,'samples':[]}) as read:
             self.assertEqual(self.request('/api/v1/swarm/wgs'),401)
