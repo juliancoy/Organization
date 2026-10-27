@@ -11,11 +11,11 @@ const server=createServer(async(req,res)=>{
  const url=new URL(req.url,'http://localhost');res.setHeader('Cache-Control','no-store')
  if(req.method!=='GET'){res.writeHead(405).end();return}
  if(url.pathname==='/api/v1/swarm/task-manager'){
-  const now=Date.now(),host={host:'worker.local',addresses:['10.42.0.2'],sampled_at:now/1000,status:'live',percent:20,cpus:4,network_interfaces:[{name:'eth0',ifindex:2,link_speed_mbps:100,link_duplex:'full',state:'up',status:'live',sampled_at:now/1000,rx_mbps:4,tx_mbps:10,network_mbps:14},{name:'wlan0',ifindex:3,link_rx_mbps:72.2,link_tx_mbps:65,state:'up',status:'live',sampled_at:now/1000,rx_mbps:2,tx_mbps:1,network_mbps:3}]};
+  const now=Date.now(),host={host:'worker.local',addresses:['10.42.0.2'],sampled_at:now/1000,status:'live',percent:20,cpus:4,disks:[{name:'sda',model:'Fixture disk with a long model name',identity:'disk-one',status:'live',sampled_at:now/1000,read_bytes_per_second:60000000,write_bytes_per_second:40000000,read_percent:60,write_percent:40,capacity_bytes_per_second:100000000,capacity_basis:'observed sustained'},{name:'sdb',identity:'disk-two',status:'live',sampled_at:now/1000,read_bytes_per_second:1000000,write_bytes_per_second:0,read_percent:null,write_percent:null}],network_interfaces:[{name:'eth0',ifindex:2,link_speed_mbps:100,link_duplex:'full',state:'up',status:'live',sampled_at:now/1000,rx_mbps:4,tx_mbps:10,network_mbps:14},{name:'wlan0',ifindex:3,link_rx_mbps:72.2,link_tx_mbps:65,state:'up',status:'live',sampled_at:now/1000,rx_mbps:2,tx_mbps:1,network_mbps:3}]};
   const hosts=[host,...['compai.local','codecollective.local','julian-latitude.local','julian-minipc.local','wolf-latitude.local'].map((name,n)=>({...host,host:name,addresses:['10.42.0.'+(n+10)],network_interfaces:host.network_interfaces.map(i=>({...i,tx_mbps:55.3+n,rx_mbps:50.3+n,network_mbps:105.6+2*n}))}))];
   host.network_interfaces.push({name:'enp9s0',ifindex:9,state:'down',status:'disconnected',sampled_at:now/1000,network_mbps:null,rx_mbps:null,tx_mbps:null});
   hosts.push({host:'no-interface.local',status:'live',sampled_at:now/1000,network_interfaces:[]});
-  const history=Array.from({length:13},(_,n)=>{const time=now-60000+n*5000;return {sampled_at:time/1000,hosts:hosts.map(host=>({...host,sampled_at:time/1000,network_interfaces:host.network_interfaces.map(iface=>({...iface,sampled_at:time/1000}))})),network:network(time)}});
+  const history=Array.from({length:13},(_,n)=>{const time=now-60000+n*5000;return {sampled_at:time/1000,hosts:hosts.map(host=>({...host,sampled_at:time/1000,disks:(host.disks||[]).map(disk=>({...disk,sampled_at:time/1000})),network_interfaces:host.network_interfaces.map(iface=>({...iface,sampled_at:time/1000}))})),network:network(time)}});
   res.setHeader('Content-Type','application/json');res.end(JSON.stringify({network:network(now),metrics:{hosts,history},run:{hosts:[]}}));return
  }
  if(url.pathname==='/api/v1/swarm/connections'){res.setHeader('Content-Type','application/json');res.end('{"hosts":[]}');return}
@@ -74,6 +74,23 @@ try{
   review.checks.push({width,status:'passed',controls:await buttons.count()})
   await legend.evaluate(el=>el.scrollTop=0)
   await page.locator('#device-levels').screenshot({path:join(output,`network-${width}.png`)})
+ }
+ await page.getByRole('button',{name:'Disk',exact:true}).click()
+ await expect(page.getByRole('button',{name:/worker.local · sda · read/})).toContainText('Read · 60.0 MB/s')
+ await expect(page.getByRole('button',{name:/worker.local · sda · read/})).toContainText('60.0%')
+ await expect(page.getByRole('button',{name:/worker.local · sda · write/})).toContainText('40.0%')
+ await expect(page.getByRole('button',{name:/worker.local · sdb · read/})).toContainText('Observing…')
+ await expect(page.locator('#levels-scale')).toContainText('% of observed sustained capacity')
+ for(const width of model.viewports){
+  await page.setViewportSize({width,height:1000})
+  const legend=page.locator('#levels-legend')
+  assert(await legend.evaluate(el=>el.scrollWidth<=el.clientWidth),`${width}: disk cards clipped`)
+  assert(await legend.locator('button').evaluateAll(nodes=>nodes.every(el=>el.scrollWidth<=el.clientWidth&&el.scrollHeight<=el.clientHeight)),`${width}: disk controls clipped`)
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false)
+  const toggle=page.getByRole('button',{name:/worker.local · sda · read/});await toggle.focus();await page.keyboard.press('Enter');await expect(toggle).toHaveAttribute('aria-pressed','false');await page.keyboard.press('Enter');await expect(toggle).toHaveAttribute('aria-pressed','true')
+  await legend.evaluate(el=>el.scrollTop=0)
+  await page.locator('#device-levels').screenshot({path:join(output,`disk-${width}.png`)})
+  review.checks.push({mode:'disk',width,status:'passed'})
  }
  await writeFile(join(output,'network-human-review.json'),JSON.stringify(review,null,2))
  assert.deepEqual(errors,[])

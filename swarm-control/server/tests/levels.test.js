@@ -4,7 +4,7 @@ import {deviceLevels,compareNetworkRows,networkLinkLabel} from '../view/levels-m
 const now=Date.now(),host={host:'laptop.local',observed_hostname:'laptop',addresses:['10.42.0.2'],status:'live',sampled_at:now/1000,network_mbps:3,ram_percent:54,disk_busy_percent:82};
 const data={devices:[{ip:'10.42.0.2',mac:'aa'},{ip:'10.42.0.3',mac:'bb'}],link_traffic:{updated:new Date(now).toISOString(),peers:{aa:{rx_mbps:2,tx_mbps:2},bb:{rx_mbps:1,tx_mbps:2}}}};
 test('SSH address identity deduplicates and passive peers cover other devices',()=>{const rows=deviceLevels(data,{hosts:[host]},'network',now);assert.equal(rows.length,1);assert.equal(rows[0].value,3);assert.equal(rows[0].name,'10.42.0.3 · gateway only');});
-test('unmeasured RAM is unknown and stale hosts lose measurements',()=>{assert.deepEqual(deviceLevels(data,{hosts:[host]},'ram',now).map(r=>r.value),[54,null]);assert.equal(deviceLevels(data,{hosts:[host]},'disk',now+16000)[0].value,null);});
+test('unmeasured RAM is unknown and stale hosts lose measurements',()=>{assert.deepEqual(deviceLevels(data,{hosts:[host]},'ram',now).map(r=>r.value),[54,null]);assert.deepEqual(deviceLevels(data,{hosts:[host]},'disk',now+16000),[]);});
 test('unnamed device cannot match unavailable host with no observed hostname',()=>{const rows=deviceLevels(data,{hosts:[{host:'other.local',status:'unavailable'}]},'ram',now);assert.equal(rows.length,3);});
 
 test('GPU charts use measured counters and suppress stale or absent values',()=>{
@@ -74,4 +74,13 @@ test('negotiated link speed is separate from throughput and hides stale capacity
  assert.equal(networkLinkLabel({link_speed_mbps:100},false),'Link speed unavailable');
  assert.equal(networkLinkLabel({link_speed_mbps:100},true,true),'Link: Not connected');
  assert.equal(networkLinkLabel({network_mbps:7}),'Link speed unavailable');
+});
+
+test('disk read and write share one observed baseline and remain separate series',()=>{
+ const disks=[{name:'sda',identity:'one',status:'live',sampled_at:now/1000,read_bytes_per_second:60000000,write_bytes_per_second:40000000,read_percent:60,write_percent:40,capacity_bytes_per_second:100000000,capacity_basis:'observed sustained'}];
+ const rows=deviceLevels({}, {hosts:[{host:'worker.local',disks}]},'disk',now);
+ assert.deepEqual(rows.map(row=>row.value),[60,40]);assert.deepEqual(rows.map(row=>row.throughput),[60,40]);
+ assert.deepEqual(rows.map(row=>row.direction),['read','write']);assert.equal(rows[0].deviceId,rows[1].deviceId);assert.notEqual(rows[0].id,rows[1].id);
+ assert.equal(rows[0].linkLabel,'Observed sustained: 100.0 MB/s');
+ assert.deepEqual(deviceLevels({}, {hosts:[{host:'worker.local',disks}]},'disk',now+16000).map(row=>row.value),[null,null]);
 });

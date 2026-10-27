@@ -1,5 +1,5 @@
 """Bounded, read-only projection of the local coordinator for paired owners."""
-from resource_history import project_host, project_network, project_interfaces, WINDOW_SECONDS, MAX_SAMPLES
+from resource_history import project_host, project_network, project_interfaces, project_disks, WINDOW_SECONDS, MAX_SAMPLES
 import json
 import os
 from pathlib import Path
@@ -99,6 +99,7 @@ def task_manager():
         host = pick(row, 'host observed_hostname addresses status sampled_at sample_age_seconds window_seconds percent cpus ram_percent ram_used_bytes ram_total_bytes disk_busy_percent disk_basis network_mbps network_tx_mbps network_rx_mbps cpu_iowait_percent cpu_steal_percent cpu_pressure_some_percent running_test_jobs scheduled_cpu_slots workload_phase')
         hardware = row.get('hardware') or {}
         host['network_interfaces']=project_interfaces(row.get('network_interfaces',[]))
+        host['disks']=project_disks(row.get('disks',[]))
         host['hardware'] = pick(hardware, 'stale')
         host['hardware']['gpus'] = [pick(gpu, 'pci_id vendor name backend utilization_percent memory_total_mib memory_free_mib') for gpu in hardware.get('gpus', [])[:16]]
         summary['hosts'].append(host)

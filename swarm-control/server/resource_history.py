@@ -13,9 +13,15 @@ def project_interfaces(rows):
     return [{key:deepcopy(row[key]) for key in fields.split() if key in row} for row in rows[:32]]
 
 
+def project_disks(rows):
+    fields='name model identity sampled_at status read_bytes_per_second write_bytes_per_second read_percent write_percent total_percent busy_percent capacity_basis capacity_bytes_per_second'
+    return [{key:deepcopy(row[key]) for key in fields.split() if key in row} for row in rows[:32]]
+
+
 def project_host(row):
     host = {key: deepcopy(row[key]) for key in HOST_FIELDS.split() if key in row}
     host['network_interfaces']=project_interfaces(row.get('network_interfaces',[]))
+    host['disks']=project_disks(row.get('disks',[]))
     hardware = row.get('hardware') or {}
     host['hardware'] = {key: hardware[key] for key in ('stale',) if key in hardware}
     host['hardware']['gpus'] = [{key: gpu[key] for key in GPU_FIELDS.split() if key in gpu}

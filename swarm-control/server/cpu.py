@@ -7,6 +7,7 @@ import time
 import sys
 import math
 from interface_metrics import InterfaceSampler
+from disk_metrics import DiskSampler
 from resource_history import ResourceHistory
 from gpu_metrics import GpuSampler
 from paths import WORKSPACE
@@ -29,6 +30,7 @@ class CpuMonitor:
         self.hosts=[]
         self.history=ResourceHistory()
         self.interfaces={}
+        self.disks={}
         self.gpu_samplers={}
         self.sampler=ResourceSampler()
         self.activity=activity
@@ -56,6 +58,7 @@ class CpuMonitor:
                 finally:client.close()
             sampler=self.interfaces.setdefault(target['host'],InterfaceSampler())
             values['network_interfaces']=sampler.sample(target)
+            values['disks']=self.disks.setdefault(target['host'],DiskSampler()).sample(target)
             gpu_sampler=self.gpu_samplers.setdefault(target['host'],GpuSampler())
             values['hardware']=gpu_sampler.sample(target,values.get('hardware',{}))
             if values.get('measurement_version')!=2:
