@@ -64,15 +64,19 @@ def snapshot(root=ROOT):
     replay=read(root/'qc/gpu-replay/state.json');replay_jobs=replay.get('jobs',{})
     replay_rows=[row for row in replay_jobs.values() if isinstance(row,dict)] if isinstance(replay_jobs,dict) else []
     gpu_workers=[]
-    for host,service,path in [('compai.local',read(root/'gpu-qc/daemon.json'),root/'gpu-qc/compai-backfill/state.json'),('julian-minipc.local',gpu_service,root/'qc/gpu-replay/state.json')]:
+    for host,service,path in [('compai.local',read(root/'gpu-qc/daemon.json'),root/'gpu-qc/compai-backfill/state.json'),('julian-minipc.local',gpu_service,root/'qc/gpu-replay/state.json'),('julian-latitude.local',read(root/'gpu-qc/latitude-service.json'),root/'qc/latitude-gpu-backfill/state.json')]:
         state=read(path);records=state.get('jobs',{})
         rows=[row for row in records.values() if isinstance(row,dict)] if isinstance(records,dict) else []
         verified=[row for row in rows if row.get('status',row.get('phase'))=='verified' and row.get('provisional') is False]
-        gpu_workers.append({'host':host,'device':service.get('device'),'status':state.get('status','not_started'),'updated':state.get('updated'),
+        primary=[row for row in qc_rows if row.get('host')==host]
+        live=[row for row in primary if number(row.get('gpu_bases')) and row.get('status',row.get('phase')) not in ('verified','failed','stopped')]
+        phase='waiting_for_input' if live and all(row.get('phase') in ('waiting_for_complete_chunk','awaiting_publisher_receipt') for row in live) else 'streaming' if live else 'waiting_capacity' if any(row.get('status')=='waiting_capacity' for row in primary) else state.get('status',service.get('status','not_started'))
+        gpu_workers.append({'host':host,'device':service.get('device'),'status':phase,'updated':max([number(state.get('updated')),number(service.get('updated'))]+[number(row.get('updated')) for row in primary]),
+                            'streaming_bases':sum(number(row.get('gpu_bases')) for row in live),'streaming_batches':sum(number(row.get('gpu_batches')) for row in live),'streaming_cpu_crosschecked_batches':sum(number(row.get('gpu_cpu_crosschecked_batches')) for row in live),
                             'compute_mode':service.get('compute_mode','legacy'),'verified_files':len(verified),'bases':sum(number(row.get('gpu_bases')) for row in verified),
                             'matches_original_cpu_qc':sum(row.get('matches_original_cpu_qc') is True for row in verified),
                             'cpu_crosschecked_batches':sum(number(row.get('gpu_cpu_crosschecked_batches')) for row in verified),
-                            'fallback_batches':sum(number(row.get('gpu_fallback_batches')) for row in rows),
+                            'fallback_batches':sum(number(row.get('gpu_fallback_batches')) for row in rows+primary),
                             'startup_fixtures':number(service.get('startup_fixtures')),'mask_startup_fixtures':number(service.get('mask_startup_fixtures'))})
     benchmark=read(root/'gpu-qc/parallel-pipeline-comparison.json')
     before=number(benchmark.get('previous',{}).get('median_seconds'));after=number(benchmark.get('cooperative_overlapped',{}).get('median_seconds'))

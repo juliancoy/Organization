@@ -22,7 +22,6 @@ STOP=threading.Event()
 GROUP='genomics-wgs-stream-qc'
 HOST_LOCKS={}
 HOST_LOCK_GUARD=threading.Lock()
-MAPPING_HOSTS={'compai.local','codecollective.local','julian-latitude.local','julian-inspiron-3793.local'}
 
 
 class OrderedChunks(io.RawIOBase):
@@ -230,7 +229,7 @@ def qc_memory_mb(chunk_bytes=CHUNK_BYTES,rss_kib=None,batch_bases=BATCH_BASES,gp
     return math.ceil((2*chunk_bytes+rss_kib*1024+4*LINE_BYTES+(5 if gpu_parallel else 3)*batch_bases)/(1024*1024))
 
 
-def run_remote(host,item,ident,output,mapping_reserve_mb=7000,changed=None,download_state=None,gpu_verify=False):
+def run_remote(host,item,ident,output,mapping_reserve_mb=0,changed=None,download_state=None,gpu_verify=False):
     if host.get('local') and host.get('gpu_qc_native'):
         from scripts.gpu_qc_native import run_native
         return run_native(host,item,ident,output,changed,STOP,gpu_verify)
@@ -245,8 +244,16 @@ def run_remote(host,item,ident,output,mapping_reserve_mb=7000,changed=None,downl
         with HOST_LOCK_GUARD:guard=HOST_LOCKS.setdefault(host['host'],threading.Lock())
         with guard:
             capacity=client.call('resource.capacity',{'group':GROUP})
-            if capacity['available_mb']-mapping_reserve_mb<memory or capacity.get('available_cpus',0)<1:raise distributed.CapacityWait('Preserving mapping CPU/RAM headroom')
-            if not client.call('resource.acquire',{'id':lease,'group':GROUP,'cpus':1,'memory_mb':memory,'container':name})['acquired']:raise distributed.CapacityWait('QC capacity changed')
+            if mapping_reserve_mb and capacity['available_mb']-mapping_reserve_mb<memory:raise distributed.CapacityWait('Requested mapping headroom is unavailable')
+            request={'id':lease,'group':GROUP,'cpus':1,'memory_mb':memory,'container':name}
+            acquired=client.call('resource.acquire',request)['acquired']
+        deadline=time.monotonic()+120
+        while not acquired:
+            if STOP.wait(1):raise InterruptedError('QC stopped while waiting for capacity')
+            if time.monotonic()>deadline:raise distributed.CapacityWait('Waiting for shared QC capacity')
+            status=client.call('status')
+            if not distributed.eligible(status) or status.get('machine')!=host['machine']:raise distributed.CapacityWait('Worker is updating or declining new work')
+            acquired=client.call('resource.acquire',request)['acquired']
         client.call('resource.renew',{'id':lease})
         def renew():
             other=AgentClient(host)
@@ -360,7 +367,7 @@ def coordinator(args):
                     with lock:state['jobs'][ident]={**value,'status':value['phase']};save()
                 with lock:state['jobs'][ident]={'status':'waiting_capacity','host':host['host'],'sample':item['sample'],'run':item['run'],'provisional':True};save()
                 try:
-                    result=run_remote(host,item,ident,args.output,7000 if host['host'] in MAPPING_HOSTS else 0,changed,args.download_state)
+                    result=run_remote(host,item,ident,args.output,0,changed,args.download_state)
                     with lock:state['jobs'][ident]={**state['jobs'][ident],**result,'status':'verified'};save()
                     print('QC verified '+item['filename']+' on '+host['host'],flush=True)
                 except CapacityWait:break

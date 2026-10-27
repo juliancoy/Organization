@@ -50,3 +50,16 @@ def test_gpu_workers_count_only_verified_files_and_keep_validation_distinct(tmp_
     assert value['qc']['bases_processed']==0
     assert not value['gpu_performance']['available']
     assert 'private' not in str(value) and 'secret' not in str(value)
+
+
+def test_primary_venter_gpu_work_is_visible_separately_from_verified_backfill(tmp_path):
+    (tmp_path/'qc').mkdir();(tmp_path/'gpu-qc').mkdir()
+    (tmp_path/'qc/state.json').write_text(json.dumps({'jobs':{
+        'first':{'sample':'Venter','host':'compai.local','status':'streaming','phase':'streaming','provisional':True,'gpu_bases':123,'gpu_batches':4,'gpu_cpu_crosschecked_batches':1,'gpu_fallback_batches':0},
+        'second':{'sample':'Venter','host':'julian-latitude.local','status':'waiting_capacity','provisional':True}}}))
+    (tmp_path/'gpu-qc/latitude-service.json').write_text(json.dumps({'status':'running','device':'Intel GPU'}))
+    value=snapshot(tmp_path);workers={row['host']:row for row in value['gpu_workers']}
+    assert workers['compai.local']['status']=='streaming'
+    assert workers['compai.local']['streaming_bases']==123 and workers['compai.local']['streaming_batches']==4
+    assert workers['compai.local']['streaming_cpu_crosschecked_batches']==1 and workers['compai.local']['verified_files']==0
+    assert workers['julian-latitude.local']['status']=='waiting_capacity' and workers['julian-latitude.local']['device']=='Intel GPU'

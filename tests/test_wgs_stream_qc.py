@@ -274,3 +274,25 @@ def test_first_live_batch_is_crosschecked_then_gpu_only_batches_continue(tmp_pat
     assert seen==[True,False]
     assert result['gpu_batches']==2 and result['gpu_cpu_crosschecked_batches']==1
     assert result['cpu_bases']==result['gpu_fallback_batches']==0
+
+
+def test_qc_registers_with_shared_scheduler_when_ram_is_temporarily_reserved(tmp_path,monkeypatch):
+    from unittest.mock import Mock
+    from scripts import wgs_stream_qc as qc,genomics_distributed as distributed,wgs_swarm_download as downloads
+    client=Mock();acquisitions=[]
+    def call(operation,args=None):
+        if operation=='status':return {'ready':True,'machine':'machine','protocol':'lifetech-agent.v1','worker_policy':{'accepting_jobs':True},'capabilities':['renewable-resources']}
+        if operation=='resource.capacity':return {'available_mb':0,'available_cpus':0}
+        if operation=='resource.acquire':acquisitions.append(args);return {'acquired':len(acquisitions)>1}
+        return {}
+    client.call.side_effect=call
+    monkeypatch.setattr(downloads,'AgentClient',lambda _:client)
+    monkeypatch.setattr(downloads,'release_after_cleanup',lambda *a:None)
+    monkeypatch.setattr(distributed,'shell_command',lambda *a:['synthetic'])
+    monkeypatch.setattr(qc,'STOP',Mock(wait=lambda _:False))
+    def popen(*a,**k):raise RuntimeError('Reached admitted worker launch')
+    monkeypatch.setattr(qc.subprocess,'Popen',popen)
+    with pytest.raises(RuntimeError,match='Reached admitted worker launch'):
+        qc.run_remote({'host':'cpu-host','machine':'machine','cache':str(tmp_path),'image':'test'}, {'bytes':100},'source',tmp_path)
+    assert len(acquisitions)==2 and acquisitions[0]==acquisitions[1]
+    assert acquisitions[0]['memory_mb']>0
