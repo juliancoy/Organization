@@ -711,3 +711,10 @@ Latitude or Inspiron and stage bounded inputs/results over the LAN. Disk space
 on separate nodes is not pooled storage or pooled GPU memory. Do not start
 terabyte-scale database downloads on CompAI's nearly full system disk. Actual
 folding/chemistry models still need tool-specific VRAM and correctness checks.
+
+The map sidebar includes live whole-genome transfer ETA, served by `/api/wgs`.
+It reuses the WGS measured-progress estimator and updates every five seconds
+while visible. Estimates cover transfers only; unknown, blocked, stalled and
+stale sources suppress a numeric estimate. Only aggregate operational counts
+are returned, with no reads, genotypes, credentials or source paths. Histories
+warm up in memory after the collector restarts.

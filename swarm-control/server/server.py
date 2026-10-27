@@ -292,6 +292,10 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/connections':
             body = json.dumps(connection_monitor.view()).encode()
             content_type = 'application/json'
+        elif path == '/api/wgs':
+            from wgs_progress import snapshot as wgs_snapshot
+            body = json.dumps(wgs_snapshot()).encode()
+            content_type = 'application/json'
         elif path == '/api/cpu':
             body = json.dumps(cpu_monitor.view()).encode()
             content_type = 'application/json'
