@@ -22,7 +22,7 @@ function legendButton(row,network=false){
  const button=document.createElement('button');button.type='button';button.className=network?'levels-network-toggle':'levels-device';
  button.dataset.seriesId=row.id;button.style.setProperty('--device-color',deviceColor(row.deviceId||row.id));button.setAttribute('aria-pressed',String(!hidden.has(row.id)));
  const amount=row.value===null?(row.unavailableLabel||'No data'):row.value.toFixed(1)+(mode==='network'?' Mb/s':'%');
- button.setAttribute('aria-label',`${row.name}: ${amount}`);button.title=row.basis;
+ button.setAttribute('aria-label',`${row.name}: ${amount}${row.disk&&row.throughput!==null?' · '+row.throughput.toFixed(1)+' MB/s':''}`);button.title=row.basis;
  button.onmouseenter=button.onfocus=()=>{highlighted=row.id;draw();};
  button.onmouseleave=button.onblur=()=>{if(highlighted===row.id){highlighted=null;draw();}};
  const label=document.createElement('span');label.textContent=network?(row.direction==='send'?'↑ Send':row.direction==='receive'?'↓ Receive':row.direction==='read'?'Read · '+(row.throughput===null?'No data':row.throughput.toFixed(1)+' MB/s'):row.direction==='write'?'Write · '+(row.throughput===null?'No data':row.throughput.toFixed(1)+' MB/s'):'Total'):row.name;
