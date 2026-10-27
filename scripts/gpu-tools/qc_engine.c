@@ -9,6 +9,7 @@ static double ms(struct timespec a,struct timespec b){return (b.tv_sec-a.tv_sec)
 int main(int argc,char **argv){
  uint32_t endian=1;if(*(uint8_t*)&endian!=1){fprintf(stderr,"Little-endian host required\n");return 16;}
  size_t maxbytes=argc>2?strtoul(argv[2],0,10):16777216;
+ int cooperative=argc>4&&!strcmp(argv[4],"workgroup");if(argc>4&&!cooperative)return 17;
  if(!maxbytes || maxbytes>67108864)return 6;
  size_t bufferbytes=(((maxbytes+3)/4)*2+((maxbytes+1023)/1024)*104)*4;
  VkInstance in; VkInstanceCreateInfo ici={.sType=VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};OK(vkCreateInstance(&ici,0,&in));
@@ -31,7 +32,7 @@ int main(int argc,char **argv){
  size_t inputwords=ismask?nbytes:(nbytes+3)/4,threads=(nbytes+1023)/1024;uint32_t output_offset=ismask?inputwords:inputwords*2;unsigned columns=ismask?69:104;uint64_t gpu[104]={0},cpu[104]={0};struct timespec ga,gb,t0,t1;
  if(ismask){if(fread(mapped,4,nbytes,stdin)!=nbytes)return 12;}else{memset(mapped,0,inputwords*8);if(fread(mapped,1,nbytes,stdin)!=nbytes || fread(mapped+inputwords,1,nbytes,stdin)!=nbytes)return 12;}
  if(flags){for(uint32_t i=0;i<nbytes;i++){uint8_t c=((uint8_t*)mapped)[i]&0xdf;int k=c=='A'?0:c=='C'?1:c=='G'?2:c=='T'?3:c=='N'?4:5;cpu[k]++;uint8_t q=((uint8_t*)(mapped+inputwords))[i];if(q<33 || q>126){cpu[103]++;continue;}q-=33;cpu[6+q]++;cpu[100]+=q;cpu[101]+=q>=20;cpu[102]+=q>=30;}}
- clock_gettime(CLOCK_MONOTONIC,&ga);OK(vkResetCommandBuffer(cb,0));VkCommandBufferBeginInfo cbi={.sType=VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};OK(vkBeginCommandBuffer(cb,&cbi));vkCmdBindPipeline(cb,VK_PIPELINE_BIND_POINT_COMPUTE,ismask?maskpipeline:pipeline);vkCmdBindDescriptorSets(cb,VK_PIPELINE_BIND_POINT_COMPUTE,pl,0,1,&set,0,0);uint32_t params[2]={nbytes,output_offset};vkCmdPushConstants(cb,pl,VK_SHADER_STAGE_COMPUTE_BIT,0,8,params);vkCmdDispatch(cb,(threads+63)/64,1,1);
+ clock_gettime(CLOCK_MONOTONIC,&ga);OK(vkResetCommandBuffer(cb,0));VkCommandBufferBeginInfo cbi={.sType=VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};OK(vkBeginCommandBuffer(cb,&cbi));vkCmdBindPipeline(cb,VK_PIPELINE_BIND_POINT_COMPUTE,ismask?maskpipeline:pipeline);vkCmdBindDescriptorSets(cb,VK_PIPELINE_BIND_POINT_COMPUTE,pl,0,1,&set,0,0);uint32_t params[2]={nbytes,output_offset};vkCmdPushConstants(cb,pl,VK_SHADER_STAGE_COMPUTE_BIT,0,8,params);if(!ismask&&cooperative)vkCmdDispatch(cb,threads>65535?(threads+1)/2:threads,threads>65535?2:1,1);else vkCmdDispatch(cb,(threads+63)/64,1,1);
  VkMemoryBarrier mb={.sType=VK_STRUCTURE_TYPE_MEMORY_BARRIER,.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT,.dstAccessMask=VK_ACCESS_HOST_READ_BIT};vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&mb,0,0,0,0);OK(vkEndCommandBuffer(cb));VkFence fence;VkFenceCreateInfo fi={.sType=VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};OK(vkCreateFence(d,&fi,0,&fence));VkSubmitInfo sub={.sType=VK_STRUCTURE_TYPE_SUBMIT_INFO,.commandBufferCount=1,.pCommandBuffers=&cb};clock_gettime(CLOCK_MONOTONIC,&t0);OK(vkQueueSubmit(queue,1,&sub,fence));OK(vkWaitForFences(d,1,&fence,VK_TRUE,30000000000ull));clock_gettime(CLOCK_MONOTONIC,&t1);
  for(size_t i=0;i<threads;i++)for(unsigned j=0;j<columns;j++)gpu[j]+=mapped[output_offset+i*columns+j];clock_gettime(CLOCK_MONOTONIC,&gb);vkDestroyFence(d,fence,0);
  if(flags)for(int j=0;j<104;j++)if(cpu[j]!=gpu[j]){fprintf(stderr,"GPU/CPU QC mismatch bin %d\n",j);return 13;}

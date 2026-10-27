@@ -62,7 +62,9 @@ def validate_mask(row):
 def main():
     ROOT.mkdir(parents=True,exist_ok=True,mode=0o700);(ROOT/'batches').mkdir(exist_ok=True,mode=0o700);os.umask(0o077)
     lock=(ROOT/'service.lock').open('a');fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-    engine=subprocess.Popen(['./qc_engine','qc_engine.spv',str(MAX_BATCH),'genome_masks.spv'],stdin=subprocess.PIPE,stdout=subprocess.PIPE)
+    command=['./qc_engine','qc_engine.spv',str(MAX_BATCH),'genome_masks.spv']
+    if os.environ.get('GPU_QC_WORKGROUPS')=='1':command.append('workgroup')
+    engine=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE)
     def execute(sequence,quality,verify):
         if len(sequence)!=len(quality):raise ValueError('Sequence/quality lengths differ')
         engine.stdin.write(struct.pack('<4sII',b'GPQ1',len(sequence),int(verify)));engine.stdin.write(sequence);engine.stdin.write(quality);engine.stdin.flush()
@@ -95,7 +97,7 @@ def main():
         for n in (17,1025):
             words=(fixture*((n+31)//32))[:n];execute_mask(struct.pack('<'+'I'*n,*words),True)
         state['mask_startup_fixtures']=2
-        state.update(status='running',device=row['device'],device_type=row['device_type'],max_batch_bytes=MAX_BATCH);save()
+        state.update(status='running',compute_mode='cooperative' if os.environ.get('GPU_QC_WORKGROUPS')=='1' else 'legacy',device=row['device'],device_type=row['device_type'],max_batch_bytes=MAX_BATCH);save()
         path=ROOT/'service.sock';path.unlink(missing_ok=True);server=socket.socket(socket.AF_UNIX);server.bind(str(path));os.chmod(path,0o600);server.listen(8)
         while True:
             connection,_=server.accept()

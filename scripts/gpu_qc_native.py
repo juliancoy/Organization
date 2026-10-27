@@ -50,7 +50,7 @@ def run_native(host,item,ident,output,changed,stop,verify=False):
         atomic_json(Path(output)/(ident+'.json'),value)
         if changed:changed(value)
     with admission(host,768,stop):
-        result=aggregate_qc(Path(host['cache'])/ident,item,CHUNK_BYTES,progress=progress,stop=stop,gpu=config)
+        result=aggregate_qc(Path(host['cache'])/ident,item,CHUNK_BYTES,progress=progress,stop=stop,gpu=config,gpu_parallel=True)
     atomic_json(Path(output)/(ident+'.json'),result)
     return result
 
@@ -64,16 +64,16 @@ def main():
     if any(p.is_symlink() or (p/'.git').exists() for p in [work,*work.parents]):raise ValueError('GPU batch state must be private and outside Git')
     work.mkdir(mode=0o700,parents=True,exist_ok=True);os.umask(0o077)
     guard=(work/'native-controller.lock').open('a');fcntl.flock(guard,fcntl.LOCK_EX|fcntl.LOCK_NB)
-    assets=ROOT/'scripts/gpu-tools';names=['qc_engine.c','qc_engine.comp','qc_server.py','genome_masks.comp']
+    assets=ROOT/'scripts/gpu-tools';names=['qc_engine.c','qc_engine.comp','qc_server.py','genome_masks.comp','qc_engine_parallel.comp']
     version=hashlib.sha256(b''.join((assets/name).read_bytes() for name in names)).hexdigest()
     process=None
     try:
         with admission(host,1024,stop):
             for name in names:shutil.copyfile(assets/name,work/name)
-            subprocess.run(['glslangValidator','-V','qc_engine.comp','-o','qc_engine.spv'],cwd=work,check=True)
+            subprocess.run(['glslangValidator','-V','qc_engine_parallel.comp','-o','qc_engine.spv'],cwd=work,check=True)
             subprocess.run(['glslangValidator','-V','genome_masks.comp','-o','genome_masks.spv'],cwd=work,check=True)
             subprocess.run(['gcc','-O3','-march=native','qc_engine.c','-lvulkan','-o','qc_engine'],cwd=work,check=True)
-            env={**os.environ,'GPU_QC_ROOT':str(work),'GPU_QC_HOST_ROOT':str(work),'GPU_QC_VERSION':version,'GPU_QC_MAX_BATCH':'16777216','VK_ICD_FILENAMES':'/usr/share/vulkan/icd.d/nvidia_icd.json'}
+            env={**os.environ,'GPU_QC_ROOT':str(work),'GPU_QC_HOST_ROOT':str(work),'GPU_QC_VERSION':version,'GPU_QC_MAX_BATCH':'16777216','GPU_QC_WORKGROUPS':'1','VK_ICD_FILENAMES':'/usr/share/vulkan/icd.d/nvidia_icd.json'}
             process=subprocess.Popen([sys.executable,'qc_server.py'],cwd=work,env=env,start_new_session=True)
             try:
                 while not stop.wait(1):

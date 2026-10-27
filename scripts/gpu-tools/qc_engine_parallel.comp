@@ -1,0 +1,31 @@
+#version 450
+layout(local_size_x=64) in;
+layout(set=0,binding=0,std430) buffer Data { uint words[]; } data;
+layout(push_constant) uniform Params { uint n; uint output_offset; } params;
+// One cooperative workgroup per 1024 bases. Keep histogram bins in shared
+// memory instead of a dynamically indexed 104-bin private array per thread.
+shared uint counts[104];
+void main() {
+ uint group=gl_WorkGroupID.x+gl_WorkGroupID.y*gl_NumWorkGroups.x;
+ if(group>=(params.n+1023u)/1024u)return;
+ uint lane=gl_LocalInvocationID.x;
+ for(uint bin=lane;bin<104u;bin+=64u)counts[bin]=0u;
+ barrier();
+ uint nw=(params.n+3u)/4u,start=group*256u;
+ uint quality_sum=0u,q20=0u,q30=0u,invalid=0u;
+ for(uint wi=start+lane;wi<min(start+256u,nw);wi+=64u) {
+  uint seq=data.words[wi],qual=data.words[nw+wi];
+  for(uint k=0u;k<4u;k++) {
+   if(wi*4u+k>=params.n)break;
+   uint b=((seq>>(k*8u))&255u)&223u;
+   uint bi=b==65u?0u:b==67u?1u:b==71u?2u:b==84u?3u:b==78u?4u:5u;
+   atomicAdd(counts[bi],1u);
+   uint q=(qual>>(k*8u))&255u;
+   if(q<33u||q>126u){invalid++;continue;}
+   q-=33u;atomicAdd(counts[6u+q],1u);quality_sum+=q;q20+=uint(q>=20u);q30+=uint(q>=30u);
+  }
+ }
+ atomicAdd(counts[100],quality_sum);atomicAdd(counts[101],q20);atomicAdd(counts[102],q30);atomicAdd(counts[103],invalid);
+ barrier();
+ for(uint bin=lane;bin<104u;bin+=64u)data.words[params.output_offset+group*104u+bin]=counts[bin];
+}

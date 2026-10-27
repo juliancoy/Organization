@@ -25,3 +25,18 @@ GPU activity may remain bursty: CPU FASTQ parsing/decompression and input I/O
 feed relatively short kernels. Allocated VRAM is not a measure of completed
 compute work. Increase concurrency only after measuring those bottlenecks and
 retaining shared resource admission.
+
+CompAI uses a cooperative QC shader: each 64-lane workgroup counts 1,024 bases
+through a shared histogram. The legacy shader and dispatch remain the default
+for other workers. The native parser keeps at most one GPU batch in flight while
+building the next, then commits validated results on the parser thread. EOF drains
+the pending batch before publisher checks; failed requests retain CPU fallback.
+The additional buffer stays within the existing 768 MiB parser reservation.
+
+On the RTX 3060, five-request medians for a 4 MiB batch improved from 13.038 ms
+to 3.034 ms in the GPU stage. Three-run medians on the same cached public Watson
+file (22,694,396 bases, publisher MD5 and original QC checked each run) improved
+from 1.202 s to 0.834 s: 18.9 to 27.2 million bases/s, or 44% higher throughput.
+These are warm-cache measurements, not a promise for download-bound work.
+Kernel validation covered 18 CPU-crosschecked cases per implementation, including
+partial words, workgroup boundaries, uniform input and the 64 MiB engine limit.

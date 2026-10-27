@@ -127,9 +127,12 @@ def request_gpu_batch(sequence,quality,config):
 
 class BatchCounts:
     """Commit each batch exactly once through GPU or CPU fallback."""
-    def __init__(self,counts,batch_bases=BATCH_BASES,gpu_request=None):
+    def __init__(self,counts,batch_bases=BATCH_BASES,gpu_request=None,gpu_parallel=False):
         if batch_bases<1:raise ValueError('Batch size must be positive')
-        self.counts=counts;self.limit=batch_bases;self.gpu_request=gpu_request;self.sequence=bytearray();self.quality=bytearray()
+        self.counts=counts;self.limit=batch_bases;self.gpu_request=gpu_request;self.sequence=bytearray();self.quality=bytearray();self.pending=None;self.executor=None
+        if gpu_parallel and gpu_request:
+            from concurrent.futures import ThreadPoolExecutor
+            self.executor=ThreadPoolExecutor(max_workers=1,thread_name_prefix="qc-gpu")
         counts.update(base_counts={k:0 for k in BASE_KEYS},quality_histogram=[0]*94,gpu_batches=0,gpu_bases=0,cpu_batches=0,cpu_bases=0,gpu_fallback_batches=0,gpu_cpu_crosschecked_batches=0,qc_backend='cpu',histogram_source='cpu',gpu_devices=[])
     def add(self,sequence,quality):
         # Split exceptionally long records too; parser owns the record boundary.
@@ -138,15 +141,18 @@ class BatchCounts:
             size=min(self.limit-len(self.sequence),len(sequence)-position)
             self.sequence.extend(sequence[position:position+size]);self.quality.extend(quality[position:position+size]);position+=size
             if len(self.sequence)==self.limit:self.flush()
-    def flush(self):
-        if not self.sequence:return
-        gpu=False;value=None;length=len(self.sequence)
+    def evaluate(self,sequence,quality):
+        gpu=False;fallback=False;value=None;length=len(sequence)
         if self.gpu_request:
-            try:value=validate_gpu_counts(self.gpu_request(self.sequence,self.quality),length);gpu=True
-            except (OSError,ValueError,RuntimeError,KeyError,TypeError,TimeoutError):self.counts['gpu_fallback_batches']+=1
-        if not gpu:value=cpu_batch_counts(self.sequence,self.quality)
-        # No totals change before the whole result has passed validation.
-        c=self.counts
+            try:value=validate_gpu_counts(self.gpu_request(sequence,quality),length);gpu=True
+            except (OSError,ValueError,RuntimeError,KeyError,TypeError,TimeoutError):fallback=True
+        if not gpu:value=cpu_batch_counts(sequence,quality)
+        return value,gpu,fallback,length
+
+    def commit(self,result):
+        value,gpu,fallback,length=result
+        # Only this parser thread commits, once, after validation or CPU fallback.
+        c=self.counts;c['gpu_fallback_batches']+=int(fallback)
         for key in BASE_KEYS:c['base_counts'][key]+=value['counts'][key]
         for i,n in enumerate(value['quality_histogram']):c['quality_histogram'][i]+=n
         c['gc_bases']+=value['counts']['G']+value['counts']['C'];c['ambiguous_bases']+=value['counts']['N']+value['counts']['other']
@@ -155,19 +161,38 @@ class BatchCounts:
         if gpu and value.get('cpu_crosschecked',value.get('exact_match') is True):c['gpu_cpu_crosschecked_batches']+=1
         if gpu and value.get('device') not in c['gpu_devices']:c['gpu_devices'].append(str(value.get('device','unknown'))[:200])
         c['qc_backend']='mixed' if c['gpu_bases'] and c['cpu_bases'] else 'vulkan' if c['gpu_bases'] else 'cpu';c['histogram_source']=c['qc_backend']
+
+    def drain(self):
+        if self.pending:
+            future,_=self.pending;self.commit(future.result());self.pending=None
+
+    def flush(self):
+        if not self.sequence:return
+        self.drain()
+        sequence,quality=bytes(self.sequence),bytes(self.quality)
         self.sequence.clear();self.quality.clear()
+        if self.executor:self.pending=(self.executor.submit(self.evaluate,sequence,quality),len(sequence))
+        else:self.commit(self.evaluate(sequence,quality))
+
+    def finish(self):
+        self.flush();self.drain()
+
+    def pending_bases(self):return len(self.sequence)+(self.pending[1] if self.pending else 0)
+
+    def close(self):
+        if self.executor:self.executor.shutdown(wait=True,cancel_futures=True)
 
 
-def aggregate_qc(folder,item,chunk_bytes=CHUNK_BYTES,progress=None,stop=None,gpu=None,batch_bases=BATCH_BASES,gpu_request=None):
+def aggregate_qc(folder,item,chunk_bytes=CHUNK_BYTES,progress=None,stop=None,gpu=None,batch_bases=BATCH_BASES,gpu_request=None,gpu_parallel=False):
     """Four-line ENA FASTQ, Phred+33; sequences and identifiers never leave the parser."""
     progress=progress or (lambda value:None);stop=stop or STOP;last=[0.];started=time.monotonic()
     counts={'reads':0,'bases':0,'gc_bases':0,'ambiguous_bases':0,'quality_sum':0,'q20_bases':0,'q30_bases':0,'min_length':None,'max_length':0}
-    batch=BatchCounts(counts,batch_bases,gpu_request or ((lambda sequence,quality:request_gpu_batch(sequence,quality,gpu)) if gpu else None))
+    batch=BatchCounts(counts,batch_bases,gpu_request or ((lambda sequence,quality:request_gpu_batch(sequence,quality,gpu)) if gpu else None),gpu_parallel)
     reader=None
     def report(phase,force=False):
         now=time.monotonic()
         if force or now-last[0]>=2:
-            progress({'phase':phase,'provisional':phase!='verified','updated':time.time(),'elapsed_seconds':round(now-started,2),'compressed_bytes_read':reader.offset if reader else 0,'compressed_bytes_total':item['bytes'],'verified_chunks':reader.verified_chunks if reader else 0,'pending_batch_bases':len(batch.sequence),**counts});last[0]=now
+            progress({'phase':phase,'provisional':phase!='verified','updated':time.time(),'elapsed_seconds':round(now-started,2),'compressed_bytes_read':reader.offset if reader else 0,'compressed_bytes_total':item['bytes'],'verified_chunks':reader.verified_chunks if reader else 0,'pending_batch_bases':batch.pending_bases(),**counts});last[0]=now
     reader=OrderedChunks(folder,item,chunk_bytes,waiting=lambda:report('waiting_for_complete_chunk'),stop=stop)
     report('starting',True)
     try:
@@ -184,7 +209,7 @@ def aggregate_qc(folder,item,chunk_bytes=CHUNK_BYTES,progress=None,stop=None,gpu
                 counts['reads']+=1;counts['bases']+=length;counts['max_length']=max(counts['max_length'],length);counts['min_length']=length if counts['min_length'] is None else min(counts['min_length'],length)
                 batch.add(sequence,quality)
                 report('streaming')
-            batch.flush()
+            batch.finish()
             if reader.offset!=item['bytes'] or reader.md5.hexdigest()!=item['md5']:raise ValueError('Full streaming input failed publisher MD5')
             if counts['reads']!=int(item['read_count']):raise ValueError('FASTQ read count differs from ENA run metadata')
             while reader.receipt() is None:
@@ -192,13 +217,13 @@ def aggregate_qc(folder,item,chunk_bytes=CHUNK_BYTES,progress=None,stop=None,gpu
                 report('awaiting_publisher_receipt');stop.wait(.2)
         report('verified',True)
         return {**counts,'phase':'verified','provisional':False,'updated':time.time(),'compressed_bytes_read':item['bytes'],'compressed_bytes_total':item['bytes'],'verified_chunks':reader.verified_chunks,'input_md5':item['md5'],'expected_reads':int(item['read_count']),'gc_percent':100*counts['gc_bases']/counts['bases'] if counts['bases'] else None,'mean_phred':counts['quality_sum']/counts['bases'] if counts['bases'] else None,'scope':'Aggregate source-read QC only, not alignment, variant calls, reference matches or reconstruction of withheld sequence.'}
-    finally:reader.close()
+    finally:reader.close();batch.close()
 
 
-def qc_memory_mb(chunk_bytes=CHUNK_BYTES,rss_kib=None,batch_bases=BATCH_BASES):
-    """Two chunks, measured runtime, parser buffers, paired batches and CPU uppercase workspace."""
+def qc_memory_mb(chunk_bytes=CHUNK_BYTES,rss_kib=None,batch_bases=BATCH_BASES,gpu_parallel=False):
+    """Two chunks, measured runtime, parser buffers, current/pending batches and CPU uppercase workspace."""
     rss_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss if rss_kib is None else rss_kib
-    return math.ceil((2*chunk_bytes+rss_kib*1024+4*LINE_BYTES+3*batch_bases)/(1024*1024))
+    return math.ceil((2*chunk_bytes+rss_kib*1024+4*LINE_BYTES+(5 if gpu_parallel else 3)*batch_bases)/(1024*1024))
 
 
 def run_remote(host,item,ident,output,mapping_reserve_mb=7000,changed=None,download_state=None,gpu_verify=False):

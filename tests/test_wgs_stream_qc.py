@@ -72,6 +72,7 @@ def test_corrupt_complete_chunk_and_wrong_count_are_rejected(tmp_path):
 def test_memory_budget_tracks_chunk_geometry_and_runtime():
     assert qc_memory_mb(128*1024**2,32*1024)==304
     assert qc_memory_mb(256*1024**2,32*1024)==560
+    assert qc_memory_mb(128*1024**2,32*1024,gpu_parallel=True)==312
 
 
 def test_partial_bytes_are_never_consumed_and_stop_unblocks_waiting(tmp_path):
@@ -220,3 +221,43 @@ def test_backfill_rejects_prior_qc_disagreement_and_incomplete_histogram(tmp_pat
     validate_backfill(result,baseline)
     with pytest.raises(ValueError,match='prior verified'):validate_backfill({**result,'gc_bases':999},baseline)
     with pytest.raises(ValueError,match='histogram'):validate_backfill({**result,'quality_histogram':[0]*94},baseline)
+
+
+def test_parallel_gpu_batch_allows_parsing_ahead_but_commits_once():
+    from scripts.wgs_stream_qc import BatchCounts
+    entered=threading.Event();release=threading.Event()
+    def gpu(seq,qual):
+        entered.set();assert release.wait(3);return gpu_response(seq,qual)
+    counts={'gc_bases':0,'ambiguous_bases':0,'quality_sum':0,'q20_bases':0,'q30_bases':0}
+    batch=BatchCounts(counts,batch_bases=3,gpu_request=gpu,gpu_parallel=True)
+    try:
+        batch.add(b'ACG',b'III');assert entered.wait(2)
+        batch.add(b'NA',b'I!')
+        assert batch.pending_bases()==5 and counts['gpu_bases']==0
+        release.set();batch.finish()
+        assert counts['gpu_bases']==5 and counts['gpu_batches']==2 and batch.pending_bases()==0
+        assert sum(counts['base_counts'].values())==sum(counts['quality_histogram'])==5
+    finally:release.set();batch.close()
+
+
+def test_parallel_gpu_errors_fall_back_without_double_counting(tmp_path):
+    data,item=source(tmp_path);receipt(tmp_path,item,data);expected=aggregate_qc(tmp_path,item,batch_bases=2);calls=[]
+    def gpu(seq,qual):
+        calls.append(bytes(seq))
+        if len(calls)==1:return gpu_response(seq,qual)
+        if len(calls)==2:return {**gpu_response(seq,qual),'quality_sum':9999}
+        raise TimeoutError('GPU response lost')
+    result=aggregate_qc(tmp_path,item,batch_bases=2,gpu_request=gpu,gpu_parallel=True)
+    assert_same_counts(result,expected)
+    assert result['gpu_batches']==1 and result['cpu_batches']==2 and result['gpu_fallback_batches']==2
+    assert result['gpu_bases']+result['cpu_bases']==result['bases']==6
+
+
+def test_parallel_gpu_drains_tail_before_publisher_verification(tmp_path):
+    data,item=source(tmp_path);chunks(tmp_path,data,11);phases=[]
+    def progress(row):
+        phases.append(row['phase'])
+        if row['phase']=='awaiting_publisher_receipt':receipt(tmp_path,item,data)
+    result=aggregate_qc(tmp_path,item,chunk_bytes=11,progress=progress,batch_bases=4,gpu_request=gpu_response,gpu_parallel=True)
+    assert result['gpu_bases']==result['bases']==6 and result['gpu_batches']==2
+    assert 'awaiting_publisher_receipt' in phases and result['phase']=='verified'
