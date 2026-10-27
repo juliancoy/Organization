@@ -5,6 +5,11 @@ import os
 from pathlib import Path
 from urllib.request import Request, urlopen
 
+# Coordinator snapshots include bounded flow and five-minute telemetry histories.
+# Keep a hard read bound above their normal combined size; public responses still
+# use the field/count projections below.
+MAX_COORDINATOR_SNAPSHOT_BYTES = 16 * 1024 * 1024
+
 def request_tests():
     """Queue the complete application-owned catalog; no caller-supplied commands."""
     from master_api import TOKEN_FILE
@@ -20,8 +25,8 @@ def request_tests():
 def read_coordinator(path):
     # Callers select fixed paths; never forward a browser-supplied destination.
     with urlopen(Request('http://127.0.0.1:8089' + path), timeout=4) as response:
-        raw = response.read(4 * 1024 * 1024 + 1)
-    if len(raw) > 4 * 1024 * 1024:
+        raw = response.read(MAX_COORDINATOR_SNAPSHOT_BYTES + 1)
+    if len(raw) > MAX_COORDINATOR_SNAPSHOT_BYTES:
         raise ValueError('Coordinator snapshot exceeded the size limit')
     value = json.loads(raw)
     if not isinstance(value, dict):

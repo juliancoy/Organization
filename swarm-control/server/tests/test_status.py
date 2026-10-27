@@ -38,6 +38,19 @@ class SnapshotProjectionTests(unittest.TestCase):
         self.assertEqual(result['run']['hosts'][0]['jobs'][0]['status'],'running')
 
 class TaskManagerProjectionTests(unittest.TestCase):
+    def test_normal_large_snapshot_is_projected_without_forwarding_flow_details(self):
+        network={'devices':[], 'flow_details':'private'*(700000)}
+        with patch('status.urlopen',side_effect=[io.BytesIO(json.dumps(v).encode()) for v in [network,{},{}]]):
+            result=status.task_manager()
+        self.assertNotIn('private',json.dumps(result))
+        self.assertEqual(result['network']['devices'],[])
+
+    def test_oversized_coordinator_snapshot_still_has_a_hard_read_bound(self):
+        stream=io.BytesIO(b' '*(status.MAX_COORDINATOR_SNAPSHOT_BYTES+1))
+        with patch('status.urlopen',return_value=stream):
+            with self.assertRaisesRegex(ValueError,'size limit'):
+                status.read_coordinator('/api/devices')
+
     def test_remote_resources_preserve_measurements_and_exclude_credentials(self):
         network={'devices':[{'ip':'10.0.0.2','mac':'aa','hostname':'worker.local','ports':[22]}],
                  'link_traffic':{'updated':'now','peers':{'aa':{'rx_mbps':3,'tx_mbps':2,'secret':'private'}}},
