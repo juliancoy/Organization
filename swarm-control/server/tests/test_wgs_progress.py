@@ -63,3 +63,15 @@ def test_primary_venter_gpu_work_is_visible_separately_from_verified_backfill(tm
     assert workers['compai.local']['streaming_bases']==123 and workers['compai.local']['streaming_batches']==4
     assert workers['compai.local']['streaming_cpu_crosschecked_batches']==1 and workers['compai.local']['verified_files']==0
     assert workers['julian-latitude.local']['status']=='waiting_capacity' and workers['julian-latitude.local']['device']=='Intel GPU'
+
+
+def test_fresh_reconciled_receipt_repairs_download_progress_without_restarting_transfer(tmp_path):
+    import hashlib
+    item={'url':'https://archive.example/public.gz','filename':'public.gz','bytes':100,'md5':'a'*32,'read_count':20,'sample':'Watson','run':'public'}
+    ident=hashlib.sha256(item['url'].encode()).hexdigest()[:20]
+    (tmp_path/'downloads').mkdir()
+    (tmp_path/'catalog.json').write_text(json.dumps({'files':[item]}))
+    (tmp_path/'downloads/state.json').write_text(json.dumps({'status':'running','jobs':{ident:{**item,'host':'peer','status':'failed'}}}))
+    (tmp_path/'downloads/reconciled-receipts.json').write_text(json.dumps({'receipts':{ident:{**item,'verification':'publisher_md5_rechecked','sha256':'c'*64,'verified_at':100}}}))
+    sample=snapshot(tmp_path)['samples'][0]
+    assert sample['files_verified']==1 and sample['files_failed']==0 and sample['bytes_verified']==100

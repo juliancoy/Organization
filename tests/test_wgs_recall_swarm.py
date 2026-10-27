@@ -59,3 +59,20 @@ class CleanupTests(unittest.TestCase):
                 client.return_value.call.side_effect=call
                 with self.assertRaisesRegex(RuntimeError,'lease retained'):leased_run({'host':'local','local':True,'machine':'id'},'sha256:pinned','false',[],folder,1,1024,Path(folder)/'status.json')
             self.assertNotIn('resource.release',operations)
+
+class AdmissionTests(unittest.TestCase):
+    def test_merge_can_queue_for_capacity_without_starting_unleased_work(self):
+        from scripts.wgs_recall_swarm import leased_run
+        from unittest.mock import MagicMock
+        operations=[];admitted=[];requests=[]
+        def call(op,args=None,**kwargs):
+            operations.append(op)
+            if op=='status':return {'machine':'id','capabilities':['renewable-resources']}
+            if op=='resource.capacity':return {'available_mb':0,'available_cpus':0}
+            if op=='resource.acquire':requests.append(args);return {'acquired':len(requests)>1}
+            return {}
+        transport=MagicMock();transport.wait.return_value=0;transport.poll.return_value=0
+        with tempfile.TemporaryDirectory() as folder,patch('scripts.wgs_recall_swarm.AgentClient') as client,patch('scripts.wgs_recall_swarm.distributed.eligible',return_value=True),patch('scripts.wgs_recall_swarm.time.sleep'),patch('scripts.wgs_recall_swarm.subprocess.Popen',return_value=transport),patch('scripts.wgs_recall_swarm.cleanup_container',return_value=True):
+            client.return_value.call.side_effect=call
+            leased_run({'host':'peer','machine':'id','local':True},'sha256:pinned','true',[],folder,2,1024,Path(folder)/'status.json',wait_for_capacity=True,on_admitted=lambda:admitted.append(True))
+        self.assertEqual(len(requests),2);self.assertEqual(requests[0],requests[1]);self.assertEqual(admitted,[True]);self.assertIn('resource.release',operations)

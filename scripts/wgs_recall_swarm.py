@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import subprocess
 import threading
+import time
 import uuid
 from scripts import genomics_distributed as distributed
 from scripts.wgs_swarm_download import AgentClient, atomic_json, stamp
@@ -20,7 +21,7 @@ def cleanup_container(host,name):
     return inspected.returncode==1 and ('No such object:' in inspected.stderr or 'No such container:' in inspected.stderr)
 
 
-def leased_run(host,image,command,mounts,work,cpus,memory_mb,report):
+def leased_run(host,image,command,mounts,work,cpus,memory_mb,report,wait_for_capacity=False,on_admitted=None):
     """All Docker CPU/RAM bounds exactly match the acquired signed lease."""
     name='genomics-'+uuid.uuid4().hex;lease=uuid.uuid4().hex
     client=AgentClient(host);done=threading.Event();errors=[];process=None
@@ -29,9 +30,18 @@ def leased_run(host,image,command,mounts,work,cpus,memory_mb,report):
         if not distributed.eligible(status) or status.get('machine')!=host['machine']:raise RuntimeError('Worker identity/policy changed')
         if 'renewable-resources' not in status.get('capabilities',[]):raise RuntimeError('Renewable leases unavailable')
         capacity=client.call('resource.capacity',{'group':GROUP})
-        if capacity['available_mb']<memory_mb or capacity.get('available_cpus',0)<cpus:raise distributed.CapacityWait('Insufficient current signed capacity')
-        result=client.call('resource.acquire',{'id':lease,'group':GROUP,'cpus':cpus,'memory_mb':memory_mb,'container':name})
-        if not result['acquired']:raise distributed.CapacityWait('Capacity changed before reservation')
+        if not wait_for_capacity and (capacity['available_mb']<memory_mb or capacity.get('available_cpus',0)<cpus):raise distributed.CapacityWait('Insufficient current signed capacity')
+        request={'id':lease,'group':GROUP,'cpus':cpus,'memory_mb':memory_mb,'container':name}
+        result=client.call('resource.acquire',request)
+        if not wait_for_capacity and not result['acquired']:raise distributed.CapacityWait('Capacity changed before reservation')
+        report.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+        while not result['acquired']:
+            atomic_json(report,{'phase':'waiting_capacity','host':host['host'],'cpus':cpus,'memory_mb':memory_mb,'updated':stamp()})
+            time.sleep(2)
+            status=client.call('status')
+            if not distributed.eligible(status) or status.get('machine')!=host['machine']:raise distributed.CapacityWait('Worker is updating or declining new work')
+            result=client.call('resource.acquire',request)
+        if on_admitted:on_admitted()
         client.call('resource.renew',{'id':lease})
         def renew():
             other=AgentClient(host)

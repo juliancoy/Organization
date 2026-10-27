@@ -15,6 +15,7 @@ from scripts import genomics_distributed as distributed
 from scripts.wgs_recall import merge_commands,pipeline
 from scripts.wgs_recall_swarm import AgentClient,copy_receipt,leased_run,GROUP,distribute_reference
 from scripts.wgs_swarm_download import atomic_json,stamp,file_id
+from wgs_evidence import verified_sources
 
 PRIMARY=[str(i) for i in range(1,23)]+['X','Y','MT']
 
@@ -36,6 +37,12 @@ def capacity(host,min_memory=1024,min_cpus=1):
     finally:client.close()
     if value['available_mb']<min_memory or value.get('available_cpus',0)<min_cpus:raise distributed.CapacityWait('Waiting for signed capacity')
     return value
+
+
+def merge_resources(value,host_cpus):
+    """Use free capacity when available, otherwise queue the supported spill-to-SSD minimum."""
+    # The merge pipeline has five single-threaded samtools processes.
+    return max(2,min(5,max(2,host_cpus-1),value.get('available_cpus',0))),max(1024,value.get('available_mb',0)//2)
 
 
 def remote_json(host,path):
@@ -77,8 +84,17 @@ def main(root,sample="Watson"):
     catalog=json.loads((root/'catalog.json').read_text())['files'];source_runs={f['run'] for f in catalog if f['sample']==sample};expected=source_runs if sample=='Watson' else set(aligned)
     if set(aligned)!=expected or any(aligned[r]['phase']!='complete' for r in expected):raise RuntimeError('Not every manifest run has a completed alignment')
     downloads=json.loads((root/'downloads/state.json').read_text())['jobs']
-    verified={j['filename'] for j in downloads.values() if j.get('sample')==sample and j.get('status')=='verified'}
-    if verified!={f['filename'] for f in catalog if f['sample']==sample}:raise RuntimeError('Not every original FASTQ has passed publisher MD5')
+    source_files=[item for item in catalog if item['sample']==sample]
+    qc_path=root/'qc/state.json'
+    qc=json.loads(qc_path.read_text()).get('jobs',{}) if qc_path.exists() else {}
+    ledger=root/'downloads/reconciled-receipts.json'
+    checked=json.loads(ledger.read_text()).get('receipts',{}) if ledger.exists() else {}
+    evidence=verified_sources(source_files,downloads,qc,checked)
+    state['source_verification']={'expected':len(source_files),'verified':len(evidence),'reconciled_from_full_source_qc':sum(value=='verified_full_source_qc' for value in evidence.values()),'rechecked_current_files':sum(value=='publisher_md5_rechecked' for value in evidence.values()),'checked_at':stamp()}
+    if len(evidence)!=len(source_files):
+        state['phase']='waiting_for_source_verification';atomic_json(state_path,state)
+        raise RuntimeError('Not every original FASTQ has passed manifest-bound publisher verification')
+    atomic_json(state_path,state)
     sizes={}
     for host in hosts:
         rows=[(run,j['receipt']['bam']) for run,j in aligned.items() if j['receipt']['host']==host['host']]
@@ -118,8 +134,11 @@ def main(root,sample="Watson"):
         bams.append(state['collected'][run]['path'])
     merged=work+'/merged.deduplicated.bam'
     if state.get('merged') is None:
-        available=capacity(target,7000,2);cpus=min(target['cpus']-1,available['available_cpus']);memory=available['available_mb']//2
-        state['phase']='merging_and_marking_cross_run_duplicates';atomic_json(state_path,state)
+        client=AgentClient(target)
+        try:available=client.call('resource.capacity',{'group':GROUP})
+        finally:client.close()
+        cpus,memory=merge_resources(available,target['cpus'])
+        state['phase']='waiting_for_merge_capacity';atomic_json(state_path,state)
         # /inputs is peer cache, holding all SHA-verified incoming BAMs.
         linker="import os,pathlib,json,sys;p=pathlib.Path(sys.argv[1]);p.mkdir(mode=0o700,exist_ok=True);pairs=json.loads(pathlib.Path(sys.argv[2]).read_text());[(os.link(source,p/name) if not (p/name).exists() else None) for source,name in pairs]"
         links=[(path,run+'.bam') for run,path in zip(sorted(expected),bams)]
@@ -128,7 +147,9 @@ def main(root,sample="Watson"):
         subprocess.run(distributed.shell_command(target,['python3','-c',linker,work+'/inputs',work+'/input-links.json']),check=True)
         command=merge_commands([], '/work/merged.partial.bam',cpus,memory,list_file='/work/bams.list')
         command+=' && samtools quickcheck /work/merged.partial.bam && samtools index /work/merged.partial.bam && mv /work/merged.partial.bam /work/merged.deduplicated.bam && mv /work/merged.partial.bam.bai /work/merged.deduplicated.bam.bai'
-        leased_run(target,image,command,[(work,'/work',False)],work,cpus,memory,folder/'merge.json')
+        def admitted():
+            state['phase']='merging_and_marking_cross_run_duplicates';atomic_json(state_path,state)
+        leased_run(target,image,command,[(work,'/work',False)],work,cpus,memory,folder/'merge.json',wait_for_capacity=True,on_admitted=admitted)
         state['merged']=attest(target,merged);atomic_json(state_path,state)
     lengths={f.split('\t')[0]:int(f.split('\t')[1]) for f in (root/'reference/reference.fa.fai').read_text().splitlines() if f.split('\t')[0] in PRIMARY}
     if set(lengths)!=set(PRIMARY):raise RuntimeError('Canonical GRCh38 contigs missing')

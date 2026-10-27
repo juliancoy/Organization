@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import time
+from wgs_evidence import verified_sources
 
 ROOT=Path(os.getenv('SWARM_WGS_ROOT','/mnt/PILEDRIVE/genomics-workbench/wgs'))
 
@@ -31,6 +32,11 @@ def tail(path):
 def snapshot(root=ROOT):
     downloads=read(root/'downloads/state.json');jobs=downloads.get('jobs',{})
     if not isinstance(jobs,dict):jobs={}
+    qc=read(root/'qc/state.json');qc_jobs=qc.get('jobs',{})
+    if not isinstance(qc_jobs,dict):qc_jobs={}
+    catalog=read(root/'catalog.json').get('files',[])
+    evidence=verified_sources(catalog,jobs,qc_jobs,read(root/'downloads/reconciled-receipts.json').get('receipts',{})) if isinstance(catalog,list) else {}
+    jobs={ident:({**row,'status':'verified'} if ident in evidence else row) for ident,row in jobs.items()}
     samples=[]
     for sample in ('Watson','Venter'):
         rows=[row for row in jobs.values() if isinstance(row,dict) and row.get('sample')==sample]
