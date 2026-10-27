@@ -247,3 +247,22 @@ actual discovery reply. Cached names are labeled with their source and observati
 time in the feed; they do not change measured connectivity or renew themselves on
 failed lookups. Fresh replies replace cached names immediately. IP reuse by a
 different MAC never inherits the previous device's name.
+
+## Conversation Markdown
+
+Received conversation text is parsed as GitHub-flavored Markdown: headings,
+paragraphs, nested/task lists, tables, quotes, emphasis, links and fenced code.
+Code blocks retain literal whitespace and have a Copy button. The same renderer
+serves the desktop console and Android browser launcher. Partial streamed fences
+remain readable. Original message text and submission payloads are unchanged.
+
+The pinned Marked lexer is vendored with its license in `server/view/`; no CDN
+or runtime package fetch is required. Parsed tokens create DOM nodes rather than
+inserting rendered HTML. Raw HTML stays literal; unsafe URL schemes and local
+filesystem links are inactive. Images become explicit links rather than loading
+remote tracking resources. Very large messages or parsing failures fall back to
+literal text. Update the vendored module and license with the npm dependency.
+
+Run `npm --prefix swarm-control run test:markdown` for isolated desktop/mobile
+rendering, clipboard, unfinished-message and hostile-content checks. Screenshots
+are written to `artifacts/swarm-markdown/` without reading real conversations.

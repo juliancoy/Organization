@@ -9,9 +9,13 @@
     "start": "python3 run.py start",
     "stop": "python3 run.py stop",
     "status": "python3 run.py status",
-    "test": "python3 run.py test"
+    "test": "python3 run.py test",
+    "test:markdown": "node test-markdown.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.59.1"
+  },
+  "dependencies": {
+    "marked": "18.1.2"
   }
 }

@@ -1,3 +1,4 @@
+import {renderMessageMarkdown} from './message-markdown.js';
 import {voiceRecorder} from './codex-voice.js';
 import {messageQueue} from './codex-queue.js';
 import {screenshotPicker} from './codex-screenshots.js';
@@ -117,7 +118,7 @@ async function readThread() {
   const nearBottom = !renderedMessages || transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 80;
   if(renderedMessages!==messageSignature){
   transcript.replaceChildren();
-  for (const message of thread.messages) { const item = el('article', '', 'codex-message ' + message.role); item.append(el('strong', message.role === 'user' ? 'You' : 'Codex'), el('div', message.text)); transcript.append(item); }
+  for (const message of thread.messages) { const item = el('article', '', 'codex-message ' + message.role); item.append(el('strong', message.role === 'user' ? 'You' : 'Codex'), renderMessageMarkdown(message.text)); transcript.append(item); }
   if (!thread.messages.length) transcript.append(el('p', 'No message text is available in the recent history.'));
   renderedMessages=messageSignature;
   if (nearBottom) transcript.scrollTop = transcript.scrollHeight;
