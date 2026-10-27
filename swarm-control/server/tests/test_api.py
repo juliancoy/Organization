@@ -163,6 +163,17 @@ class RemoteBoundaryTests(unittest.TestCase):
             speech.assert_not_called()
             self.assertEqual(upload(self.cookie),200);speech.assert_called_once()
 
+    def test_send_now_requires_pidp_session_and_same_origin(self):
+        path='/api/v1/master/codex/queue/send-now'
+        queue=Mock();queue.send_now.return_value={'accepted':True,'status':'delivered'}
+        with patch('message_queue.manager',return_value=queue):
+            self.assertEqual(self.request(path,'POST',origin='https://compai.example',body={'id':'fixture'}),401)
+            self.assertEqual(self.request(path,'POST',origin='https://evil.example',body={'id':'fixture'},cookie=self.cookie),403)
+            queue.send_now.assert_not_called()
+            self.assertEqual(self.request(path,'POST',origin='https://compai.example',body={'id':'fixture'},cookie=self.cookie),200)
+            queue.send_now.assert_called_once_with({'id':'fixture'})
+            self.assertEqual(self.request(path,cookie=self.cookie),404)
+
     def test_queue_mutation_requires_session_and_origin(self):
         with patch('message_queue.manager') as factory:
             factory.return_value.submit.return_value={'accepted':True}

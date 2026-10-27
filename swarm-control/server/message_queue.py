@@ -64,6 +64,30 @@ class MessageQueue:
             db.execute("UPDATE messages SET payload=json_set(payload,'$.images',json('[]')) WHERE id=?",(body['id'],))
         return {'accepted':True}
 
+    def send_now(self,body):
+        if not isinstance(body,dict) or set(body)!={'id'} or not isinstance(body['id'],str):raise ValueError('Specify a queue ID')
+        with closing(self.db()) as db:
+            row=db.execute('SELECT id,thread_id,status,payload FROM messages WHERE id=?',(body['id'],)).fetchone()
+        if not row:raise ValueError('Queued message not found')
+        if row['status'] in ('delivered','delivering'):
+            return {'accepted':row['status']=='delivered','status':row['status']}
+        if row['status']!='queued':raise ValueError('Only a waiting message can be sent now')
+        state=codex.detail(row['thread_id'])
+        if not state.get('owner_connected') or state.get('activity') not in ('idle','running'):
+            raise ValueError('Conversation must be connected with a known turn state')
+        with self.lock,closing(self.db()) as db,db:
+            db.execute('BEGIN IMMEDIATE')
+            changed=db.execute("UPDATE messages SET status='delivering',updated=?,note='Sending now to VS Code…' WHERE id=? AND status='queued' AND NOT EXISTS (SELECT 1 FROM messages active WHERE active.thread_id=messages.thread_id AND active.status='delivering')",(time.time(),row['id'])).rowcount
+        if not changed:raise ValueError('Message changed or another message is already sending')
+        payload=json.loads(row['payload']);payload['action']='steer' if state['activity']=='running' else 'send'
+        try:result=codex.mutate(payload);status='delivered' if result.get('accepted') else 'uncertain'
+        except Exception:status='uncertain'
+        note='Delivered to the local VS Code thread.' if status=='delivered' else 'Delivery is uncertain. Check the conversation, then mark reviewed. This message will not retry automatically.'
+        with self.lock,closing(self.db()) as db,db:
+            db.execute('UPDATE messages SET status=?,updated=?,note=? WHERE id=?',(status,time.time(),note,row['id']))
+            if status=='delivered':db.execute("UPDATE messages SET payload=json_set(payload,'$.images',json('[]')) WHERE id=?",(row['id'],))
+        return {'accepted':status=='delivered','status':status,'message':note}
+
     def tick(self):
         if not self.worker_lock.acquire(blocking=False):return
         try:
@@ -78,7 +102,7 @@ class MessageQueue:
                 except Exception:continue
                 if state.get('activity')!='idle' or not state.get('owner_connected'):continue
                 with self.lock,closing(self.db()) as db,db:
-                    changed=db.execute("UPDATE messages SET status='delivering',updated=?,note='Sending to VS Code…' WHERE id=? AND status='queued'",(time.time(),row['id'])).rowcount
+                    changed=db.execute("UPDATE messages SET status='delivering',updated=?,note='Sending to VS Code…' WHERE id=? AND status='queued' AND NOT EXISTS (SELECT 1 FROM messages active WHERE active.thread_id=messages.thread_id AND active.status='delivering')",(time.time(),row['id'])).rowcount
                 if not changed:continue
                 try:
                     with closing(self.db()) as db:payload=json.loads(db.execute('SELECT payload FROM messages WHERE id=?',(row['id'],)).fetchone()[0])

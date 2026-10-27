@@ -298,3 +298,10 @@ identities are denied even if they share a canonical person ID. Sessions retain
 the verified sign-in subject under their existing expiry/revocation lifecycle;
 older sessions without that proof require a fresh sign-in. Email text provided
 by the browser never grants access.
+
+Queued messages have a **Send now** action above the composer. It bypasses the
+normal FIFO wait for that selected message: running turns receive a steer; idle
+threads receive a new message. The server checks connection/state and atomically
+claims the record against automatic delivery and cancellation. Confirmed messages
+leave the visible queue. Uncertain deliveries remain for review and never retry
+automatically. Sending, reviewed and cancelled records cannot be sent again.
