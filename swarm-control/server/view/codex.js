@@ -55,7 +55,7 @@ let requestId = null, voiceBusy=false;
 const draftsPrefix='swarm-codex-draft:';
 function saveDraft(){if(selected){try{if(input.value)sessionStorage.setItem(draftsPrefix+selected,input.value);else sessionStorage.removeItem(draftsPrefix+selected);}catch{status.textContent='Draft is in the composer; browser storage is unavailable.';}}}
 function restoreDraft(){try{input.value=sessionStorage.getItem(draftsPrefix+selected)||'';}catch{input.value='';}}
-const queue=messageQueue(api,()=>selected);conversation.append(queue.root);
+const queue=messageQueue(api,()=>selected);conversation.insertBefore(queue.root,form);
 const voice=voiceRecorder({input,onDraft:()=>{requestId=null;saveDraft();input.dispatchEvent(new Event('input'));},onSend:()=>form.requestSubmit(),onBusy:value=>{voiceBusy=value;input.readOnly=value||busy;send.disabled=value||busy||screenshots.processing||(!input.value.trim()&&!screenshots.count);},transcribe:async(audio,signal)=>{
  const response=await fetch('/api/v1/master/codex/transcribe',{method:'POST',headers:{...(!secureRemote?{Authorization:'Bearer '+token}:{}),'Content-Type':audio.type},body:audio,signal:AbortSignal.any([signal,AbortSignal.timeout(150000)])});
  const result=await response.json();if(!response.ok)throw Error(result.error?.message||'Transcription failed.');return result;
