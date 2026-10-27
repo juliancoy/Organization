@@ -314,6 +314,7 @@ def run_batch(host,items,changed,connections):
     by_id={file_id(item):item for item in items}
     try:
         status=client.call('status',timeout=10)
+        remote_started=status.get('time',time.time())
         if not distributed.eligible(status) or status.get('machine')!=host['machine']:raise RuntimeError('Worker identity/policy changed')
         if 'renewable-resources' not in status.get('capabilities',[]):raise RuntimeError('Worker needs renewable-resource agent update')
         capacity=client.call('resource.capacity',{'group':GROUP});memory_mb=distributed.memory_allocation(capacity,max(1,host.get('cpus',1)))
@@ -344,7 +345,8 @@ def run_batch(host,items,changed,connections):
                 try:
                     result=subprocess.run(distributed.shell_command(host,['python3','-c',code,host['cache'],json.dumps(list(by_id))]),capture_output=True,text=True,timeout=20)
                     if result.returncode==0:
-                        changed(None,None,{'host':host['host'],'progress_batch':json.loads(result.stdout)})
+                        fresh={ident:row for ident,row in json.loads(result.stdout).items() if row.get('updated',0)>=remote_started}
+                        if fresh:changed(None,None,{'host':host['host'],'progress_batch':fresh})
                 except (OSError,ValueError,subprocess.SubprocessError):pass
         threading.Thread(target=cancel,daemon=True).start();threading.Thread(target=progress,daemon=True).start()
         process.stdin.write(json.dumps(payload).encode());process.stdin.close()
@@ -421,6 +423,14 @@ def write_network_control(host,connections,not_before=0):
         return False
 
 
+def download_worker_ready(host):
+    client=AgentClient(host)
+    try:status=client.call('status',timeout=10)
+    finally:client.close()
+    if status.get('machine')!=host['machine']:raise RuntimeError('Download worker machine identity differs')
+    return distributed.eligible(status)
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--manifest',type=Path,required=True)
@@ -465,7 +475,7 @@ def main():
                 failures=sum(v.get('failures',0) for v in samples.values());retry_until=max([0]+[v.get('retry_until',0) for v in samples.values()])
                 elapsed=current-network_previous[0];rate=max(0,(received-network_previous[1])/elapsed) if elapsed>0 else 0;network_previous[:]=[current,received];network_rates.append(rate);network_rates[:]=network_rates[-6:]
                 mean_rate=sum(network_rates)/len(network_rates);budget=network_budget.update(current,failures,mean_rate,retry_until)
-                active_hosts=[h for h in hosts if not h.get('_download_finished')]
+                active_hosts=[h for h in hosts if not h.get('_download_finished') and not h.get('_waiting_for_worker')]
                 pair_groups={}
                 for row in state['jobs'].values():
                     if row.get('layout')=='PAIRED' and row['status']!='verified':pair_groups.setdefault(row['run'],[]).append(row)
@@ -497,10 +507,35 @@ def main():
                     save();return
                 if state['jobs'][ident]['status']=='verified' and status!='verified':return
                 state['jobs'][ident].update(status=status,**(extra or {}));save()
-        try:run_batch(host,[items[ident] for ident in selected],changed,connections)
-        except Exception as error:
+        while not STOP.is_set():
+            try:
+                if not download_worker_ready(host):
+                    host['_waiting_for_worker']=True
+                    for ident in selected:
+                        if state['jobs'][ident]['status']!='verified':changed(ident,'waiting_for_worker',{'reason':'Worker is updating or declining new jobs'})
+                    STOP.wait(5);continue
+                host['_waiting_for_worker']=False
+                run_batch(host,[items[ident] for ident in selected],changed,connections)
+                break
+            except Exception as error:
+                # A readiness transition between status and admission is retryable;
+                # changed identities and integrity failures remain hard failures.
+                if not STOP.is_set() and (str(error)=='Worker identity/policy changed' or isinstance(error,(OSError,TimeoutError))):
+                    retry=True
+                    try:download_worker_ready(host)
+                    except RuntimeError as readiness_error:error=readiness_error;retry=False
+                    except (OSError,TimeoutError):pass
+                    if retry:
+                        host['_waiting_for_worker']=True
+                        for ident in selected:
+                            if state['jobs'][ident]['status']!='verified':changed(ident,'waiting_for_worker',{'reason':'Retrying worker readiness'})
+                        STOP.wait(5);continue
+                for ident in selected:
+                    if state['jobs'][ident]['status'] not in ('verified','failed'):changed(ident,'stopped' if STOP.is_set() else 'failed',{'error':type(error).__name__+': '+str(error)[:500]})
+                break
+        if STOP.is_set():
             for ident in selected:
-                if state['jobs'][ident]['status'] not in ('verified','failed'):changed(ident,'stopped' if STOP.is_set() else 'failed',{'error':type(error).__name__+': '+str(error)[:500]})
+                if state['jobs'][ident]['status'] not in ('verified','failed'):changed(ident,'stopped')
         host['_download_finished']=True
         return host['host']
     with ThreadPoolExecutor(max_workers=len(hosts)) as pool:list(pool.map(worker,hosts))

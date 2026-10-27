@@ -193,3 +193,17 @@ def test_control_timeout_does_not_stop_other_peer_heartbeats(monkeypatch):
     assert module.write_network_control({'host':'healthy','cache':'/cache'},6) is True
     assert all(call[1]['timeout']<20 for call in calls)
     assert json.loads(calls[1][1]['input'])['connections']==6
+
+
+def test_readiness_waits_for_updates_but_never_substitutes_machine_identity(monkeypatch):
+    from unittest.mock import Mock
+    from scripts import wgs_swarm_download as module
+    client=Mock();monkeypatch.setattr(module,'AgentClient',lambda _:client)
+    status={'machine':'expected','ready':False,'protocol':'lifetech-agent.v1','worker_policy':{'accepting_jobs':True}}
+    client.call.return_value=status
+    assert module.download_worker_ready({'machine':'expected'}) is False
+    client.call.return_value={**status,'ready':True}
+    assert module.download_worker_ready({'machine':'expected'}) is True
+    client.call.return_value={**status,'machine':'other','ready':True}
+    with pytest.raises(RuntimeError,match='machine identity differs'):module.download_worker_ready({'machine':'expected'})
+    assert client.close.call_count==3
