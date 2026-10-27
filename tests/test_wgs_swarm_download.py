@@ -176,3 +176,20 @@ def test_seeded_paired_stream_requests_earliest_missing_chunk_before_small_files
     exec(compile(DOWNLOAD_WORKER,'worker','exec'),{})
     assert calls[0]==(paired['item']['url'],32)
     assert len(calls)==2, 'Seeded prefix must never be downloaded again'
+
+
+def test_control_timeout_does_not_stop_other_peer_heartbeats(monkeypatch):
+    import subprocess
+    from types import SimpleNamespace
+    from scripts import wgs_swarm_download as module
+    monkeypatch.setattr(module.distributed,'shell_command',lambda host,argv:[host['host']])
+    calls=[]
+    def run(command,**kwargs):
+        calls.append((command[0],kwargs))
+        if command[0]=='unreachable':raise subprocess.TimeoutExpired(command,kwargs['timeout'])
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(module.subprocess,'run',run)
+    assert module.write_network_control({'host':'unreachable','cache':'/cache'},6) is False
+    assert module.write_network_control({'host':'healthy','cache':'/cache'},6) is True
+    assert all(call[1]['timeout']<20 for call in calls)
+    assert json.loads(calls[1][1]['input'])['connections']==6

@@ -409,6 +409,18 @@ p=pathlib.Path(sys.argv[1])/'.network-control.json';value=json.load(sys.stdin);t
 """
 
 
+
+def write_network_control(host,connections,not_before=0):
+    """A missed peer heartbeat must not kill permission renewals on every peer."""
+    value={'connections':connections,'updated':time.time(),'not_before':not_before}
+    try:
+        result=subprocess.run(distributed.shell_command(host,['python3','-c',WRITE_CONTROL,host['cache']]),input=json.dumps(value),text=True,capture_output=True,timeout=10)
+        return result.returncode==0
+    except (OSError,subprocess.SubprocessError):
+        # Workers expire old permissions after 20 seconds; the next tick retries.
+        return False
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--manifest',type=Path,required=True)
@@ -442,10 +454,7 @@ def main():
     save();print('Distributed WGS download state: '+str(state_path),flush=True)
     network_done=threading.Event();network_budget=FlowBudget(hosts,time.time());network_started=time.time();network_previous=[network_started,0];network_rates=[]
     if previous.get('network',{}).get('status')=='adaptive':network_budget.budget=min(network_budget.maximum,max(1,int(previous['network']['budget'])))
-    def control(host,connections,not_before=0):
-        value={'connections':connections,'updated':time.time(),'not_before':not_before}
-        result=subprocess.run(distributed.shell_command(host,['python3','-c',WRITE_CONTROL,host['cache']]),input=json.dumps(value),text=True,capture_output=True,timeout=20)
-        return result.returncode==0
+    control=write_network_control
     initial_priorities={row['host'] for row in previous.get('jobs',{}).values() if row.get('layout')=='PAIRED' and row.get('progress',{}).get('contiguous_chunks',0)==0}
     initial_allocations=flow_assignments(hosts,network_budget.budget,priorities=initial_priorities)
     with ThreadPoolExecutor(max_workers=len(hosts)) as controls:list(controls.map(lambda h:control(h,initial_allocations[h['host']]),hosts))
@@ -467,7 +476,10 @@ def main():
                 allocations=flow_assignments(active_hosts,budget,int((current-network_started)//30),priorities)
                 state['network']={'budget':budget,'allocations':allocations,'rate_bytes_per_second':mean_rate,'archive_failures':failures,'not_before':network_budget.not_before,'status':'archive_backoff' if current<network_budget.not_before else 'adaptive','updated':current};save()
             with ThreadPoolExecutor(max_workers=max(1,len(hosts))) as controls:
-                list(controls.map(lambda h:control(h,allocations.get(h['host'],0),network_budget.not_before),hosts))
+                results=list(controls.map(lambda h:(h['host'],control(h,allocations.get(h['host'],0),network_budget.not_before)),hosts))
+            with guard:
+                state['network']['control_unreachable_hosts']=[host for host,ok in results if not ok]
+                state['network']['control_checked_at']=time.time();save()
     network_thread=threading.Thread(target=network_loop,daemon=True);network_thread.start()
     def worker(host):
         # Existing lease PID budget is32; leave room for main/progress/SSL threads.
