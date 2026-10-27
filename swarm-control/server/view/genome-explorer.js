@@ -39,3 +39,35 @@ const journeySections=journeyLinks.map(a=>document.querySelector(a.getAttribute(
 function updateJourney(){let active=journeySections[0];for(const section of journeySections){if(section.getBoundingClientRect().top<=180)active=section;}if(window.scrollY+window.innerHeight>=document.documentElement.scrollHeight-2)active=journeySections.at(-1);for(const a of journeyLinks){if(a.hash==='#'+active.id)a.setAttribute('aria-current','step');else a.removeAttribute('aria-current');}}
 window.addEventListener('scroll',updateJourney,{passive:true});updateJourney();
 document.querySelector('#compare-genomes').onclick=()=>document.querySelector('#choose-genome').scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
+
+// Published chart evidence stays usable when the owner-only work feed is unavailable.
+function workCard(title,value,detail){const card=node('article',undefined,'work-card');card.append(node('h4',title),node('strong',value),node('p',detail));return card;}
+const referenceSamples=samples.filter(s=>s.genome_composition.reference_evidence);
+$('#completed-analysis').append(
+ workCard('Variant summaries',`${fmt(samples.reduce((n,s)=>n+s.records,0))} records`,`${samples.length} datasets summarized by variant type, chromosome, depth and genotype where recorded.`),
+ workCard('Functional annotation',`${fmt(samples.reduce((n,s)=>n+s.annotated,0))} annotated records`,'Existing VEP annotations audited for Julian; local bcftools consequences for the comparison datasets. Methods are not equivalent.'),
+ workCard('Reference-match evidence',`${referenceSamples.length} datasets assessed`,'Official GIAB confidence regions and a quality-filtered reference-call audit. Positions without sufficient evidence remain unverified.')
+);
+$('#analysis-date').textContent='Chart snapshot: '+new Date(data.generated_at).toLocaleString()+ (data.reference_analysis_at?' · Reference evidence updated: '+new Date(data.reference_analysis_at).toLocaleString():'')+'. Source-read work below does not automatically change these charts.';
+const human=value=>String(value||'not recorded').replaceAll('_',' ');
+let workBusy=false,workTimer;
+async function refreshWork(){
+ if(document.hidden||workBusy)return;workBusy=true;
+ try{
+  const response=await fetch('/api/v1/swarm/wgs',{cache:'no-store',signal:AbortSignal.timeout(8000)});
+  if(!response.ok)throw Error(response.status===401||response.status===403?'Sign in through Swarm Control to view the current workload record.':'Current workload record unavailable. The dated chart summaries above remain available.');
+  const work=await response.json();
+  if(!work.available)throw Error('No source-read work record is available. This does not affect the published chart summaries.');
+  $('#work-status').textContent='Read from saved workload records · checked '+new Date(work.sampled_at*1000).toLocaleTimeString()+' · refreshes every 15 seconds';
+  const stages=$('#work-stages');stages.replaceChildren();
+  for(const sample of work.samples||[])stages.append(workCard(sample.sample+' source files',`${fmt(sample.files_verified)} / ${fmt(sample.files_total)} verified`,`${(sample.bytes_verified/1024**3).toFixed(1)} GiB checksum verified · ${fmt(sample.files_active)} downloading · ${fmt(sample.files_failed)} awaiting retry`));
+  stages.append(workCard('Read quality control',`${fmt(work.qc_verified_files||0)} verified files`,`${fmt(work.qc.reads_processed)} reads processed · ${fmt(work.qc.bases_processed)} bases processed. In-progress totals can be provisional.`),workCard('Reference alignment',`${fmt(work.alignment.completed)} / ${fmt(work.alignment.files)} completed`,(work.alignment.status==='all_watson_runs_aligned'?'All Watson runs aligned; not yet merged, called or published':human(work.alignment.status))+'. Reference index: '+human(work.index.status)+'.'));
+  const workers=$('#gpu-work');workers.replaceChildren();
+  for(const worker of work.gpu_workers||[])workers.append(workCard(worker.host,`${fmt(worker.verified_files)} GPU-verified files`,`${worker.device||'Device not recorded'} · ${fmt(worker.bases)} bases recounted. ${fmt(worker.matches_original_cpu_qc)} files match original CPU QC; ${fmt(worker.cpu_crosschecked_batches)} batches independently CPU checked; ${fmt(worker.fallback_batches)} fallback batches. Startup checks: ${fmt(worker.startup_fixtures)} base/quality + ${fmt(worker.mask_startup_fixtures)} mask fixtures. ${human(worker.status)}${worker.updated?' · record updated '+new Date(worker.updated*1000).toLocaleString():''}.`));
+  const perf=work.gpu_performance;
+  $('#work-performance').textContent=perf?.available?`CompAI parallelism check: ${fmt(perf.bases)} bases in ${perf.before_seconds.toFixed(3)} → ${perf.after_seconds.toFixed(3)} seconds (${Math.round((perf.before_seconds/perf.after_seconds-1)*100)}% higher throughput). ${perf.scope}`:'';
+ }catch(error){$('#work-status').textContent=error.message;$('#work-stages').replaceChildren();$('#gpu-work').replaceChildren();$('#work-performance').textContent='';}
+ finally{workBusy=false;clearTimeout(workTimer);if(!document.hidden)workTimer=setTimeout(refreshWork,15000);}
+}
+document.addEventListener('visibilitychange',()=>{clearTimeout(workTimer);if(!document.hidden)void refreshWork();});
+void refreshWork();

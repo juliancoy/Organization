@@ -36,3 +36,17 @@ def test_backfill_is_reported_separately_from_source_qc(tmp_path):
     assert value['gpu_backfill']=={'status':'running','files':1,'verified_files':1,'batches':3,'bases':42,'cpu_crosschecked_batches':2}
     (path/'state.json').write_text(json.dumps({'jobs':{'a':{'phase':'verified','status':'waiting_gpu','provisional':True,'gpu_bases':20,'cpu_bases':22}}}))
     assert snapshot(tmp_path)['gpu_backfill']['verified_files']==0
+
+
+def test_gpu_workers_count_only_verified_files_and_keep_validation_distinct(tmp_path):
+    path=tmp_path/'gpu-qc/compai-backfill';path.mkdir(parents=True)
+    (path/'state.json').write_text(json.dumps({'jobs':{
+        'a':{'status':'verified','provisional':False,'gpu_bases':42,'matches_original_cpu_qc':True,'gpu_cpu_crosschecked_batches':0,'sequence':'private'},
+        'b':{'status':'running','provisional':True,'gpu_bases':100}}}))
+    (tmp_path/'gpu-qc/daemon.json').write_text(json.dumps({'device':'RTX 3060','startup_fixtures':4,'socket':'/secret/socket','bases':100000}))
+    value=snapshot(tmp_path);worker=value['gpu_workers'][0]
+    assert worker['verified_files']==1 and worker['bases']==42
+    assert worker['matches_original_cpu_qc']==1 and worker['cpu_crosschecked_batches']==0
+    assert value['qc']['bases_processed']==0
+    assert not value['gpu_performance']['available']
+    assert 'private' not in str(value) and 'secret' not in str(value)

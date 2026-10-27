@@ -63,10 +63,26 @@ def snapshot(root=ROOT):
     gpu_service=read(root/'gpu-qc/service.json')
     replay=read(root/'qc/gpu-replay/state.json');replay_jobs=replay.get('jobs',{})
     replay_rows=[row for row in replay_jobs.values() if isinstance(row,dict)] if isinstance(replay_jobs,dict) else []
+    gpu_workers=[]
+    for host,service,path in [('compai.local',read(root/'gpu-qc/daemon.json'),root/'gpu-qc/compai-backfill/state.json'),('julian-minipc.local',gpu_service,root/'qc/gpu-replay/state.json')]:
+        state=read(path);records=state.get('jobs',{})
+        rows=[row for row in records.values() if isinstance(row,dict)] if isinstance(records,dict) else []
+        verified=[row for row in rows if row.get('status',row.get('phase'))=='verified' and row.get('provisional') is False]
+        gpu_workers.append({'host':host,'device':service.get('device'),'status':state.get('status','not_started'),'updated':state.get('updated'),
+                            'compute_mode':service.get('compute_mode','legacy'),'verified_files':len(verified),'bases':sum(number(row.get('gpu_bases')) for row in verified),
+                            'matches_original_cpu_qc':sum(row.get('matches_original_cpu_qc') is True for row in verified),
+                            'cpu_crosschecked_batches':sum(number(row.get('gpu_cpu_crosschecked_batches')) for row in verified),
+                            'fallback_batches':sum(number(row.get('gpu_fallback_batches')) for row in rows),
+                            'startup_fixtures':number(service.get('startup_fixtures')),'mask_startup_fixtures':number(service.get('mask_startup_fixtures'))})
+    benchmark=read(root/'gpu-qc/parallel-pipeline-comparison.json')
+    before=number(benchmark.get('previous',{}).get('median_seconds'));after=number(benchmark.get('cooperative_overlapped',{}).get('median_seconds'))
+    performance={'available':benchmark.get('validated') is True and before>0 and after>0,'bases':number(benchmark.get('bases')),'before_seconds':before,'after_seconds':after,'scope':'Same cached public Watson file; three-run medians; publisher checksum and original QC checked. Not download throughput.'}
     return {'available':bool(downloads),'sampled_at':time.time(),'download_status':downloads.get('status','not_started'),'updated':downloads.get('updated'),
             'samples':samples,'storage':storage,'index':index_progress,
             'qc':{'status':qc.get('status','queued'),'files':len(qc_rows),'reads_processed':sum(number(row.get('reads',row.get('reads_processed'))) for row in qc_rows),'bases_processed':sum(number(row.get('bases',row.get('bases_processed'))) for row in qc_rows),
                   'gpu_batches':sum(number(row.get('gpu_batches')) for row in qc_rows),'gpu_bases':sum(number(row.get('gpu_bases')) for row in qc_rows),'cpu_bases':sum(number(row.get('cpu_bases')) for row in qc_rows)},
+            'qc_verified_files':sum(row.get('status',row.get('phase'))=='verified' and row.get('provisional') is False for row in qc_rows),
+            'gpu_workers':gpu_workers,'gpu_performance':performance,
             'gpu_qc':{'status':gpu_service.get('status','not_started'),'host':gpu_service.get('host'),'updated':gpu_service.get('updated'),'batches':number(gpu_service.get('batches')),'bases':number(gpu_service.get('bases'))},
             'gpu_backfill':{'status':replay.get('status','not_started'),'files':len(replay_rows),'verified_files':sum(row.get('status',row.get('phase'))=='verified' and row.get('provisional') is False for row in replay_rows),'batches':sum(number(row.get('gpu_batches')) for row in replay_rows),'bases':sum(number(row.get('gpu_bases')) for row in replay_rows),'cpu_crosschecked_batches':sum(number(row.get('gpu_cpu_crosschecked_batches')) for row in replay_rows)},
             'alignment':{'status':driver.get('phase','queued'),'files':len(mapping_rows),'completed':sum(row.get('status',row.get('phase')) in ('passed','complete','verified') for row in mapping_rows)}}
