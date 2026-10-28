@@ -305,3 +305,10 @@ threads receive a new message. The server checks connection/state and atomically
 claims the record against automatic delivery and cancellation. Confirmed messages
 leave the visible queue. Uncertain deliveries remain for review and never retry
 automatically. Sending, reviewed and cancelled records cannot be sent again.
+
+Opening a conversation creates a browser-history entry. Browser/system Back
+returns to the conversation list before leaving the console; Forward reopens the
+thread. The Conversations button uses that same history. The selected thread is
+kept in the URL fragment so reload can restore it, while an unsent text draft
+stays in this browser tab. Back does not cancel queued work or a running turn.
+At the conversation list, Back retains normal browser navigation behavior.

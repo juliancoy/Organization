@@ -36,7 +36,7 @@ const newChat = el('button', 'New chat'); newChat.type = 'button';
 const sidebarTitle=el('div','','codex-sidebar-heading'); sidebarTitle.append(sidebarHeading,newChat); sidebar.prepend(sidebarTitle);
 const conversation = el('div', '', 'codex-conversation'), info = el('div'), transcript = el('div', '', 'codex-transcript'); transcript.tabIndex = 0; transcript.setAttribute('aria-label', 'Conversation messages');
 const empty=el('div','','codex-empty'); empty.append(el('span','Your workspace, at a glance','codex-eyebrow'),el('h2','Choose a conversation'),el('p','Select a thread to read its history and send the next instruction. You can review any conversation before taking action.'));
-const back=el('button','← Conversations','codex-back'); back.type='button'; back.onclick=()=>{workspace.classList.remove('codex-reading');list.querySelector('[aria-pressed=true]')?.focus();};
+const back=el('button','← Conversations','codex-back'); back.type='button'; back.onclick=()=>{if(history.state?.swarmConversation)history.back();else showConversations();};
 const activity = el('div', '', 'codex-activity'); activity.hidden=true; activity.setAttribute('role','status'); activity.setAttribute('aria-live','polite');
 const activityDot=el('span','','codex-activity-dot'); activityDot.setAttribute('aria-hidden','true');
 const activityText=el('span'); activity.append(activityDot,activityText);
@@ -90,11 +90,29 @@ async function load() {
   status.textContent = value.machine + (value.connected ? ' · VS Code socket available' : ' · VS Code disconnected');
   if(secureRemote){const r=await fetch('/api/v1/swarm/session',{cache:'no-store'});if(r.ok){const d=await r.json();deviceStatus.textContent=d?`This controller: ${d.label} · Last seen ${new Date(d.last_seen*1000).toLocaleString()}`:'';const name=d.user?.name||'PIdP user';userName.textContent=name;userBadge.title='Signed in with PIdP as '+name;userBadge.hidden=false;userInitials.textContent=name.split(/\s+/).slice(0,2).map(part=>part[0]).join('').toUpperCase();userAvatar.hidden=true;userInitials.hidden=false;userAvatar.onload=()=>{userAvatar.hidden=false;userInitials.hidden=true;};userAvatar.onerror=()=>{userAvatar.hidden=true;userInitials.hidden=false;};userAvatar.alt=name+' avatar';if(d.user?.avatar_url&&userAvatar.getAttribute('src')!==d.user.avatar_url)userAvatar.src=d.user.avatar_url;else if(d.user?.avatar_url&&userAvatar.complete&&userAvatar.naturalWidth){userAvatar.hidden=false;userInitials.hidden=true;}}}
 }
-async function choose(id) {
+function showConversations(){saveDraft();empty.hidden=false;workspace.classList.remove('codex-reading');list.querySelector('[aria-pressed=true]')?.focus();}
+let navigationInitialized=false;
+function initializeNavigation(){
+ if(navigationInitialized)return;navigationInitialized=true;
+ const id=new URLSearchParams(location.hash.slice(1)).get('conversation');
+ const valid=id&&/^[a-f0-9-]{36}$/i.test(id);
+ if(valid&&history.state?.swarmConversation===id){void choose(id,{recordHistory:false}).catch(failure);return;}
+ history.replaceState({swarmConversation:null},'',location.pathname+location.search);
+ if(valid)void choose(id).catch(failure);
+}
+window.addEventListener('popstate',()=>{
+ if(!navigationInitialized)return;
+ const id=history.state?.swarmConversation;
+ if(!id){showConversations();return;}
+ if(selected===id){workspace.classList.add('codex-reading');empty.hidden=true;void readThread().catch(failure);void queue.refresh();return;}
+ void choose(id,{recordHistory:false}).catch(failure);
+});
+async function choose(id,{recordHistory=true}={}) {
   if (busy || voiceBusy) return;
   saveDraft();
   if (selected !== id && (screenshots.count||screenshots.processing||voice.hasRecording) && !window.confirm('Discard unsent attachments and switch threads? Your text draft is saved.')) return;
   if (selected !== id) { voice.cancel();screenshots.clear();input.value = ''; requestId = null; renderedThread=''; renderedMessages=''; observedActivity=''; }
+  if(recordHistory&&history.state?.swarmConversation!==id)history.pushState({swarmConversation:id},'',location.pathname+location.search+'#conversation='+encodeURIComponent(id));
   activity.hidden=true; latest.hidden=true;
   workspace.classList.add('codex-reading'); conversation.setAttribute('aria-busy','true');
   selected = id;restoreDraft();queue.clear();
@@ -106,7 +124,7 @@ async function readThread() {
   const id = selected, epoch = generation;
   const thread = await api('threads/' + encodeURIComponent(id));
   if (epoch !== generation || selected !== id) return;
-  empty.hidden=true; transcript.hidden=false;
+  empty.hidden=workspace.classList.contains('codex-reading'); transcript.hidden=false;
   const metadata=JSON.stringify([id,thread.display_title,thread.cwd,thread.model,thread.owner_connected,thread.ide_context,thread.history_limited]);
   if(renderedThread!==metadata){
   info.replaceChildren(el('h2', thread.display_title || 'Untitled conversation'), el('p', thread.cwd + ' · ' + (thread.model || 'Thread model'), 'muted'));
@@ -137,7 +155,7 @@ async function readThread() {
 unlock.onsubmit = async event => {
   event.preventDefault(); if(secureRemote){location.assign('/auth/login?device_label='+encodeURIComponent(deviceLabel.value.trim()));return;} token = password.value.trim(); connect.disabled = true;
   try {
-    await load(); password.value = ''; unlock.hidden = true; workspace.hidden = false; lock.hidden = false; form.hidden = !selected; }
+    await load(); password.value = ''; unlock.hidden = true; workspace.hidden = false; lock.hidden = false; form.hidden = !selected; initializeNavigation(); }
   catch (error) { token = ''; failure(error); } finally { connect.disabled = false; }
 };
 lock.onclick = async () => { voice.cancel();queue.clear();screenshots.clear();for(const key of Object.keys(sessionStorage))if(key.startsWith(draftsPrefix))sessionStorage.removeItem(key); if(secureRemote){const response=await fetch('/logout',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(!response.ok){failure(Error('Could not revoke this device. Try Lock again.'));return;}} userBadge.hidden=true;userAvatar.removeAttribute('src');generation++; token = ''; selected = null; input.value = ''; requestId = null; list.replaceChildren(); transcript.replaceChildren(); info.replaceChildren(); workspace.hidden = true; workspace.classList.remove('codex-reading'); empty.hidden=false; transcript.hidden=true; form.hidden=true; renderedThread=''; renderedMessages=''; observedActivity=''; search.value=''; activity.hidden=true; latest.hidden=true; lock.hidden = true; unlock.hidden = false; status.dataset.state=''; status.textContent = 'Locked'; };
@@ -180,10 +198,9 @@ open.onclick = async () => { if (!selected || busy) return; open.disabled = true
 async function restoreDevice(){
   if(!secureRemote)return;
   if(new URLSearchParams(location.hash.slice(1)).has('pair')){history.replaceState(null,'',location.pathname);status.textContent='Pairing links are retired. Sign in with PIdP.';}
-  try{await load();unlock.hidden=true;workspace.hidden=false;lock.hidden=false;form.hidden=!selected;}catch{userBadge.hidden=true;}
+  try{await load();unlock.hidden=true;workspace.hidden=false;lock.hidden=false;form.hidden=!selected;initializeNavigation();}catch{userBadge.hidden=true;}
 
 }
-window.addEventListener('hashchange',()=>void restoreDevice());
 void restoreDevice();
 let polling = false;
-setInterval(async () => { if ((!token && !secureRemote) || workspace.hidden || document.hidden || busy || polling) return; polling = true; try { if (selected) {await readThread();await queue.refresh();} } catch (error) { failure(error); } finally { polling = false; } }, 5000);
+setInterval(async () => { if ((!token && !secureRemote) || workspace.hidden || !workspace.classList.contains('codex-reading') || document.hidden || busy || polling) return; polling = true; try { if (selected) {await readThread();await queue.refresh();} } catch (error) { failure(error); } finally { polling = false; } }, 5000);
