@@ -13,7 +13,7 @@ function etaLabel(eta){
   const range=eta.pessimistic_seconds===null?'upper duration unknown':duration(eta.optimistic_seconds)+'–'+duration(eta.pessimistic_seconds);
   return `Transfer ETA: about ${duration(eta.seconds_remaining)} · observed-rate range ${range}. Excludes analysis and capacity changes.`;
  }
- const labels={blocked:'waiting for capacity or receiver retry',stale:'progress report stale',stalled:'no recent completed-chunk progress',insufficient_data:'collecting at least 60 seconds of progress'};
+ const labels={verifying_cache:'verifying cached chunks on disk',blocked:'waiting for capacity or receiver retry',stale:'progress report stale',stalled:'no recent completed-chunk progress',insufficient_data:'collecting at least 60 seconds of progress'};
  return 'Transfer ETA unavailable · '+(labels[eta.status]||'collecting observations');
 }
 async function refresh(){

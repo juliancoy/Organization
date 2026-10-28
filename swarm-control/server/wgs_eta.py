@@ -88,6 +88,7 @@ class TransferEstimator:
 
     def sample(self, key, rows, *, now, generation=None):
         estimates = []
+        verifying_cache = False
         with self._lock:
             # Expire inactive histories and bound the number of retained sources.
             self._history = {k:v for k,v in self._history.items() if now-v[0] < 3600}
@@ -97,11 +98,15 @@ class TransferEstimator:
                     continue
                 progress = row.get('progress') or {}
                 verified = row.get('status') == 'verified'
+                cache_check = row.get('status') == 'verifying_cached_chunks'
+                verifying_cache = verifying_cache or cache_check
                 completed = total if verified else progress.get('bytes_completed', row.get('bytes_completed'))
                 timestamp = now if verified else progress.get('updated')
                 history_key = (key, ident)
                 history = self._history.get(history_key, (now, []))[1]
-                if _finite(completed) and _finite(timestamp):
+                if cache_check:
+                    history=[]  # Rehash speed is not network transfer speed.
+                if not cache_check and _finite(completed) and _finite(timestamp):
                     point = {'timestamp':timestamp, 'completed':completed,
                              'generation':(generation, total)}
                     if not history or point != history[-1]:
@@ -115,6 +120,8 @@ class TransferEstimator:
         base = {'scope':'transfer_only', 'includes_analysis':False,
                 'seconds_remaining':None, 'optimistic_seconds':None,
                 'pessimistic_seconds':None, 'status':'insufficient_data'}
+        if verifying_cache:
+            return {**base, 'status':'verifying_cache'}
         if not estimates:
             return base
         for state in ('blocked', 'stale', 'stalled', 'insufficient_data'):

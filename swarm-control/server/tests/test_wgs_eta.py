@@ -54,3 +54,12 @@ def test_live_tracker_parallel_sources_block_missing_counters_and_restarts():
     assert tracker.sample('sample',[('a',row(70,130))],now=70,generation='new')['status']=='insufficient_data'
     assert tracker.sample('other',[('b',{'bytes':1000,'status':'downloading'})],now=70)['status']=='insufficient_data'
     assert tracker.sample('complete',[('a',{'bytes':1000,'status':'verified'})],now=70)['status']=='complete'
+
+
+def test_cache_rehash_is_never_reported_as_network_speed():
+    from wgs_eta import TransferEstimator
+    tracker=TransferEstimator()
+    def source(t,n,state):return [('x',{'bytes':1000,'status':state,'progress':{'updated':t,'bytes_completed':n}})]
+    assert tracker.sample('s',source(0,0,'verifying_cached_chunks'),now=0)['status']=='verifying_cache'
+    assert tracker.sample('s',source(60,800,'verifying_cached_chunks'),now=60)['seconds_remaining'] is None
+    assert tracker.sample('s',source(70,800,'downloading'),now=70)['status']=='insufficient_data'
