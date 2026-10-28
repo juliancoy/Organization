@@ -11,6 +11,7 @@ import shlex
 import subprocess
 import threading
 import time
+import uuid
 from scripts import genomics_distributed as distributed
 from scripts.wgs_recall import merge_commands,pipeline
 from scripts.wgs_recall_swarm import AgentClient,copy_receipt,leased_run,GROUP,distribute_reference
@@ -18,6 +19,16 @@ from scripts.wgs_swarm_download import atomic_json,stamp,file_id
 from wgs_evidence import verified_sources
 
 PRIMARY=[str(i) for i in range(1,23)]+['X','Y','MT']
+
+
+def bam_location(run,job,collected):
+    copied=collected.get(run)
+    if copied:
+        if copied.get('run')!=run or not copied.get('sha256') or not copied.get('path'):
+            raise ValueError('Collected BAM lacks its verified receipt')
+        return copied
+    receipt=job['receipt']
+    return {'host':receipt['host'],'path':receipt['bam']}
 
 
 def attest(host,path):
@@ -76,7 +87,6 @@ def main(root,sample="Watson"):
     resolver=ImageResolver([h for h in hosts if not h['local']],lambda h:h['ssh'])
     pinned=json.loads((root/'tools.json').read_text())['image']
     if resolver.fingerprint(None,pinned)!=resolver.fingerprint(None,'lifetech/wgs-tools:bookworm-20261026'):raise RuntimeError('Bioimage tag no longer matches pinned contents')
-    resolver.ensure('lifetech/wgs-tools:bookworm-20261026',[h for h in hosts if h['host'] in ('codecollective.local','julian-latitude.local','julian-inspiron-3793.local')])
     aligned=json.loads((base/'full/state.json').read_text())['jobs']
     if sample=='Venter':
         current=json.loads((base/'generation.json').read_text())
@@ -97,7 +107,10 @@ def main(root,sample="Watson"):
     atomic_json(state_path,state)
     sizes={}
     for host in hosts:
-        rows=[(run,j['receipt']['bam']) for run,j in aligned.items() if j['receipt']['host']==host['host']]
+        rows=[]
+        for run,job in aligned.items():
+            location=bam_location(run,job,state.get('collected',{}))
+            if location['host']==host['host']:rows.append((run,location['path']))
         for offset in range(0,len(rows),100):
             chunk=rows[offset:offset+100]
             query="import pathlib,json,sys;print(json.dumps({p:pathlib.Path(p).stat().st_size for p in sys.argv[1:]}))"
@@ -120,6 +133,8 @@ def main(root,sample="Watson"):
         if eligible:
             _,target=max(eligible,key=lambda row:row[0]);state['target_host']=target['host'];atomic_json(state_path,state);break
         state['phase']='waiting_for_sufficient_ssd_scratch';atomic_json(state_path,state);time.sleep(30)
+    # Prepare tools only on the selected execution host, not input archives.
+    resolver.ensure('lifetech/wgs-tools:bookworm-20261026',[target])
     work=str(Path(target['cache']).parent/'wgs-final'/sample)
     subprocess.run(distributed.shell_command(target,['mkdir','-p','--',work+'/tmp']),check=True)
     image=subprocess.check_output(distributed.shell_command(target,['docker','image','inspect','lifetech/wgs-tools:bookworm-20261026','--format','{{.Id}}']),text=True).strip()
@@ -145,8 +160,9 @@ def main(root,sample="Watson"):
         install(target,work+'/input-links.json',json.dumps(links).encode())
         install(target,work+'/bams.list',('\n'.join('/work/inputs/'+run+'.bam' for run in sorted(expected))+'\n').encode())
         subprocess.run(distributed.shell_command(target,['python3','-c',linker,work+'/inputs',work+'/input-links.json']),check=True)
-        command=merge_commands([], '/work/merged.partial.bam',cpus,memory,list_file='/work/bams.list')
-        command+=' && samtools quickcheck /work/merged.partial.bam && samtools index /work/merged.partial.bam && mv /work/merged.partial.bam /work/merged.deduplicated.bam && mv /work/merged.partial.bam.bai /work/merged.deduplicated.bam.bai'
+        partial='/work/merged.'+uuid.uuid4().hex+'.partial.bam'
+        command=merge_commands([],partial,cpus,memory,list_file='/work/bams.list')
+        command+=f' && samtools quickcheck {partial} && samtools index {partial} && mv {partial} /work/merged.deduplicated.bam && mv {partial}.bai /work/merged.deduplicated.bam.bai'
         def admitted():
             state['phase']='merging_and_marking_cross_run_duplicates';atomic_json(state_path,state)
         leased_run(target,image,command,[(work,'/work',False)],work,cpus,memory,folder/'merge.json',wait_for_capacity=True,on_admitted=admitted)
