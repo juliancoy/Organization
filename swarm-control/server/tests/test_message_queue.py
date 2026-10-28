@@ -122,3 +122,15 @@ class QueueTests(unittest.TestCase):
             finally:finish.set()
             self.assertEqual(future.result()['status'],'delivered')
         self.assertEqual(self.states(),['queued','delivered'])
+
+
+    def test_machine_readiness_wait_preserves_queue_then_delivers_once(self):
+        body=self.body();self.q.submit(body)
+        for state in [{'activity':'idle','owner_connected':False},{'activity':'running','owner_connected':True}]:
+            with patch.object(codex,'detail',return_value=state),patch.object(codex,'mutate') as send:
+                self.q.tick();self.q.tick();send.assert_not_called()
+                self.assertEqual(self.states(),['queued'])
+        with patch.object(codex,'detail',return_value={'activity':'idle','owner_connected':True}),patch.object(codex,'mutate',return_value={'accepted':True}) as send:
+            self.q.tick();self.q.tick();send.assert_called_once()
+            self.assertEqual(send.call_args.args[0]['request_id'],body['request_id'])
+        self.assertEqual(self.states(),['delivered'])

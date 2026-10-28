@@ -163,6 +163,27 @@ class RemoteBoundaryTests(unittest.TestCase):
             speech.assert_not_called()
             self.assertEqual(upload(self.cookie),200);speech.assert_called_once()
 
+    def test_message_actions_across_login_scenarios(self):
+        import time
+        def session(subject='test-owner',expires=None):
+            with devices.state() as state:
+                token=devices.new_session(state,pidp_identity='owner-person',pidp_subject=subject)
+                if expires is not None:
+                    state['sessions'][devices.digest(token)]['expires']=expires;devices.save(state)
+            return token
+        expired=session(expires=time.time()-10);revoked=session();devices.revoke(revoked)
+        other=session('other-login');legacy=devices.session(devices.issue());renewed=session()
+        scenarios=[('signed out',None,False),('expired',expired,False),('revoked',revoked,False),('other linked login',other,False),('legacy paired',legacy,False),('signed in',self.cookie.split('=',1)[1],True),('signed in again',renewed,True)]
+        for label,token,allowed in scenarios:
+            for action in ['queue','queue/send-now','commands']:
+                with self.subTest(login=label,action=action),patch('message_queue.manager') as manager,patch('api.codex.rest',return_value=(202,{'accepted':True})) as rest:
+                    manager.return_value.submit.return_value={'accepted':True}
+                    manager.return_value.send_now.return_value={'accepted':True,'status':'delivered'}
+                    cookie='__Host-compai_device='+token if token else None
+                    status=self.request('/api/v1/master/codex/'+action,'POST',origin='https://compai.example',body={'id':'synthetic'},cookie=cookie)
+                    self.assertEqual(status,(200 if action=='queue/send-now' else 202) if allowed else 401)
+                    if not allowed:manager.assert_not_called();rest.assert_not_called()
+
     def test_send_now_requires_pidp_session_and_same_origin(self):
         path='/api/v1/master/codex/queue/send-now'
         queue=Mock();queue.send_now.return_value={'accepted':True,'status':'delivered'}

@@ -24,6 +24,7 @@ const connect = el('button', 'Connect'); connect.type = 'submit'; unlock.append(
 if(!allowedBrowser){password.disabled=true;connect.disabled=true;}
 const deviceLabel=el('input');deviceLabel.value= /Android/i.test(navigator.userAgent)?'Android':/iPhone|iPad/i.test(navigator.userAgent)?'iOS': 'Browser';deviceLabel.maxLength=64;deviceLabel.required=true;
 if(secureRemote){const deviceName=el('label','Device name ');deviceName.append(deviceLabel);const signIn=el('button','Sign in with PIdP');signIn.type='submit';unlock.replaceChildren(deviceName,signIn,el('p','Use your authorized PIdP account. Multiple devices can stay signed in. Lock signs out this browser only.'));}
+const reauthenticate=el('a','Sign in again with PIdP','codex-reauth');reauthenticate.href='/auth/login';reauthenticate.target='_blank';reauthenticate.rel='noopener noreferrer';reauthenticate.title='Opens a new tab so your draft and attachments stay here';reauthenticate.hidden=true;
 const status = el('p', 'Connect to view your conversations.', 'codex-status'); status.setAttribute('role', 'status');
 const workspace = el('div', '', 'codex-workspace'); workspace.hidden = true;
 const sidebar = el('div', '', 'codex-sidebar'), list = el('div', '', 'codex-list'), controls = el('div', '', 'codex-pagination');
@@ -50,7 +51,7 @@ for (const [value, text] of [['send', 'Queue for next turn'], ['steer', 'Steer c
 const send = el('button', 'Send instruction'); send.type = 'submit'; send.disabled=true; const open = el('button', 'Open in VS Code'); open.type = 'button'; send.setAttribute('aria-label','Send instruction');send.title='Send instruction · Ctrl/⌘ + Enter';send.textContent='↑';actions.append(mode, send);open.className='codex-open'; const composeHelp=el('small', 'Stop keeps a draft in this browser tab. Send queues it for this thread; Steer interrupts the active turn. Ctrl/⌘ + Enter submits. Handle approvals in local VS Code.'); composeHelp.id='codex-compose-help'; const help=el('details','','codex-compose-help');help.append(el('summary','Sending options'),composeHelp,open);form.append(promptLabel, actions, help);
 const screenshots=screenshotPicker(form,input,dirty=>{if(dirty)requestId=null;send.disabled=voiceBusy||busy||screenshots.processing||send.dataset.connected!=='true'||(!input.value.trim()&&!screenshots.count);});form.insertBefore(screenshots.root,actions);screenshots.root.querySelector('button').title='Choose screenshots, paste an image, or drop it here. Up to 4 images, 4 MB total.';
 input.addEventListener('keydown',event=>{if(event.key==='Enter' && (event.ctrlKey||event.metaKey) && !event.isComposing){event.preventDefault();if(!send.disabled)form.requestSubmit();}});
-form.hidden=true; transcript.hidden=true; info.className='codex-thread-info'; conversation.append(back,empty,info, transcript, latest, activity, form); workspace.append(sidebar, conversation); root.append(heading, unlock, status, workspace);
+form.hidden=true; transcript.hidden=true; info.className='codex-thread-info'; conversation.append(back,empty,info, transcript, latest, activity, form); workspace.append(sidebar, conversation); root.append(heading, unlock, status, reauthenticate, workspace);
 let requestId = null, voiceBusy=false;
 const draftsPrefix='swarm-codex-draft:';
 function saveDraft(){if(selected){try{if(input.value)sessionStorage.setItem(draftsPrefix+selected,input.value);else sessionStorage.removeItem(draftsPrefix+selected);}catch{status.textContent='Draft is in the composer; browser storage is unavailable.';}}}
@@ -67,10 +68,11 @@ async function api(path, body) {
   if(!allowedBrowser)throw Error('Open this page through localhost or an SSH tunnel before entering a Codex owner token.');
   const response = await fetch('/api/v1/master/codex/' + path, { method: body ? 'POST' : 'GET', cache: 'no-store', headers: { ...(!secureRemote?{Authorization:'Bearer '+token}:{}), ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(20000) });
   const value = await response.json();
-  if (!response.ok) throw new Error(value.error?.message || 'Codex connection failed');
+  if (!response.ok) {if(secureRemote&&response.status===401)reauthenticate.hidden=false;throw Object.assign(new Error(value.error?.message || 'Codex connection failed'),{status:response.status});}
+  if(secureRemote)reauthenticate.hidden=true;
   return value;
 }
-function failure(error) { if(selected)showActivity('unknown','Could not refresh or confirm delivery. Check the connection and refresh.'); status.textContent = error.message; status.dataset.state='error'; }
+function failure(error) { if(error.status===401&&secureRemote){reauthenticate.hidden=false;status.textContent='Sign-in expired or access denied. Your unsent draft is kept; sign in again in a new tab.';status.dataset.state='error';if(selected)showActivity('authentication_required','Sign in again to send. Your draft stays here.');return;}if(selected)showActivity('unknown','Could not refresh or confirm delivery. Check the connection and refresh.'); status.textContent = error.message; status.dataset.state='error'; }
 function filterThreads(){const term=search.value.trim().toLocaleLowerCase();const nodes=[...list.querySelectorAll('.codex-thread')]; for(const node of nodes)node.hidden=!node.textContent.toLocaleLowerCase().includes(term); noResults.hidden=!term||!nodes.length||nodes.some(node=>!node.hidden);}
 search.oninput=filterThreads;
 async function load() {
@@ -144,7 +146,7 @@ async function readThread() {
   latest.hidden=nearBottom;
   }
   form.hidden = false; send.disabled = voiceBusy || busy || screenshots.processing || (!input.value.trim()&&!screenshots.count);
-  if(!busy)showActivity(thread.activity, thread.activity === 'running' ? 'Codex is generating a response… Updates every 5 seconds.' : thread.activity === 'idle' ? 'Codex is ready for your next instruction.' : 'Generation status unavailable. Refresh before sending.');
+  if(!busy)showActivity(!thread.owner_connected?'waiting':thread.activity, !thread.owner_connected?'Waiting for the machine to connect. Check local confirmation prompts.':thread.activity === 'running' ? 'Turn running or waiting for confirmation on the machine. Updates every 5 seconds.' : thread.activity === 'idle' ? 'Codex is ready for your next instruction.' : 'Generation status unavailable. Refresh before sending.');
   transcript.setAttribute('aria-busy',String(thread.activity==='running'));
   for(const button of list.querySelectorAll('.codex-thread'))if(button.getAttribute('aria-pressed')==='true'){button.dataset.activity=thread.activity;button.querySelector('span').textContent=(thread.activity==='running'?'● Generating response':thread.activity==='idle'?'Past turn completed':'State unknown')+' · '+button.dataset.updated;}
   send.dataset.connected='true';
@@ -191,7 +193,7 @@ form.onsubmit = async event => {
     const result = await api(mode.value==='send'?'queue':'commands',mode.value==='send'?payload:{...payload,action:'steer'});
     status.textContent = result.message;
     if (result.accepted) { screenshots.clear();input.value = '';saveDraft(); requestId = null;await queue.refresh(); }
-  } catch (error) { failure(new Error(error.message + ' Check the conversation before retrying; delivery may be uncertain.')); }
+  } catch (error) { failure(error.status===401?error:new Error(error.message + ' Check the conversation before retrying; delivery may be uncertain.')); }
   finally { busy = false;voice.setDisabled(false); screenshots.setDisabled(false);lock.disabled = false; input.readOnly=false; mode.disabled=false; send.textContent='↑';send.setAttribute('aria-label','Send instruction'); await readThread().catch(failure); }
 };
 open.onclick = async () => { if (!selected || busy) return; open.disabled = true; try { const result = await api('commands', { thread_id: selected, action: 'open' }); status.textContent = result.message; } catch (error) { failure(error); } finally { open.disabled = false; } };
