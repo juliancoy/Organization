@@ -26,9 +26,10 @@ const smoothControl=document.getElementById('levels-smooth');
 try{smoothing=localStorage.getItem('lan-map.levels.smooth')==='true';}catch{}
 smoothControl.checked=smoothing;
 smoothControl.onchange=()=>{smoothing=smoothControl.checked;try{localStorage.setItem('lan-map.levels.smooth',String(smoothing));}catch{}if(lastData)update(...lastData,false);};
-let split=false;
+const pairedNetwork=document.body.classList.contains('task-manager');
+let split=pairedNetwork;
 const splitControl=document.getElementById('levels-split');
-try{split=localStorage.getItem('lan-map.levels.split')==='true';}catch{}
+try{if(!pairedNetwork)split=localStorage.getItem('lan-map.levels.split')==='true';}catch{}
 splitControl.checked=split;
 splitControl.onchange=()=>{split=splitControl.checked;try{localStorage.setItem('lan-map.levels.split',String(split));}catch{}if(lastData)update(...lastData,false);};
 const historyMode=()=>mode==='network'&&split?'split':mode;
@@ -97,17 +98,23 @@ function draw(){
  document.getElementById('levels-window').textContent=(span<60000?Math.ceil(span/1000)+' seconds':(span/60000).toFixed(1)+' minutes')+' ago'+(span<299000?' · building 5-minute history':'');
  const peak=mode==='disk'?Math.max(100,...visible.flatMap(r=>(history.get(r.id)||[]).map(p=>p.value||0))):mode==='network'?Math.max(1,...visible.flatMap(r=>(history.get(r.id)||[]).map(p=>p.value||0)))*1.1:100;
  for(const bar of root.querySelectorAll('.levels-throughput-fill')){const value=Number(bar.dataset.value);bar.style.width=(Math.min(1,value/peak)*100)+'%';bar.parentElement.title=(smoothing?'Smoothed throughput':'Current throughput')+' · shared scale 0–'+peak.toFixed(1)+' Mb/s';}
- const chartWidth=Math.max(280,document.getElementById('levels-plot').clientWidth),plotWidth=chartWidth-68;
- const ns='http://www.w3.org/2000/svg',svg=document.createElementNS(ns,'svg');svg.setAttribute('viewBox','0 0 '+chartWidth+' 270');svg.setAttribute('preserveAspectRatio','none');svg.setAttribute('role','img');svg.setAttribute('aria-label',mode+' levels for '+visible.length+' devices over five minutes');
+ const plot=document.getElementById('levels-plot'),paired=mode==='network'&&pairedNetwork;
+ plot.classList.toggle('levels-network-pair',paired);plot.replaceChildren();
+ for(const direction of paired?['send','receive']:[null]){
+ const pane=document.createElement('section');pane.className='levels-direction-chart';
+ if(paired){const heading=document.createElement('h3');heading.textContent=direction==='send'?'↑ Upload':'↓ Download';pane.append(heading);}
+ const chartWidth=Math.max(140,paired?(plot.clientWidth-16)/2:Math.max(280,plot.clientWidth)),plotWidth=chartWidth-68;
+ const ns='http://www.w3.org/2000/svg',svg=document.createElementNS(ns,'svg');svg.setAttribute('viewBox','0 0 '+chartWidth+' 270');svg.setAttribute('preserveAspectRatio','none');svg.setAttribute('role','img');svg.setAttribute('aria-label',(direction==='send'?'Upload':direction==='receive'?'Download':mode)+' levels over five minutes');
  const add=(tag,attrs,text)=>{const e=document.createElementNS(ns,tag);for(const [k,v]of Object.entries(attrs))e.setAttribute(k,v);if(text)e.textContent=text;svg.append(e);return e;};
  for(let i=0;i<=4;i++){const y=15+i*58;add('line',{x1:58,x2:chartWidth-10,y1:y,y2:y,stroke:'#ffffff10'});add('text',{x:48,y:y+4,'text-anchor':'end',fill:'#91a4b2','font-size':14},(peak*(4-i)/4).toFixed(peak>10?0:1));}
- for(const row of visible){const points=(history.get(row.id)||[]).filter(p=>p.time>=now-300000);let segment=[];
+ for(const row of visible.filter(row=>!direction||row.direction===direction)){const points=(history.get(row.id)||[]).filter(p=>p.time>=now-300000);let segment=[];
  const flush=()=>{if(!segment.length)return;const line=segment.map((p,i)=>(i?'L':'M')+p).join(' '),color=deviceColor(row.deviceId||row.id),active=row.id===highlighted;if(segment.length>1&&(!['network','disk'].includes(mode)||active))add('path',{d:line+' L'+segment.at(-1).split(',')[0]+',247 L'+segment[0].split(',')[0]+',247 Z',fill:color,'fill-opacity':active ? .45 : highlighted ? .03 : .10});if(segment.length===1){const [cx,cy]=segment[0].split(',');add('circle',{cx,cy,r:2,fill:color});}const path=add('path',{d:line,fill:'none',stroke:color,'stroke-width':active?3.5:2,'stroke-opacity':highlighted && !active ? .25 : 1,'stroke-dasharray':['receive','write'].includes(row.direction)?'6 4':'none','vector-effect':'non-scaling-stroke'});const title=document.createElementNS(ns,'title');title.textContent=row.name;path.append(title);segment=[];};
  let prev=null;for(const p of points){if(p.value===null||prev!==null&&p.time-prev>20000)flush();if(p.value!==null)segment.push((58+plotWidth*(p.time-now+span)/span).toFixed(2)+','+(247-232*p.value/peak).toFixed(2));prev=p.time;}flush();
  const last=points.at(-1);if(last?.value!==null&&last&&now-last.time<10000)add('circle',{cx:58+plotWidth*(last.time-now+span)/span,cy:247-232*last.value/peak,r:3,fill:deviceColor(row.deviceId||row.id)});
  }
- document.getElementById('levels-plot').replaceChildren(svg);
- document.getElementById('levels-scale').textContent=mode==='network'?(split?'Mb/s · send solid / receive dashed · shared scale':'Mb/s · receive + send · shared auto-scale'):mode==='disk'?'% of observed sustained capacity · read solid / write dashed':mode==='gpu'?'% GPU busy':mode==='vram'?'% dedicated GPU memory used':mode==='cpu'?'% CPU busy · across all logical cores':'% RAM used · excludes available cache';
+ if(paired){pane.append(svg);plot.append(pane);}else plot.append(svg);
+ }
+ document.getElementById('levels-scale').textContent=mode==='network'?(split?'Mb/s · upload / download · shared scale':'Mb/s · receive + send · shared auto-scale'):mode==='disk'?'% of observed sustained capacity · read solid / write dashed':mode==='gpu'?'% GPU busy':mode==='vram'?'% dedicated GPU memory used':mode==='cpu'?'% CPU busy · across all logical cores':'% RAM used · excludes available cache';
 }
 function update(data,metrics,record=true){
  if(!savingTransport){
@@ -122,7 +129,7 @@ function update(data,metrics,record=true){
  cpuSummary.textContent=`Fleet CPU: ${percent(metrics.total_percent)} · ${cpuCoverage(metrics)}. ${testCpuSummary(metrics)}.`+(windows.length?` ${Math.min(...windows).toFixed(1)}–${Math.max(...windows).toFixed(1)}s averages`:'')+(ages.length?` · samples up to ${Math.max(...ages).toFixed(1)}s old`:'');
  for(const button of resources.children)button.setAttribute('aria-pressed',String(button.dataset.measure===mode));
  document.getElementById('usage-title').textContent={gpu:'GPU usage',vram:'GPU memory usage',cpu:'CPU usage',ram:'Memory usage',disk:'Disk activity',network:'Network throughput'}[mode];
- document.getElementById('levels-split-label').hidden=mode!=='network';
+ document.getElementById('levels-split-label').hidden=mode!=='network'||pairedNetwork;
  root.querySelector('.levels-devices h3').firstChild.nodeValue=mode==='network'?'Network interfaces ':mode==='disk'?'Physical disks ':'Devices ';
  renderDockerDownloads(document.getElementById('levels-docker'),data,mode);
  lastData=[data,metrics];latest=rowsFor(data,metrics,historyMode());const now=Date.now();
@@ -133,7 +140,7 @@ function update(data,metrics,record=true){
  const legend=document.getElementById('levels-legend'),focused=document.activeElement?.dataset.seriesId,scrollTop=legend.scrollTop;legend.replaceChildren();
  if(['network','disk'].includes(mode))networkLegend(legend);else for(const row of latest)legend.append(legendButton(row));
  legend.scrollTop=scrollTop;if(focused)Array.from(legend.querySelectorAll('button')).find(button=>button.dataset.seriesId===focused)?.focus({preventScroll:true});
- if(mode==='network'&&split)document.getElementById('levels-description').textContent+=' Send is solid; receive is dashed. Toggle either direction in the sidebar.';
+ if(mode==='network'&&split)document.getElementById('levels-description').textContent+=(pairedNetwork?' Upload and download appear side by side on the same scale.':' Send is solid; receive is dashed.')+' Toggle either direction in the sidebar.';
  const count=latest.filter(r=>r.value!==null).length;
  document.getElementById('levels-coverage').textContent=mode==='disk'?`${count} / ${latest.length} read/write percentages available · Throughput stays live while the observed baseline is learned under load. Five-minute background history.`:mode==='network'?`${count} / ${latest.length} ${split?'directions':'interfaces'} measured · Five-minute background history. Gateway-only measurements may omit switched traffic.`:count+' / '+latest.length+(mode==='network'&&split?' directional series measured. ':' devices measured. ')+(mode==='network'?'Hosts with telemetry report physical-interface totals; other devices use gateway-visible traffic, which excludes switched traffic. These scopes differ; values are not additive.':'CPU, GPU, disk, and RAM require live host telemetry. Devices without telemetry remain listed as “No data”.')+' Host history is collected by the coordinator for five minutes, even while this page is closed.';
  document.getElementById('levels-status').textContent='Updated '+new Date().toLocaleTimeString();draw();
