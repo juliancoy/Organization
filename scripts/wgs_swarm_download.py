@@ -285,7 +285,11 @@ def assign_files(files,hosts,previous=None):
     previous=previous or {};by_name={h['host']:h for h in hosts};allocated={h['host']:0 for h in hosts};assignments={}
     for item in sorted(files,key=lambda row:row['bytes'],reverse=True):
         ident=file_id(item);old=previous.get(ident,{}).get('host')
-        needed=lambda h:0 if old==h['host'] and previous.get(ident,{}).get('status')=='verified' else max(0,item['bytes']*2-h.get('cache_sizes',{}).get(ident,0))
+        # A verified file stays completed even when its storage host is offline.
+        # Availability is a separate concern; do not download it again implicitly.
+        if old and previous.get(ident,{}).get('status')=='verified':
+            assignments[ident]=old;continue
+        needed=lambda h:max(0,item['bytes']*2-h.get('cache_sizes',{}).get(ident,0))
         choices=[h for h in hosts if h['free_bytes']-allocated[h['host']]>=needed(h)]
         if old in by_name and by_name[old] in choices:chosen=by_name[old]
         elif choices:chosen=min(choices,key=lambda h:(allocated[h['host']]/max(1,h['free_bytes']),-h['free_bytes']))
@@ -455,10 +459,12 @@ def main():
         try:hosts.append(preflight(host,args.local_cache))
         except Exception as error:print(host['host']+': '+str(error),flush=True)
     if not hosts:raise RuntimeError('No authenticated accepting worker has a writable cache')
-    mapping=assign_files(files,hosts,previous.get('jobs'))
-    state={'started':previous.get('started',stamp()),'status':'running','manifest_sha256':hashlib.sha256(args.manifest.read_bytes()).hexdigest(),'jobs':{},'workers':[{k:h[k] for k in ('host','cache','free_bytes','cpus')} for h in hosts]};guard=threading.RLock()
+    manifest_digest=hashlib.sha256(args.manifest.read_bytes()).hexdigest()
+    prior_jobs=previous.get('jobs',{}) if previous.get('manifest_sha256')==manifest_digest else {}
+    mapping=assign_files(files,hosts,prior_jobs)
+    state={'started':previous.get('started',stamp()),'status':'running','manifest_sha256':manifest_digest,'jobs':{},'workers':[{k:h[k] for k in ('host','cache','free_bytes','cpus')} for h in hosts]};guard=threading.RLock()
     items={file_id(item):item for item in files}
-    for ident,item in items.items():state['jobs'][ident]={'host':mapping[ident],'sample':item['sample'],'run':item['run'],'bytes':item['bytes'],'filename':item['filename'],'layout':item.get('layout'),'status':'queued'}
+    for ident,item in items.items():state['jobs'][ident]={**(prior_jobs.get(ident,{}) if prior_jobs.get(ident,{}).get('status')=='verified' else {}),'host':mapping[ident],'sample':item['sample'],'run':item['run'],'bytes':item['bytes'],'filename':item['filename'],'layout':item.get('layout'),'status':'verified' if prior_jobs.get(ident,{}).get('status')=='verified' else 'queued'}
     def save():
         with guard:state['updated']=stamp();atomic_json(state_path,state)
     save();print('Distributed WGS download state: '+str(state_path),flush=True)
@@ -494,7 +500,9 @@ def main():
     def worker(host):
         # Existing lease PID budget is32; leave room for main/progress/SSL threads.
         connections=min(args.connections_per_host or max(1,host.get('cpus',1)),24)
-        selected=[ident for ident in items if mapping[ident]==host['host']]
+        selected=[ident for ident in items if mapping[ident]==host['host'] and state['jobs'][ident]['status']!='verified']
+        if not selected:
+            host['_download_finished']=True;return host['host']
         selected.sort(key=lambda ident:items[ident]['bytes'])
         def changed(ident,status,extra=None):
             with guard:

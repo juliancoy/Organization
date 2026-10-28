@@ -40,3 +40,12 @@ from 1.202 s to 0.834 s: 18.9 to 27.2 million bases/s, or 44% higher throughput.
 These are warm-cache measurements, not a promise for download-bound work.
 Kernel validation covered 18 CPU-crosschecked cases per implementation, including
 partial words, workgroup boundaries, uniform input and the 64 MiB engine limit.
+
+Download resumption preserves completed source records only when the manifest
+SHA-256 matches the saved run. Verified files retain their original storage host,
+including when it is temporarily offline, and are excluded from new download
+batches. This prevents silently downloading the same completed data onto other
+nodes. Verification records describe completed downloads, not current host
+reachability; consumers still check availability and integrity when reading.
+Failed or incomplete sources continue through the normal range and publisher
+checksum checks. A failed publisher checksum is never promoted to verified.

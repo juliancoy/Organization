@@ -207,3 +207,11 @@ def test_readiness_waits_for_updates_but_never_substitutes_machine_identity(monk
     client.call.return_value={**status,'machine':'other','ready':True}
     with pytest.raises(RuntimeError,match='machine identity differs'):module.download_worker_ready({'machine':'expected'})
     assert client.close.call_count==3
+
+
+def test_verified_download_on_offline_host_is_not_fetched_again():
+    from scripts.wgs_swarm_download import assign_files
+    source=item(size=100);ident=file_id(source)
+    hosts=[{'host':'online','free_bytes':1000,'cpus':4,'cache_sizes':{}}]
+    assert assign_files([source],hosts,{ident:{'host':'offline','status':'verified'}})=={ident:'offline'}
+    assert assign_files([source],hosts,{ident:{'host':'offline','status':'stopped'}})=={ident:'online'}
