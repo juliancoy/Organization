@@ -359,7 +359,7 @@ def coordinator(args):
                         continue
                 if previous.get('host') not in (None,row['host']):
                     with lock:state['jobs'][ident]={'status':'waiting_for_input','host':row['host'],'sample':row['sample'],'run':row['run'],'provisional':True};save()
-                if row['status'] in ('downloading','verified'):eligible.append((row['status']!='verified',ident))
+                if row['status'] in ('downloading','verified','verifying_cached_chunks'):eligible.append((row['status']!='verified',ident))
             for _,ident in sorted(eligible):
                 if STOP.is_set():break
                 item=items[ident]

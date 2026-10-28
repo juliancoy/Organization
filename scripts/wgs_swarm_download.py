@@ -112,11 +112,15 @@ def initialize(current):
    lock.close();emit(prior);return None
  chunks=folder/'chunks';chunks.mkdir(mode=0o700,exist_ok=True);chunk_size=current['chunk_bytes'];total=(item['bytes']+chunk_size-1)//chunk_size
  ctx={'id':current['id'],'item':item,'folder':folder,'final':final,'receipt_path':receipt_path,'chunks':chunks,'chunk_size':chunk_size,'total':total,'done':set(),'active':set(),'phase':'queued','lock':lock,'started':time.monotonic(),'remaining':total,'failed':False,'allowed_hosts':current['allowed_hosts'],'transport_worker_version':current.get('transport_worker_version','unversioned')}
+ ctx['phase']='verifying_cached_chunks'
+ report(ctx)
  for index in range(total):
   target=chunks/(str(index)+'.bin');meta=chunks/(str(index)+'.json')
   if target.exists() and meta.exists():
    prior=json.loads(meta.read_text());expected=min(chunk_size,item['bytes']-index*chunk_size)
    if target.stat().st_size==expected and prior.get('sha256')==digest(target,'sha256'):ctx['done'].add(index)
+  if index%8==0:report(ctx)
+ ctx['phase']='queued'
  report(ctx);return ctx
 
 class YieldNetworkSlot(Exception):pass
@@ -517,7 +521,7 @@ def main():
                     network_rows=[row for row in rows.values() if 'network' in row]
                     if network_rows:state.setdefault('network_workers',{})[extra['host']]=max(network_rows,key=lambda row:row['updated'])['network']
                     for key,row in extra['progress_batch'].items():
-                        if state['jobs'][key]['status'] not in ('verified','failed'):state['jobs'][key].update(status='queued' if row['phase']=='queued' else 'failed' if row['phase']=='failed' else 'downloading',progress=row)
+                        if state['jobs'][key]['status'] not in ('verified','failed'):state['jobs'][key].update(status='queued' if row['phase']=='queued' else 'failed' if row['phase']=='failed' else 'verifying_cached_chunks' if row['phase']=='verifying_cached_chunks' else 'downloading',progress=row)
                     save();return
                 if state['jobs'][ident]['status']=='verified' and status!='verified':return
                 state['jobs'][ident].update(status=status,**(extra or {}));save()
