@@ -18,14 +18,16 @@ const researchLink=el('a','Research ↗','codex-map-link');researchLink.href='/r
 const historyLink=el('a','History','codex-map-link');historyLink.href='/history';
 const headerActions=el('div','','codex-header-actions'); headerActions.append(taskLink,historyLink,mapLink,researchLink,lock);
 const userBadge=el('div','','pidp-user');userBadge.hidden=true;const userAvatar=el('img');userAvatar.width=36;userAvatar.height=36;userAvatar.referrerPolicy='no-referrer';const userInitials=el('span','','pidp-user-initials');const userName=el('span','','pidp-user-name');userBadge.append(userAvatar,userInitials,userName);headerActions.append(userBadge); heading.append(title,headerActions);
-const unlock = el('form', '', 'codex-unlock');
+const unlock = el('form', '', 'codex-unlock'); unlock.hidden=secureRemote;
 const label = el('label', 'Codex owner token '), password = el('input'); password.type = 'password'; password.autocomplete = 'off'; password.required = true; password.placeholder = 'Enter your owner token'; label.append(password);
 const connect = el('button', 'Connect'); connect.type = 'submit'; unlock.append(label, connect, el('small', secureRemote ? 'Sign in with PIdP on this device. Lock signs out this browser.' : 'Use localhost or an SSH tunnel. This separate owner token is never shared with test workers.'));
 if(!allowedBrowser){password.disabled=true;connect.disabled=true;}
 const deviceLabel=el('input');deviceLabel.value= /Android/i.test(navigator.userAgent)?'Android':/iPhone|iPad/i.test(navigator.userAgent)?'iOS': 'Browser';deviceLabel.maxLength=64;deviceLabel.required=true;
 if(secureRemote){const deviceName=el('label','Device name ');deviceName.append(deviceLabel);const signIn=el('button','Sign in with PIdP');signIn.type='submit';unlock.replaceChildren(deviceName,signIn,el('p','Use your authorized PIdP account. Multiple devices can stay signed in. Lock signs out this browser only.'));}
 const reauthenticate=el('a','Sign in again with PIdP','codex-reauth');reauthenticate.href='/auth/login';reauthenticate.target='_blank';reauthenticate.rel='noopener noreferrer';reauthenticate.title='Opens a new tab so your draft and attachments stay here';reauthenticate.hidden=true;
-const status = el('p', 'Connect to view your conversations.', 'codex-status'); status.setAttribute('role', 'status');
+const status = el('p', secureRemote ? 'Checking sign-in…' : 'Connect to view your conversations.', 'codex-status'); status.setAttribute('role', 'status');
+const retrySignIn=el('button','Retry connection');retrySignIn.type='button';retrySignIn.hidden=true;retrySignIn.onclick=()=>void restoreDevice();
+if(secureRemote)root.setAttribute('aria-busy','true');
 const workspace = el('div', '', 'codex-workspace'); workspace.hidden = true;
 const sidebar = el('div', '', 'codex-sidebar'), list = el('div', '', 'codex-list'), controls = el('div', '', 'codex-pagination');
 const searchLabel=el('label','Find a conversation','codex-search'), search=el('input'); search.type='search'; search.placeholder='Search this page of conversations'; searchLabel.append(search);
@@ -51,7 +53,7 @@ for (const [value, text] of [['send', 'Queue for next turn'], ['steer', 'Steer c
 const send = el('button', 'Send instruction'); send.type = 'submit'; send.disabled=true; const open = el('button', 'Open in VS Code'); open.type = 'button'; send.setAttribute('aria-label','Send instruction');send.title='Send instruction · Ctrl/⌘ + Enter';send.textContent='↑';actions.append(mode, send);open.className='codex-open'; const composeHelp=el('small', 'Stop keeps a draft in this browser tab. Send queues it for this thread; Steer interrupts the active turn. Ctrl/⌘ + Enter submits. Full-access conversations run without local command approval. Restricted conversations keep their approval settings.'); composeHelp.id='codex-compose-help'; const help=el('details','','codex-compose-help');help.append(el('summary','Sending options'),composeHelp,open);form.append(promptLabel, actions, help);
 const screenshots=screenshotPicker(form,input,dirty=>{if(dirty)requestId=null;send.disabled=voiceBusy||busy||screenshots.processing||send.dataset.connected!=='true'||(!input.value.trim()&&!screenshots.count);});form.insertBefore(screenshots.root,actions);screenshots.root.querySelector('button').title='Choose screenshots, paste an image, or drop it here. Up to 4 images, 4 MB total.';
 input.addEventListener('keydown',event=>{if(event.key==='Enter' && (event.ctrlKey||event.metaKey) && !event.isComposing){event.preventDefault();if(!send.disabled)form.requestSubmit();}});
-form.hidden=true; transcript.hidden=true; info.className='codex-thread-info'; conversation.append(back,empty,info, transcript, latest, activity, form); workspace.append(sidebar, conversation); root.append(heading, unlock, status, reauthenticate, workspace);
+form.hidden=true; transcript.hidden=true; info.className='codex-thread-info'; conversation.append(back,empty,info, transcript, latest, activity, form); workspace.append(sidebar, conversation); root.append(heading, unlock, status, retrySignIn, reauthenticate, workspace);
 let requestId = null, voiceBusy=false;
 const draftsPrefix='swarm-codex-draft:';
 function saveDraft(){if(selected){try{if(input.value)sessionStorage.setItem(draftsPrefix+selected,input.value);else sessionStorage.removeItem(draftsPrefix+selected);}catch{status.textContent='Draft is in the composer; browser storage is unavailable.';}}}
@@ -200,7 +202,14 @@ open.onclick = async () => { if (!selected || busy) return; open.disabled = true
 async function restoreDevice(){
   if(!secureRemote)return;
   if(new URLSearchParams(location.hash.slice(1)).has('pair')){history.replaceState(null,'',location.pathname);status.textContent='Pairing links are retired. Sign in with PIdP.';}
-  try{await load();unlock.hidden=true;workspace.hidden=false;lock.hidden=false;form.hidden=!selected;initializeNavigation();}catch{userBadge.hidden=true;}
+  unlock.hidden=true;retrySignIn.hidden=true;reauthenticate.hidden=true;
+  root.setAttribute('aria-busy','true');status.dataset.state='';status.textContent='Checking sign-in…';
+  try{await load();unlock.hidden=true;workspace.hidden=false;lock.hidden=false;form.hidden=!selected;initializeNavigation();}
+  catch(error){
+    userBadge.hidden=true;reauthenticate.hidden=true;
+    if(error.status===401){unlock.hidden=false;status.textContent='Sign in to view your conversations.';status.dataset.state='';}
+    else{status.textContent='Could not check sign-in. Check your connection and retry.';status.dataset.state='error';retrySignIn.hidden=false;}
+  }finally{root.setAttribute('aria-busy','false');}
 
 }
 void restoreDevice();

@@ -33,3 +33,5 @@ body:has(main>#codex-context[data-remote=true]){background:#181818}
 .codex-message-queue article .queue-send-now{display:inline-block;margin:4px 0 0;padding:4px 10px;border:1px solid #739b87;color:#d4f0e0;background:#365346;border-radius:7px;font-size:12px;min-height:34px}.codex-message-queue article .queue-send-now:hover{background:#446b59}
 .codex-workspace:not(.codex-reading) .codex-conversation>:not(.codex-empty){display:none}
 .codex-reauth{display:inline-block;align-self:flex-start;margin:0 0 12px;padding:8px 12px;border:1px solid #729d88;border-radius:8px;color:#c8ebda;background:#2c4439;font-size:13px}.codex-reauth[hidden]{display:none}
+/* Keep secondary content below the initial viewport while session restoration runs. */
+.codex-app[aria-busy=true]{min-height:calc(100dvh - 48px)}
