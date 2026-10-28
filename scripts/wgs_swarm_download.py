@@ -202,8 +202,11 @@ def fetch(ctx,index):
         partial.rename(quarantine/(partial.name+'.overlap-mismatch-'+str(time.time_ns())))
         raise ValueError('Preserved partial differs from official overlapping range')
       size=existing
+      payload_tail=b''
       with partial.open('ab') as stream:
        while data:=response.read(min(1024*1024,end-start+1-size+1)):
+        if archive_error(payload_tail+data):raise ArchivePayloadError('Upstream XML error embedded in archive response')
+        payload_tail=data[-32:]
         size+=len(data)
         if size>end-start+1:raise ValueError('Archive range exceeded expected length')
         stream.write(data)
