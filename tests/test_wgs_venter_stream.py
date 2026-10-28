@@ -73,3 +73,14 @@ def test_download_source_follows_reassigned_owner_and_cache(tmp_path):
     state.write_text(json.dumps({'jobs':{file_id(item):{'host':'untrusted'}}}))
     import pytest
     with pytest.raises(RuntimeError,match='not enrolled'):download_source(tmp_path,hosts,item)
+
+
+def test_unavailable_optional_workers_cannot_allow_incomplete_mapping_publication():
+    from scripts.wgs_venter_stream import mapping_complete
+    verified={'shards':2};job={'phase':'complete','receipt':{'generation':'fresh'}}
+    assert not mapping_complete({},verified,'fresh')
+    assert not mapping_complete({'SRR7097858-fresh-000000':job},verified,'fresh')
+    jobs={'SRR7097858-fresh-000000':job,'SRR7097858-fresh-000001':job}
+    assert mapping_complete(jobs,verified,'fresh')
+    assert not mapping_complete(jobs,verified,'other')
+    assert not mapping_complete(jobs,None,'fresh')

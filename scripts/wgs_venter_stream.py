@@ -99,6 +99,13 @@ with contextlib.ExitStack() as stack:
 '''
 
 
+def mapping_complete(jobs,verified,generation):
+    if not isinstance(verified,dict) or type(verified.get('shards')) is not int or verified['shards']<1:
+        return False
+    expected={'SRR7097858-'+generation+'-'+str(n).zfill(6) for n in range(verified['shards'])}
+    return set(jobs)==expected and all(j.get('phase')=='complete' and j.get('receipt',{}).get('generation')==generation for j in jobs.values())
+
+
 def map_pair(host,owner,receipt,reference,image,folder):
     copies=[]
     for item in receipt['files']:
@@ -159,8 +166,14 @@ def main(root):
     listing="import json,pathlib,sys;p=pathlib.Path(sys.argv[1]);print(json.dumps({'shards':[json.loads(f.read_text()) for f in sorted(p.glob('[0-9]*.json'))],'verified':json.loads((p/'stream-verified.json').read_text()) if (p/'stream-verified.json').exists() else None}))"
     def mapper(host):
         from docker_utils.images import ImageResolver
-        resolver=ImageResolver([h for h in hosts if not h['local']],lambda h:h['ssh']);resolver.ensure(IMAGE,[] if host['local'] else [host]);image=resolver.inspect(None if host['local'] else host,IMAGE)
-        reference=distribute_reference(host,root/'reference')
+        try:
+            resolver=ImageResolver([h for h in hosts if not h['local']],lambda h:h['ssh']);resolver.ensure(IMAGE,[] if host['local'] else [host]);image=resolver.inspect(None if host['local'] else host,IMAGE)
+            reference=distribute_reference(host,root/'reference')
+        except (OSError,RuntimeError,subprocess.SubprocessError) as error:
+            # An optional worker must not abort healthy mapping workers.
+            with guard:
+                state.setdefault('workers',{})[host['host']]={'phase':'unavailable','error':str(error)[:500]};atomic_json(state_path,state)
+            return
         while True:
             if stream_errors:raise RuntimeError(stream_errors[0])
             data=json.loads(subprocess.check_output(distributed.shell_command(owner,['python3','-c',listing,work+'/shards']),text=True))
@@ -182,6 +195,9 @@ def main(root):
             finally:
                 with guard:claimed.discard(r['shard']);atomic_json(state_path,state)
     with ThreadPoolExecutor(max_workers=4) as pool:list(pool.map(mapper,mapping_hosts))
+    final_data=json.loads(subprocess.check_output(distributed.shell_command(owner,['python3','-c',listing,work+'/shards']),text=True))
+    if not mapping_complete(state['jobs'],final_data.get('verified'),generation):
+        raise RuntimeError('Not every current-generation paired shard has a verified mapping')
     while True:
         downloads=json.loads((root/'downloads/state.json').read_text())['jobs']
         if all(downloads.get(file_id(i),{}).get('status')=='verified' for i in items):break
