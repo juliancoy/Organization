@@ -85,6 +85,7 @@ def cpu_batch_counts(sequence,quality):
     counts={base:bases[ord(base)] for base in BASE_KEYS[:-1]}
     counts['other']=len(sequence)-sum(counts.values())
     histogram=[hist[value+33] for value in range(94)]
+    if sum(histogram)!=len(quality):raise ValueError('Invalid Phred+33 quality encoding')
     return {'counts':counts,'quality_histogram':histogram,
             'quality_sum':sum(i*n for i,n in enumerate(histogram)),
             'q20':sum(histogram[20:]),'q30':sum(histogram[30:])}
@@ -95,6 +96,7 @@ def validate_gpu_counts(value,length,request_id=None):
     if not isinstance(value,dict) or value.get('version')!=1 or value.get('backend')!='vulkan' or value.get('software_fallback') is not False or value.get('device_type') not in (1,2):raise ValueError('Unverified GPU backend')
     if request_id is not None and value.get('request_id')!=request_id:raise ValueError('GPU request identity differs')
     if value.get('exact_match') is not True and value.get('validated_backend') is not True:raise ValueError('GPU backend fixtures not verified')
+    if value.get('invalid_quality',0):raise ValueError('Invalid Phred+33 quality encoding')
     if value.get('exact_match') is False:raise ValueError('GPU CPU crosscheck failed')
     counts=value.get('counts',{});hist=value.get('quality_histogram',[])
     if set(counts)!=set(BASE_KEYS) or any(type(n) is not int or n<0 for n in counts.values()) or sum(counts.values())!=length:raise ValueError('GPU base totals differ')
@@ -134,6 +136,11 @@ class BatchCounts:
             self.executor=ThreadPoolExecutor(max_workers=1,thread_name_prefix="qc-gpu")
         counts.update(base_counts={k:0 for k in BASE_KEYS},quality_histogram=[0]*94,gpu_batches=0,gpu_bases=0,cpu_batches=0,cpu_bases=0,gpu_fallback_batches=0,gpu_cpu_crosschecked_batches=0,qc_backend='cpu',histogram_source='cpu',gpu_devices=[])
     def add(self,sequence,quality):
+        # The common short-read case avoids a loop and two redundant slices.
+        if len(sequence)<=self.limit-len(self.sequence):
+            self.sequence.extend(sequence);self.quality.extend(quality)
+            if len(self.sequence)==self.limit:self.flush()
+            return
         # Split exceptionally long records too; parser owns the record boundary.
         position=0
         while position<len(sequence):
@@ -207,11 +214,12 @@ def aggregate_qc(folder,item,chunk_bytes=CHUNK_BYTES,progress=None,stop=None,gpu
                 sequence=stream.readline(LINE_BYTES+1).rstrip(b'\r\n');plus=stream.readline(LINE_BYTES+1);quality=stream.readline(LINE_BYTES+1).rstrip(b'\r\n')
                 if len(header)>LINE_BYTES or len(sequence)>LINE_BYTES or len(plus)>LINE_BYTES or len(quality)>LINE_BYTES or not header.startswith(b'@') or not plus.startswith(b'+') or len(sequence)!=len(quality) or not sequence:
                     raise ValueError('Malformed or unsupported archive FASTQ record')
-                if min(quality)<33 or max(quality)>126:raise ValueError('Invalid Phred+33 quality encoding')
                 length=len(sequence)
                 counts['reads']+=1;counts['bases']+=length;counts['max_length']=max(counts['max_length'],length);counts['min_length']=length if counts['min_length'] is None else min(counts['min_length'],length)
                 batch.add(sequence,quality)
-                report('streaming')
+                # Batch validation covers Phred bounds on the GPU or CPU.
+                # Avoid a clock lookup for every individual short read.
+                if counts['reads']%4096==0:report('streaming')
             batch.finish()
             if reader.offset!=item['bytes'] or reader.md5.hexdigest()!=item['md5']:raise ValueError('Full streaming input failed publisher MD5')
             if counts['reads']!=int(item['read_count']):raise ValueError('FASTQ read count differs from ENA run metadata')

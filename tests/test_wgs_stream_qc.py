@@ -296,3 +296,24 @@ def test_qc_registers_with_shared_scheduler_when_ram_is_temporarily_reserved(tmp
         qc.run_remote({'host':'cpu-host','machine':'machine','cache':str(tmp_path),'image':'test'}, {'bytes':100},'source',tmp_path)
     assert len(acquisitions)==2 and acquisitions[0]==acquisitions[1]
     assert acquisitions[0]['memory_mb']>0
+
+
+def test_batched_phred_validation_remains_strict_when_gpu_is_unavailable(tmp_path):
+    text=b'@first\nACGT\n+\nIIII\n@second\nACGT\n+\nIII \n'
+    data=gzip.compress(text,mtime=0)
+    item={'url':'https://archive/batch-quality','filename':'bad.gz','bytes':len(data),'md5':hashlib.md5(data).hexdigest(),'read_count':2}
+    receipt(tmp_path,item,data)
+    def unavailable(*args):raise TimeoutError('GPU unavailable')
+    with pytest.raises(ValueError,match='Invalid Phred'):
+        aggregate_qc(tmp_path,item,batch_bases=32,gpu_request=unavailable,gpu_parallel=True)
+
+
+def test_short_read_fast_path_and_split_records_keep_identical_gpu_counts(tmp_path):
+    text=b''.join(b'@r\n'+b'ACGTNacgt'[:n]+b'\n+\n'+b'I'*n+b'\n' for n in [1,2,3,9,4,7,8])
+    data=gzip.compress(text,mtime=0)
+    item={'url':'https://archive/boundaries','filename':'reads.gz','bytes':len(data),'md5':hashlib.md5(data).hexdigest(),'read_count':7}
+    receipt(tmp_path,item,data)
+    expected=aggregate_qc(tmp_path,item,batch_bases=7)
+    result=aggregate_qc(tmp_path,item,batch_bases=7,gpu_request=gpu_response,gpu_parallel=True)
+    assert_same_counts(result,expected)
+    assert result['gpu_fallback_batches']==0
