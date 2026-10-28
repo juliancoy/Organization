@@ -234,3 +234,42 @@ def test_capacity_wait_before_launch_releases_pending_lease_without_docker_clean
     cleanup.assert_not_called()
     assert any(c.args[0]=='resource.release' for c in client.call.call_args_list)
     client.close.assert_called_once()
+
+
+def test_upstream_xml_inside_successful_range_is_quarantined_and_retried(tmp_path,monkeypatch):
+    import io,sys,urllib.request
+    source=item(size=100)
+    good=b'A'*100;source['md5']=hashlib.md5(good).hexdigest()
+    bad=b'<Error><Code>ConnectionClosedException</Code></Error>'.ljust(100,b' ')
+    calls=[]
+    class Response(io.BytesIO):
+        status=206
+        headers={'Content-Range':'bytes 0-99/100'}
+        def geturl(self):return source['url']
+    def request(req,timeout):
+        calls.append(req);return Response(bad if len(calls)==1 else good)
+    monkeypatch.setenv('WGS_CACHE_ROOT',str(tmp_path));monkeypatch.setattr(urllib.request,'urlopen',request)
+    monkeypatch.setattr(sys,'stdin',io.StringIO(json.dumps({'item':source,'id':file_id(source),'chunk_bytes':100,'connections':1,'allowed_hosts':['ftp.sra.ebi.ac.uk']})))
+    output=io.StringIO();monkeypatch.setattr(sys,'stdout',output)
+    exec(compile(DOWNLOAD_WORKER,'worker','exec'),{})
+    assert json.loads(output.getvalue())['md5']==source['md5']
+    assert len(calls)==2
+    assert list((tmp_path/file_id(source)/'integrity-quarantine').iterdir())
+
+
+def test_cached_xml_with_matching_local_sha_is_quarantined_before_reuse(tmp_path,monkeypatch):
+    import io,sys,urllib.request
+    good=b'G'*100;source={**item(size=100),'md5':hashlib.md5(good).hexdigest()};ident=file_id(source)
+    chunks=tmp_path/ident/'chunks';chunks.mkdir(parents=True)
+    bad=b'<Error><Code>ConnectionClosedException</Code></Error>'.ljust(100,b' ')
+    (chunks/'0.bin').write_bytes(bad);(chunks/'0.json').write_text(json.dumps({'bytes':100,'sha256':hashlib.sha256(bad).hexdigest()}))
+    class Response(io.BytesIO):
+        status=206
+        headers={'Content-Range':'bytes 0-99/100'}
+        def geturl(self):return source['url']
+    monkeypatch.setenv('WGS_CACHE_ROOT',str(tmp_path));monkeypatch.setattr(urllib.request,'urlopen',lambda req,timeout:Response(good))
+    monkeypatch.setattr(sys,'stdin',io.StringIO(json.dumps({'item':source,'id':ident,'chunk_bytes':100,'connections':1,'allowed_hosts':['ftp.sra.ebi.ac.uk']})))
+    output=io.StringIO();monkeypatch.setattr(sys,'stdout',output)
+    exec(compile(DOWNLOAD_WORKER,'worker','exec'),{})
+    assert json.loads(output.getvalue())['md5']==source['md5']
+    assert len(list((tmp_path/ident/'integrity-quarantine').iterdir()))==2

@@ -84,10 +84,17 @@ job=json.load(sys.stdin);jobs=job.get('jobs',[job]);cache_root=pathlib.Path(os.e
 
 def save(path,value):
  tmp=path.with_suffix(path.suffix+'.tmp');tmp.write_text(json.dumps(value));tmp.chmod(0o600);tmp.replace(path)
+class ArchivePayloadError(ValueError):pass
+def archive_error(data):return b'<Error><Code>' in data
+def quarantine_file(ctx,path):
+ if path.exists():
+  q=ctx['folder']/'integrity-quarantine';q.mkdir(mode=0o700,exist_ok=True);path.rename(q/(path.name+'.upstream-error-'+str(time.time_ns())))
 def digest(path,algorithm):
- h=hashlib.new(algorithm)
+ h=hashlib.new(algorithm);tail=b''
  with path.open('rb') as stream:
-  for data in iter(lambda:stream.read(8*1024*1024),b''):h.update(data)
+  for data in iter(lambda:stream.read(8*1024*1024),b''):
+   if archive_error(tail+data):raise ArchivePayloadError('Upstream XML error embedded in archive range')
+   tail=data[-32:];h.update(data)
  return h.hexdigest()
 def emit(value):
  with guard:print(json.dumps(value),flush=True)
@@ -118,7 +125,10 @@ def initialize(current):
   target=chunks/(str(index)+'.bin');meta=chunks/(str(index)+'.json')
   if target.exists() and meta.exists():
    prior=json.loads(meta.read_text());expected=min(chunk_size,item['bytes']-index*chunk_size)
-   if target.stat().st_size==expected and prior.get('sha256')==digest(target,'sha256'):ctx['done'].add(index)
+   try:
+    if target.stat().st_size==expected and prior.get('sha256')==digest(target,'sha256'):ctx['done'].add(index)
+   except ArchivePayloadError:
+    quarantine_file(ctx,target);quarantine_file(ctx,meta)
   if index%8==0:report(ctx)
  ctx['phase']='queued'
  report(ctx);return ctx
@@ -205,6 +215,7 @@ def fetch(ctx,index):
     report(ctx);return
    except YieldNetworkSlot:continue
    except Exception as error:
+    if isinstance(error,ArchivePayloadError):quarantine_file(ctx,partial)
     attempt+=1
     if attempt>=20:raise
     delay=retry_delay(error,attempt)
