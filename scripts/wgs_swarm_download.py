@@ -322,6 +322,7 @@ def run_batch(host,items,changed,connections):
         if not distributed.eligible(status) or status.get('machine')!=host['machine']:raise RuntimeError('Worker identity/policy changed')
         if 'renewable-resources' not in status.get('capabilities',[]):raise RuntimeError('Worker needs renewable-resource agent update')
         capacity=client.call('resource.capacity',{'group':GROUP});memory_mb=distributed.memory_allocation(capacity,max(1,host.get('cpus',1)))
+        for ident in by_id:changed(ident,'waiting_capacity',{'reason':'Waiting for shared download capacity'})
         deadline=time.monotonic()+120
         while not client.call('resource.acquire',{'id':lease,'group':GROUP,'cpus':1,'memory_mb':memory_mb,'container':name})['acquired']:
             if STOP.wait(.5):raise InterruptedError('Download stopped')
@@ -372,7 +373,12 @@ def run_batch(host,items,changed,connections):
     finally:
         finished.set()
         try:
-            release_after_cleanup(host,name,client,lease)
+            if process is None:
+                # No container was launched. A pending lease needs release only;
+                # probing a nonexistent Docker name can mask CapacityWait.
+                client.call('resource.release',{'id':lease})
+            else:
+                release_after_cleanup(host,name,client,lease)
         finally:
             if process is not None and process.poll() is None:process.kill();process.wait()
             client.close()
@@ -528,7 +534,7 @@ def main():
             except Exception as error:
                 # A readiness transition between status and admission is retryable;
                 # changed identities and integrity failures remain hard failures.
-                if not STOP.is_set() and (str(error)=='Worker identity/policy changed' or isinstance(error,(OSError,TimeoutError))):
+                if not STOP.is_set() and (str(error)=='Worker identity/policy changed' or isinstance(error,(OSError,TimeoutError,distributed.CapacityWait))):
                     retry=True
                     try:download_worker_ready(host)
                     except RuntimeError as readiness_error:error=readiness_error;retry=False
@@ -536,7 +542,7 @@ def main():
                     if retry:
                         host['_waiting_for_worker']=True
                         for ident in selected:
-                            if state['jobs'][ident]['status']!='verified':changed(ident,'waiting_for_worker',{'reason':'Retrying worker readiness'})
+                            if state['jobs'][ident]['status']!='verified':changed(ident,'waiting_capacity' if isinstance(error,distributed.CapacityWait) else 'waiting_for_worker',{'reason':'Waiting for shared download capacity' if isinstance(error,distributed.CapacityWait) else 'Retrying worker readiness','error':None})
                         STOP.wait(5);continue
                 for ident in selected:
                     if state['jobs'][ident]['status'] not in ('verified','failed'):changed(ident,'stopped' if STOP.is_set() else 'failed',{'error':type(error).__name__+': '+str(error)[:500]})

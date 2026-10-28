@@ -215,3 +215,22 @@ def test_verified_download_on_offline_host_is_not_fetched_again():
     hosts=[{'host':'online','free_bytes':1000,'cpus':4,'cache_sizes':{}}]
     assert assign_files([source],hosts,{ident:{'host':'offline','status':'verified'}})=={ident:'offline'}
     assert assign_files([source],hosts,{ident:{'host':'offline','status':'stopped'}})=={ident:'online'}
+
+
+def test_capacity_wait_before_launch_releases_pending_lease_without_docker_cleanup(monkeypatch):
+    from unittest.mock import Mock
+    from scripts import wgs_swarm_download as module
+    client=Mock()
+    def call(method,*args,**kwargs):
+        if method=='status':return {'ready':True,'machine':'identity','worker_policy':{'accepting_jobs':True},'capabilities':['renewable-resources']}
+        if method=='resource.capacity':raise module.distributed.CapacityWait('No RAM yet')
+        return {}
+    client.call.side_effect=call
+    monkeypatch.setattr(module,'AgentClient',lambda host:client)
+    monkeypatch.setattr(module.distributed,'eligible',lambda status:True)
+    cleanup=Mock();monkeypatch.setattr(module,'release_after_cleanup',cleanup)
+    with pytest.raises(module.distributed.CapacityWait,match='No RAM yet'):
+        module.run_batch({'machine':'identity'},[item()],Mock(),4)
+    cleanup.assert_not_called()
+    assert any(c.args[0]=='resource.release' for c in client.call.call_args_list)
+    client.close.assert_called_once()
