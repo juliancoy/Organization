@@ -31,3 +31,14 @@ fixture substitutes the identity provider and native IPC; it does not establish
 that every production OAuth-provider handoff or machine-confirmation UI works.
 The observed upstream PIdP GET/POST consent-session mismatch is a separate known
 issue, not resolved by these controller changes.
+
+## Full-access delivery
+
+New conversations created by Swarm Control explicitly request full access and
+`approvalPolicy: never`. Sends to saved full-access conversations explicitly
+retain the no-approval policy, while inheriting model and other thread settings.
+Restricted, missing, malformed or unknown sandbox settings do not receive an
+approval override. No sandbox is widened when sending to an existing thread.
+Steering retains the running turn's permissions; this does not dismiss an
+already-open approval or remove the requirement for a connected VS Code owner.
+Focused permission tests use a disposable SQLite database and fake IPC owner.

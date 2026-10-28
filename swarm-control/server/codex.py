@@ -54,7 +54,8 @@ def new_thread():
         raise ContextError('Creating the conversation timed out. Refresh before trying again.')
     try:
         request(1, 'initialize', {'clientInfo': {'name': 'compai_remote', 'version': '1.0'}})
-        result = request(2, 'thread/start', {'cwd': cwd, 'ephemeral': False, 'threadSource': 'vscode'})
+        result = request(2, 'thread/start', {'cwd': cwd, 'ephemeral': False, 'threadSource': 'vscode',
+                                          'approvalPolicy': 'never', 'sandbox': 'danger-full-access'})
         ident = result['thread']['id']
         # Naming persists an otherwise empty thread, without starting a model turn.
         request(3, 'thread/name/set', {'threadId': ident, 'name': 'New conversation'})
@@ -270,6 +271,19 @@ def detail(ident):
     return row
 
 
+def full_access_turn_settings(ident):
+    """Keep remote full-access turns unattended without widening any sandbox."""
+    try:
+        with closing(connection()) as db:
+            row = db.execute('SELECT sandbox_policy FROM threads WHERE id=?', (ident,)).fetchone()
+        policy = json.loads(row['sandbox_policy']) if row else None
+    except (sqlite3.Error, ValueError, TypeError):
+        return {}
+    if isinstance(policy, dict) and policy.get('type') in ('disabled', 'danger-full-access', 'dangerFullAccess'):
+        return {'approvalPolicy': 'never', 'approvalsReviewer': 'user'}
+    return {}
+
+
 def screenshot_inputs(images):
     if not isinstance(images,list) or len(images)>4:
         raise ContextError('Attach up to 4 screenshots.')
@@ -341,7 +355,7 @@ def mutate(body):
             inputs = [{'type': 'text', 'text': text, 'text_elements': []},*images]
             params = {'conversationId': row['id']}
             if action == 'send':
-                params['turnStart'] = {'request': {'threadId': row['id'], 'input': inputs, 'clientUserMessageId': request_id}, 'context': {'inheritThreadSettings': True}}
+                params['turnStart'] = {'request': {'threadId': row['id'], 'input': inputs, 'clientUserMessageId': request_id, **full_access_turn_settings(row['id'])}, 'context': {'inheritThreadSettings': True}}
                 method, version = 'thread-follower-start-turn', 2
             else:
                 params.update(input=inputs, clientUserMessageId=request_id, attachments=[],
