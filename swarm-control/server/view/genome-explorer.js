@@ -139,3 +139,36 @@ async function refreshWork(){
 }
 document.addEventListener('visibilitychange',()=>{clearTimeout(workTimer);if(!document.hidden)void refreshWork();});
 void refreshWork();
+
+// Public, idealized geometry only: no personal reads, quality scores or genotypes.
+if(document.querySelector('#read-resolution-diagram')){
+ const options=[...document.querySelectorAll('[data-read-length]')];
+ const observations=$('#read-observations');
+ let readLength=150;
+ function renderReadResolution(){
+  const many=observations.checked,count=many?4:1,spans=readLength===800;
+  const explanation=spans
+   ?`${count===1?'One long observation reaches':'Long observations reach'} both unique flanks, so the repeat can be counted directly when supported by reliable reads. This illustrates geometry, not a confirmed genotype.`
+   :`${many?'Four overlapping short observations still do':'One short observation does'} not connect both unique flanks. More observations improve local evidence, but do not lengthen a read or directly establish the full repeat count.`;
+  const chart=svg(`${readLength}-base reads across an illustrative 400-base repeat. ${explanation}`,800,250);
+  chart.classList.add('read-resolution-svg');
+  // Map 0–800 bases onto x=20–780, preserving relative lengths on every screen.
+  const x=base=>20+base*.95;
+  for(const base of [200,600])chart.append(svgNode('line',{x1:x(base),x2:x(base),y1:22,y2:210,stroke:'#748398','stroke-dasharray':'5 6','stroke-width':1.5}));
+  for(const [start,length,color] of [[0,200,'#a8ecc6'],[200,400,'#bdacfa'],[600,200,'#a8ecc6']])chart.append(svgNode('rect',{x:x(start),y:24,width:length*.95,height:25,fill:color,rx:3}));
+  for(let unit=1;unit<10;unit++)chart.append(svgNode('line',{x1:x(200+unit*40),x2:x(200+unit*40),y1:24,y2:49,stroke:'#19212c','stroke-width':2}));
+  for(let i=0;i<count;i++){
+   const start=spans?0:140+i*22;
+   chart.append(svgNode('rect',{x:x(start),y:78+i*30,width:readLength*.95,height:17,rx:4,fill:spans?'#a8ecc6':'#8fcce8','data-observation':i,'data-bases':readLength}));
+  }
+  for(const base of [0,200,400,600,800]){
+   const text=svgNode('text',{x:x(base),y:242,'text-anchor':base===0?'start':base===800?'end':'middle',fill:'#a8b5c7','font-size':25});text.textContent=String(base);chart.append(text);
+  }
+  $('#read-resolution-diagram').replaceChildren(chart);
+  $('#read-resolution-result').textContent=explanation;
+  for(const option of options)option.setAttribute('aria-pressed',String(Number(option.dataset.readLength)===readLength));
+ }
+ for(const option of options)option.addEventListener('click',()=>{readLength=Number(option.dataset.readLength);renderReadResolution();});
+ observations.addEventListener('change',renderReadResolution);
+ renderReadResolution();
+}
