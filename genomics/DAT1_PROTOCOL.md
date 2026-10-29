@@ -54,3 +54,58 @@ No personal read sequences, individual repeat genotypes or clinical predictions
 belong in public task artifacts, Genome Explorer or Git. The existing private
 report lifecycle and owner deletion policy apply; no new public data store is
 introduced.
+
+## Experimental caller validation (public reference only)
+
+Build the isolated Linux amd64 image from the pinned upstream image and
+hash-checked dependencies:
+
+```
+docker build --iidfile /tmp/dat1-image-id genomics/dat1-image
+python -m scripts.genomics_dat1_assay --image "$(cat /tmp/dat1-image-id)"
+```
+
+The upstream adVNTR 1.5.0 image combines pomegranate 0.6.1 with incompatible
+NetworkX 3.5 and MUSCLE 5. This image pins NetworkX 1.11, decorator 4.4.2 and
+MUSCLE 3.8.1551. A startup compatibility file restores Python's removed
+`fractions.gcd` alias to `math.gcd`; it does not change HMM mathematics.
+The upstream activation entry point resets PATH, so the derived image executes
+commands directly with explicit binary/library paths.
+
+The installed 1.5.0 CLI does **not** expose the older documented
+`--accuracy_filter` option. The experimental wrapper uses the installed author's
+HMM recruitment, repeat-count and genotype-likelihood APIs. It accepts only
+reads matching both flanks, deduplicates read identifiers per repeat count,
+and requires three supporting read identifiers per count. Partial-read repeat
+counts are lower bounds and cannot become a genotype. This is a custom research
+wrapper, not a clinically validated DAT1 assay; the caller's internal model
+probability is not a calibrated clinical confidence score.
+
+Reference segmentation is restricted to the published 404-bp interval. The HMM
+assigns its terminal base to the right flank, giving a 403-bp, ten-unit model.
+The wrapper permits at most one terminal base on either edge to be assigned to
+a flank, and requires a unique contiguous reconstruction of the full published
+reference interval. Both coordinate conventions are recorded. No sample data
+or desired genotype is used to choose the model boundaries.
+
+The synthetic panel contains 9R/9R, 9R/10R and 10R/10R. Each is tested with
+spanning reads and with 150-bp windows, using deletion-aware alignments.
+Spanning controls must return their known counts. Non-spanning controls must
+return an explicit no-call. Missing controls, failed processes or inconsistent
+reports fail validation. These idealized reference-derived controls assess
+software operation and safe handling of insufficient evidence; they do not
+validate real-world allele dropout, sequencing errors, rare alleles or all
+possible repeat-aware approaches to short-read data.
+
+A `software_controls_passed_short_reads_unresolved` result means the software
+passed these controls **and this method cannot resolve the matched 150-bp
+controls**. It authorizes no private genotype or absence claim. This entry point
+does not load Julian's reads. The original short-read audit and any subsequent
+private analysis remain separate.
+
+Execution uses one CPU and 2 GiB under renewable authenticated resource leases,
+with network disabled, read-only root, no container logging, swap or core dumps,
+and RAM-only temporary work. Cancellation and failure remove the container;
+leases are released only after cleanup is confirmed. Container exit/OOM state,
+worker/image identities and reference/code hashes are retained in private
+reports outside Git. This work requires no Swarm Control restart.
