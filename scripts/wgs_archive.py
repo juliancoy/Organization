@@ -108,6 +108,24 @@ def copy(source, destination, root, item):
                 process.kill();process.wait()
 
 
+def restored_downloads(downloads, receipts, manifest):
+    """Restore missing receipts only when bound to the current manifest and owner."""
+    from scripts.wgs_swarm_download import file_id
+    expected={file_id(item):item for item in manifest}
+    result={}
+    for ident,job in downloads.items():
+        item=expected.get(ident)
+        receipt=job.get('receipt') or receipts.get(ident)
+        if job.get('status')!='verified' or not item or not isinstance(receipt,dict):
+            continue
+        if any(receipt.get(k)!=item.get(k) for k in ('sample','run','filename','bytes','md5')):
+            continue
+        if receipt.get('host')!=job.get('host') or not receipt.get('sha256'):
+            continue
+        result[ident]={**job,'receipt':receipt}
+    return result
+
+
 def main(root, supplement=None):
     root=Path(root);folder=root/'archive';folder.mkdir(mode=0o700,exist_ok=True)
     hosts=json.loads((root/'recall-hosts.json').read_text());by_name={h['host']:h for h in hosts}
@@ -132,6 +150,9 @@ def main(root, supplement=None):
                     raise ValueError('Invalid private archive filename')
             all_files=files+extras
             downloads=json.loads((root/'downloads/state.json').read_text()).get('jobs',{})
+            ledger=root/'downloads/reconciled-receipts.json'
+            receipts=json.loads(ledger.read_text()).get('receipts',{}) if ledger.exists() else {}
+            downloads=restored_downloads(downloads,receipts,files)
             downloads={**{'private-'+str(i):{'status':'verified','receipt':item} for i,item in enumerate(extras)},**downloads}
             authenticate(destination)
             install="import pathlib,sys;p=pathlib.Path(sys.argv[1]);p.mkdir(mode=0o700,parents=True,exist_ok=True);f=p/'catalog.json';f.write_bytes(sys.stdin.buffer.read());f.chmod(0o600)"

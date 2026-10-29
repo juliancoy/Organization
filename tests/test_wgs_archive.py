@@ -35,3 +35,16 @@ def test_archive_proxy_keeps_ssh_host_verification_and_original_host():
     assert 'HostKeyAlias=inspiron.local' in command
     assert any(value.startswith('ProxyCommand=') and 'ssh_multipath.py' in value for value in command)
     assert host['ssh']==original
+
+
+def test_reconciled_receipts_require_manifest_and_owner_match():
+    from scripts.wgs_archive import restored_downloads
+    from scripts.wgs_swarm_download import file_id
+    item={'sample':'Watson','run':'run','filename':'reads.fastq.gz','bytes':10,'md5':'a'*32,'url':'https://example.org/reads.fastq.gz'}
+    ident=file_id(item)
+    jobs={ident:{'status':'verified','host':'worker.local'}}
+    receipt={**item,'host':'worker.local','sha256':'b'*64}
+    assert restored_downloads(jobs,{ident:receipt},[item])[ident]['receipt']==receipt
+    for change in [{'md5':'c'*32},{'bytes':11},{'host':'other.local'},{'sha256':None}]:
+        assert restored_downloads(jobs,{ident:{**receipt,**change}},[item])=={}
+    assert restored_downloads(jobs,{},[item])=={}
