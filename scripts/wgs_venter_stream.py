@@ -117,7 +117,29 @@ def map_pair(host,owner,receipt,reference,image,folder):
     command='rm -f /work/alignment.partial.bam /work/alignment.partial.bam.bai && '+alignment('/ref/reference.fa',['/mate1.fastq.gz','/mate2.fastq.gz'],'/work/alignment.partial.bam','Venter',run,cpus,memory)
     command+=' && samtools quickcheck /work/alignment.partial.bam && samtools index /work/alignment.partial.bam && samtools flagstat -O json /work/alignment.partial.bam > /work/flagstat.json && mv /work/alignment.partial.bam /work/alignment.bam && mv /work/alignment.partial.bam.bai /work/alignment.bam.bai'
     leased_run(host,image,command,mounts,work,cpus,memory,folder/(run+'.json'))
-    return {'host':host['host'],'run':run,'bam':work+'/alignment.bam','source_sha256':[r['sha256'] for r in copies],'reference':reference,'image':image,'provisional':True,'generation':receipt['generation']}
+    result={'host':host['host'],'run':run,'bam':work+'/alignment.bam','source_sha256':[r['sha256'] for r in copies],'reference':reference,'image':image,'provisional':True,'generation':receipt['generation']}
+    atomic_json(folder/(run+'.receipt.json'),result)
+    return result
+
+
+class NeedsAttention(RuntimeError):
+    """Permanent stream failure; retain artifacts and require investigation."""
+
+
+def source_fingerprint(items):
+    return hashlib.sha256(json.dumps([{k:i[k] for k in ('filename','bytes','md5')} for i in items],sort_keys=True).encode()).hexdigest()
+
+
+def reusable_generation(previous, items):
+    if not previous or previous.get('source_fingerprint')!=source_fingerprint(items):return False
+    if previous.get('phase') in ('invalid','needs_attention'):
+        raise NeedsAttention('Venter generation needs investigation; preserved evidence and shards, refusing a restart loop')
+    return previous.get('phase') in ('provisional','verified') and bool(previous.get('generation'))
+
+
+def transient_stream_failure(report):
+    # Parsing, pairing and checksum failures are never silently retried.
+    return report.get('exit_code') in (137,143,255) or bool(report.get('lease_errors'))
 
 
 def main(root):
@@ -126,13 +148,14 @@ def main(root):
     owner=by_name['julian-latitude.local']
     items=sorted([i for i in json.loads((root/'catalog.json').read_text())['files'] if i['sample']=='Venter'],key=lambda i:i['filename'])
     if len(items)!=2:raise RuntimeError('Exactly two Venter mate sources required')
-    generation=uuid.uuid4().hex[:12]
+    previous=json.loads((folder/'generation.json').read_text()) if (folder/'generation.json').exists() else {}
+    generation=previous['generation'] if reusable_generation(previous,items) else uuid.uuid4().hex[:12]
     generation_folder=folder/'generations'/generation;generation_folder.mkdir(mode=0o700,parents=True,exist_ok=True)
     full=generation_folder/'full';full.mkdir(mode=0o700,exist_ok=True)
     # Each process generation gets unique shard and BAM paths. Failed source
     # generations can never satisfy a later generation's finalization gate.
     work=str(Path(owner['cache']).parent/'wgs-venter-stream/generations'/generation);input_base=str(Path(owner['cache']).parent)
-    atomic_json(folder/'generation.json',{'generation':generation,'phase':'provisional','work':work,'started':stamp(),'publication':False})
+    atomic_json(folder/'generation.json',{'generation':generation,'phase':'provisional','work':work,'started':previous.get('started',stamp()) if previous.get('generation')==generation else stamp(),'publication':False,'source_fingerprint':source_fingerprint(items)})
     # Mirror beneath the common parent mount, never read partial network writes.
     mirror_base=str(Path(owner['cache']).parent/'wgs-venter-mirror');stop=threading.Event()
     def mirror_forever():
@@ -146,21 +169,37 @@ def main(root):
     install(owner,work+'/job.json',json.dumps(job).encode());install(owner,work+'/stream_worker.py',streaming_worker_code().encode())
     stream_errors=[]
     def stream():
-        try:
-            while True:
-                try:
-                    available=capacity(owner,1024,1)
-                    leased_run(owner,owner['image'],'python /work/stream_worker.py',[(mirror_base,'/mirror',True),(str(Path(owner['cache'])/file_id(items[1])),'/mate2',True),(work,'/work',False)],work,1,1024,folder/'stream.json');return
-                except distributed.CapacityWait:time.sleep(5)
-        except Exception as error:
-            atomic_json(folder/'generation.json',{'generation':generation,'phase':'invalid','error':str(error)[:500],'work':work,'publication':False,'updated':stamp()})
-            stream_errors.append(str(error))
+        failures=0
+        while not stop.is_set():
+            try:
+                capacity(owner,1024,1)
+                leased_run(owner,owner['image'],'python /work/stream_worker.py',[(mirror_base,'/mirror',True),(str(Path(owner['cache'])/file_id(items[1])),'/mate2',True),(work,'/work',False)],work,1,1024,folder/'stream.json')
+                return
+            except distributed.CapacityWait:
+                stop.wait(5)
+            except Exception as error:
+                failures+=1
+                report=json.loads((folder/'stream.json').read_text()) if (folder/'stream.json').exists() else {}
+                retry=transient_stream_failure(report) and failures<4
+                atomic_json(folder/'generation.json',{'generation':generation,'phase':'provisional' if retry else 'needs_attention','error':str(error)[:1000],'work':work,'publication':False,'source_fingerprint':source_fingerprint(items),'updated':stamp(),'stream_failures':failures})
+                if retry:
+                    stop.wait(min(60,5*3**(failures-1)))
+                    continue
+                stream_errors.append(str(error))
+                return
     threading.Thread(target=stream,daemon=True).start()
-    state_path=folder/'full/state.json';state={'jobs':{},'generation':generation}
+    state_path=folder/'full/state.json'
+    saved=json.loads(state_path.read_text()) if state_path.exists() else {}
+    state={'jobs':{key:job for key,job in saved.get('jobs',{}).items() if saved.get('generation')==generation and job.get('phase')=='complete' and job.get('receipt',{}).get('generation')==generation},'generation':generation}
+    # Mapping receipts are committed independently before the shared state file.
+    for receipt_path in full.glob('*.receipt.json'):
+        receipt=json.loads(receipt_path.read_text())
+        if receipt.get('generation')==generation and receipt.get('bam') and receipt.get('source_sha256'):
+            state['jobs'][receipt_path.name.removesuffix('.receipt.json')]={'phase':'complete','receipt':receipt}
     atomic_json(state_path,state)
     atomic_json(folder/'full/driver.json',{'phase':'streaming_pair_shards_and_waiting_reference_index','started':stamp(),'provisional':True,'generation':generation})
     while not (root/'reference/attestation.json').exists():
-        if stream_errors:raise RuntimeError(stream_errors[0])
+        if stream_errors:raise NeedsAttention(stream_errors[0])
         time.sleep(5)
     guard=threading.Lock();claimed=set();mapping_hosts=[h for h in hosts if h['host'] in ('compai.local','codecollective.local','julian-latitude.local','julian-inspiron-3793.local')]
     listing="import json,pathlib,sys;p=pathlib.Path(sys.argv[1]);print(json.dumps({'shards':[json.loads(f.read_text()) for f in sorted(p.glob('[0-9]*.json'))],'verified':json.loads((p/'stream-verified.json').read_text()) if (p/'stream-verified.json').exists() else None}))"
@@ -175,8 +214,13 @@ def main(root):
                 state.setdefault('workers',{})[host['host']]={'phase':'unavailable','error':str(error)[:500]};atomic_json(state_path,state)
             return
         while True:
-            if stream_errors:raise RuntimeError(stream_errors[0])
-            data=json.loads(subprocess.check_output(distributed.shell_command(owner,['python3','-c',listing,work+'/shards']),text=True))
+            if stream_errors:raise NeedsAttention(stream_errors[0])
+            try:
+                data=json.loads(subprocess.check_output(distributed.shell_command(owner,['python3','-c',listing,work+'/shards']),text=True,timeout=30))
+            except (OSError,ValueError,subprocess.SubprocessError) as error:
+                with guard:
+                    state.setdefault('workers',{})[host['host']]={'phase':'waiting_for_shards','error':str(error)[:500]};atomic_json(state_path,state)
+                time.sleep(5);continue
             with guard:
                 candidates=[r for r in data['shards'] if r['shard'] not in claimed and state['jobs'].get('SRR7097858-'+generation+'-'+str(r['shard']).zfill(6),{}).get('phase')!='complete']
                 if candidates:r=candidates[0];claimed.add(r['shard'])
@@ -202,9 +246,14 @@ def main(root):
         downloads=json.loads((root/'downloads/state.json').read_text())['jobs']
         if all(downloads.get(file_id(i),{}).get('status')=='verified' for i in items):break
         time.sleep(5)
-    atomic_json(folder/'generation.json',{'generation':generation,'phase':'verified','work':work,'publication':False,'updated':stamp()})
+    atomic_json(folder/'generation.json',{'generation':generation,'phase':'verified','work':work,'publication':False,'source_fingerprint':source_fingerprint(items),'updated':stamp()})
     atomic_json(folder/'full/driver.json',{'phase':'all_venter_shards_aligned_and_sources_verified','finished':stamp(),'provisional':False,'generation':generation,'shards':len(state['jobs']),'publication':False})
 
 if __name__=='__main__':
     import argparse
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--root',required=True);main(p.parse_args().root)
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--root',required=True)
+    try:main(p.parse_args().root)
+    except NeedsAttention as error:
+        import sys
+        print(str(error),file=sys.stderr)
+        raise SystemExit(78)

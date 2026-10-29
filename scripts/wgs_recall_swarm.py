@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Renewable, authenticated execution for private WGS worker stages."""
 import json
+import shutil
 from pathlib import Path
 import subprocess
 import threading
@@ -47,23 +48,46 @@ def leased_run(host,image,command,mounts,work,cpus,memory_mb,report,wait_for_cap
             other=AgentClient(host)
             try:
                 while not done.wait(60):
-                    try:other.call('resource.renew',{'id':lease},timeout=10)
-                    except Exception as error:
-                        errors.append(str(error));subprocess.run(distributed.shell_command(host,['docker','rm','-f',name]),capture_output=True,timeout=20);return
+                    for attempt in range(3):
+                        try:
+                            other.call('resource.renew',{'id':lease},timeout=10)
+                            break
+                        except Exception as error:
+                            if isinstance(error,PermissionError) or attempt==2:
+                                errors.append(type(error).__name__+': '+str(error))
+                                subprocess.run(distributed.shell_command(host,['docker','kill',name]),capture_output=True,timeout=20)
+                                return
+                            other.close();other=AgentClient(host)
+                            if done.wait(5*(attempt+1)):return
             finally:other.close()
         threading.Thread(target=renew,daemon=True).start()
-        argv=['docker','run','--rm','--pull=never','--name',name,'--label','org.lifetech.genomics=true','--network','none','--read-only','--log-driver','none','--cpus',str(cpus),'--memory',str(memory_mb)+'m','--memory-swap',str(memory_mb)+'m','--pids-limit','32','--cap-drop','ALL','--security-opt','no-new-privileges','--ulimit','core=0:0','--ulimit','nofile=65536:65536','--user',host.get('container_user','1000:1000'),'-e','TMPDIR=/work/tmp','-w','/work']
+        argv=['docker','run','--pull=never','--name',name,'--label','org.lifetech.genomics=true','--network','none','--read-only','--log-driver','none','--cpus',str(cpus),'--memory',str(memory_mb)+'m','--memory-swap',str(memory_mb)+'m','--pids-limit','32','--cap-drop','ALL','--security-opt','no-new-privileges','--ulimit','core=0:0','--ulimit','nofile=65536:65536','--user',host.get('container_user','1000:1000'),'-e','TMPDIR=/work/tmp','-w','/work']
         for source,target,readonly in mounts:
             argv+=['--mount','type=bind,src='+str(source)+',dst='+target+(',readonly' if readonly else '')]
         argv +=[image,'bash','-o','pipefail','-c',command]
         report.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
-        atomic_json(report,{'phase':'running','host':host['host'],'container':name,'cpus':cpus,'memory_mb':memory_mb,'started':stamp(),'command':command,'image':image})
+        atomic_json(report,{'phase':'running','host':host['host'],'container':name,'lease_id':lease,'cpus':cpus,'memory_mb':memory_mb,'started':stamp(),'command':command,'image':image})
         with report.with_suffix('.stdout').open('wb') as stdout,report.with_suffix('.stderr').open('wb') as stderr:
             process=subprocess.Popen(distributed.shell_command(host,argv),stdout=stdout,stderr=stderr)
             code=process.wait()
-        if errors:raise RuntimeError('Resource lease renewal failed')
-        atomic_json(report,{'phase':'complete' if code==0 else 'failed','host':host['host'],'exit_code':code,'finished':stamp(),'command':command,'image':image})
-        if code:raise RuntimeError('Worker stage failed; inspect private log '+str(report.with_suffix('.stderr')))
+        detail={}
+        if code or errors:
+            try:
+                inspected=subprocess.run(distributed.shell_command(host,['docker','inspect','--format','{{json .State}}',name]),capture_output=True,text=True,timeout=15)
+                state=json.loads(inspected.stdout)
+                detail={k:state.get(k) for k in ('Status','ExitCode','OOMKilled','Error','FinishedAt')}
+            except (OSError,ValueError,subprocess.SubprocessError):
+                detail={'inspection':'unavailable'}
+        result={'phase':'complete' if code==0 and not errors else 'failed','host':host['host'],'container':name,'exit_code':code,'finished':stamp(),'command':command,'image':image,'container_state':detail,'lease_errors':errors}
+        attempt=report.parent/'attempts'/(report.stem+'-'+name)
+        attempt.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+        result['attempt_report']=str(attempt.with_suffix('.json'))
+        atomic_json(attempt.with_suffix('.json'),result)
+        for suffix in ('.stdout','.stderr'):
+            shutil.copyfile(report.with_suffix(suffix),attempt.with_suffix(suffix))
+        atomic_json(report,result)
+        if code or errors:
+            raise RuntimeError('Worker stage failed: exit='+str(code)+' OOM='+str(detail.get('OOMKilled','unknown'))+'; evidence '+str(attempt.with_suffix('.json')))
     finally:
         done.set()
         cleaned=process is None

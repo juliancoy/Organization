@@ -84,3 +84,32 @@ def test_unavailable_optional_workers_cannot_allow_incomplete_mapping_publicatio
     assert mapping_complete(jobs,verified,'fresh')
     assert not mapping_complete(jobs,verified,'other')
     assert not mapping_complete(jobs,None,'fresh')
+
+
+def test_resume_requires_same_sources_and_blocks_integrity_failure():
+    import pytest
+    from scripts.wgs_venter_stream import reusable_generation, source_fingerprint, transient_stream_failure
+    items=[{'filename':'one.gz','bytes':100,'md5':'a'*32}]
+    prior={'generation':'saved','phase':'provisional','source_fingerprint':source_fingerprint(items)}
+    assert reusable_generation(prior,items)
+    assert not reusable_generation(prior,[{**items[0],'md5':'b'*32}])
+    with pytest.raises(RuntimeError,match='investigation'):
+        reusable_generation({**prior,'phase':'needs_attention'},items)
+    assert transient_stream_failure({'exit_code':255})
+    assert transient_stream_failure({'exit_code':137,'container_state':{'OOMKilled':True}})
+    assert not transient_stream_failure({'exit_code':1})
+    assert not transient_stream_failure({'exit_code':0})
+
+
+def test_resuming_shards_keeps_completed_receipts_and_source_checks(tmp_path):
+    first=b'@a/1\nACGT\n+\nIIII\n@b/1\nACGT\n+\nIIII\n'
+    second=first.replace(b'/1',b'/2')
+    split_opened(io.BytesIO(first),io.BytesIO(second),tmp_path,records_per_shard=1)
+    original=(tmp_path/'000000.json').read_bytes()
+    result=split_opened(io.BytesIO(first),io.BytesIO(second),tmp_path,records_per_shard=1)
+    assert result['pairs']==2 and result['shards']==2
+    assert (tmp_path/'000000.json').read_bytes()==original
+    (tmp_path/'000000_1.fastq.gz').write_bytes(b'corrupt')
+    import pytest
+    with pytest.raises(ValueError,match='changed'):
+        split_opened(io.BytesIO(first),io.BytesIO(second),tmp_path,records_per_shard=1)

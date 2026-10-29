@@ -1,3 +1,4 @@
+import json
 import hashlib
 from pathlib import Path
 import tempfile
@@ -45,6 +46,12 @@ class CleanupTests(unittest.TestCase):
             with patch('scripts.wgs_recall_swarm.AgentClient') as client,patch('scripts.wgs_recall_swarm.distributed.eligible',return_value=True),patch('scripts.wgs_recall_swarm.subprocess.Popen',return_value=transport),patch('scripts.wgs_recall_swarm.cleanup_container',side_effect=lambda *a:events.append('container_removed') or True):
                 client.return_value.call.side_effect=call
                 with self.assertRaisesRegex(RuntimeError,'Worker stage failed'):leased_run(host,'sha256:pinned','false',[],folder,1,1024,Path(folder)/'status.json')
+            report=json.loads((Path(folder)/'status.json').read_text())
+            self.assertEqual(report['exit_code'],1)
+            attempt=Path(report['attempt_report'])
+            self.assertTrue(attempt.exists())
+            self.assertTrue(attempt.with_suffix('.stderr').exists())
+            self.assertEqual(json.loads(attempt.read_text())['container'],report['container'])
             self.assertLess(events.index('container_removed'),events.index('resource.release'))
     def test_failed_cleanup_keeps_lease_reserved(self):
         from scripts.wgs_recall_swarm import leased_run
@@ -76,3 +83,27 @@ class AdmissionTests(unittest.TestCase):
             client.return_value.call.side_effect=call
             leased_run({'host':'peer','machine':'id','local':True},'sha256:pinned','true',[],folder,2,1024,Path(folder)/'status.json',wait_for_capacity=True,on_admitted=lambda:admitted.append(True))
         self.assertEqual(len(requests),2);self.assertEqual(requests[0],requests[1]);self.assertEqual(admitted,[True]);self.assertIn('resource.release',operations)
+
+
+def test_failed_attempt_keeps_oom_evidence_across_retry(tmp_path):
+    from unittest.mock import MagicMock
+    import subprocess
+    import pytest
+    from scripts.wgs_recall_swarm import leased_run
+    def call(op,args=None,**kwargs):
+        if op=='status':return {'machine':'id','capabilities':['renewable-resources']}
+        if op=='resource.capacity':return {'available_mb':4096,'available_cpus':4}
+        return {'acquired':True}
+    transport=MagicMock();transport.wait.return_value=137;transport.poll.return_value=137
+    inspected=subprocess.CompletedProcess([],0,json.dumps({'Status':'exited','ExitCode':137,'OOMKilled':True,'Error':''}),'')
+    with patch('scripts.wgs_recall_swarm.AgentClient') as client, patch('scripts.wgs_recall_swarm.distributed.eligible',return_value=True), patch('scripts.wgs_recall_swarm.subprocess.Popen',return_value=transport) as launch, patch('scripts.wgs_recall_swarm.subprocess.run',return_value=inspected), patch('scripts.wgs_recall_swarm.cleanup_container',return_value=True):
+        client.return_value.call.side_effect=call
+        for _ in range(2):
+            with pytest.raises(RuntimeError,match='OOM=True'):
+                leased_run({'host':'local','local':True,'machine':'id'},'sha256:pinned','false',[],str(tmp_path),1,1024,tmp_path/'status.json')
+        assert '--rm' not in launch.call_args.args[0]
+    attempts=list((tmp_path/'attempts').glob('*.json'))
+    assert len(attempts)==2
+    for p in attempts:
+        assert json.loads(p.read_text())['container_state']['OOMKilled'] is True
+        assert p.with_suffix('.stderr').exists()
