@@ -109,3 +109,38 @@ and RAM-only temporary work. Cancellation and failure remove the container;
 leases are released only after cleanup is confirmed. Container exit/OOM state,
 worker/image identities and reference/code hashes are retained in private
 reports outside Git. This work requires no Swarm Control restart.
+
+## Read-level check of the downloaded public HuRef source
+
+`genomics/dat1-readscan-image` pins rapidgzip and pyahocorasick wheels by hash.
+Build that image, obtain its immutable local Docker ID, then run:
+
+```
+python -m scripts.genomics_venter_dat1 --image sha256:YOUR_LOCAL_IMAGE_ID
+```
+
+The source is the verified downloaded `SRR7097858_1.fastq.gz` receipt, not a
+literature genotype or the incomplete existing alignment shards. This is a
+later 100-bp Illumina HuRef run, distinct from the original Sanger project.
+Reference 31-mer seeds from the DAT1 region and both orientations recruit
+candidates directly from FASTQ. The extractor checks complete record structure,
+DNA alphabet and Phred+33 quality characters, excludes hits occurring only in
+quality lines, and deduplicates read identifiers across buffered boundaries.
+Four matching processes and three decompression workers fit an eight-CPU,
+4-GiB renewable resource lease. Original source data is mounted read-only.
+
+A recorded no-hit prefix may be reused only with matching source receipt and
+reference context; it is re-decoded before matching resumes with overlap.
+Full scans export a reusable compressed-stream index. Partial scans must remain
+explicitly partial: they do not establish that all alleles or both FASTQ mates
+were searched. Reference-seeded recruitment can miss divergent alleles and is
+not itself repeat genotyping. Reports, recruited reads, alignments and any
+experimental caller output stay in the private work directory outside Git.
+
+End-to-end synthetic extractor controls check both strands, quality-line-only
+false matches, complete scanning and index export. Each fixture has its own
+source hash and is labeled synthetic. In a read-level follow-up, candidate
+alignments to the full genome establish locus identity; coverage and a
+reference-like assembly path must still not be promoted to a repeat genotype.
+In particular, an assembly algorithm must reject false 10R paths in 11R and
+9R/11R controls before being used as evidence of a 10R allele.
