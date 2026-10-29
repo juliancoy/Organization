@@ -26,7 +26,7 @@ class TransportEndpointTests(unittest.TestCase):
 
     def test_authorized_change_returns_global_policy(self):
         request,monitor,auth=self.invoke({'transport':'webrtc'})
-        auth.assert_called_once_with(request)
+        auth.assert_called_once_with(request,local_settings=True)
         monitor.set_telemetry_transport.assert_called_once_with('webrtc')
         request.send_response.assert_called_once_with(200)
         self.assertEqual(json.loads(request.wfile.getvalue())['transport'],'webrtc')

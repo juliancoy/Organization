@@ -1,5 +1,6 @@
 """HTTP boundary shared by the authenticated REST and MCP routes."""
 import json
+import ipaddress
 import os
 import socket
 from urllib.parse import urlsplit
@@ -22,8 +23,23 @@ def send(handler,status,value=None,headers=None):
     except (BrokenPipeError,ConnectionResetError):pass
 
 
-def authorize_dashboard(handler):
-    """Dashboard writes require owner authority, not a forgeable Origin."""
+def local_dashboard_settings(handler):
+    """Trust the LAN socket, or its loopback proxy's overwritten client IP."""
+    try:
+        peer=ipaddress.ip_address(handler.client_address[0].split('%')[0])
+        real=handler.headers.get_all('X-Real-IP',[])
+        forwarded=handler.headers.get_all('X-Forwarded-For',[])
+        if real or forwarded:
+            if not peer.is_loopback or len(real)!=1 or len(forwarded)>1:return False
+            peer=ipaddress.ip_address(real[0].split('%')[0])
+            if forwarded and forwarded[0]!=real[0]:return False
+        networks=[ipaddress.ip_network(n.strip()) for n in os.getenv('MAP_LAN_NETWORKS','10.42.0.0/24').split(',') if n.strip()]
+        return peer.is_loopback or (peer.version==6 and peer.is_link_local) or any(peer in n for n in networks)
+    except (ValueError,TypeError,AttributeError,IndexError):return False
+
+
+def authorize_dashboard(handler, local_settings=False):
+    """LAN settings use network authority; execution writes still require a token."""
     host=handler.headers.get('Host','')
     hosts={v.strip() for v in os.getenv('MAP_MASTER_ALLOWED_HOSTS','map.local,localhost,127.0.0.1,::1,10.42.0.1').split(',')}
     try:
@@ -32,6 +48,7 @@ def authorize_dashboard(handler):
     origin=handler.headers.get('Origin')
     if not valid or (origin and origin not in ('http://'+host,'https://'+host)):
         send(handler,403,{'error':'Host or Origin denied'});return False
+    if local_settings and origin in ('http://'+host,'https://'+host) and handler.headers.get('Sec-Fetch-Site') not in ('cross-site',) and local_dashboard_settings(handler):return True
     if not authorized(handler.headers):
         send(handler,401,{'error':'Use an authenticated launcher, REST/MCP client, or the localhost dashboard with a master token'});return False
     return True
