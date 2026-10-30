@@ -82,3 +82,17 @@ def test_saved_range_bitmap_is_verified_before_resume(tmp_path):
     with pytest.raises(ValueError,match='integrity'):
         parallel_transfer(current,tmp_path,3,opener=opener,chunk_bytes=32)
     assert not seen and not (folder/'receipt.json').exists()
+
+
+def test_archive_error_body_retries_uncommitted_range(tmp_path):
+    data,current,opener,seen=fixture(tmp_path);failed=[False]
+    def transient(request,timeout):
+        if not failed[0]:
+            failed[0]=True
+            response=opener(request,timeout)
+            response.seek(0);response.write(b'<Error><Code>SlowDown</Code>');response.seek(0)
+            return response
+        return opener(request,timeout)
+    receipt=parallel_transfer(current,tmp_path,1,opener=transient,sleep=lambda _:None,chunk_bytes=32)
+    assert failed[0] and receipt['md5']==hashlib.md5(data).hexdigest()
+    assert (tmp_path/'fixture/reads.fastq.gz').read_bytes()==data

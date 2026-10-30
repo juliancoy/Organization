@@ -20,6 +20,11 @@ from urllib.request import Request,urlopen
 from urllib.error import HTTPError
 
 
+class ArchivePayloadError(OSError):
+    """A transient archive error body; the uncommitted range must retry."""
+    pass
+
+
 def save(path,value):
     temporary=path.with_suffix(path.suffix+'.tmp')
     temporary.write_text(json.dumps(value));temporary.chmod(0o600);temporary.replace(path)
@@ -68,7 +73,7 @@ def transfer(current,cache_root,opener=urlopen,sleep=time.sleep):
                 while position<item['bytes']:
                     data=response.read(min(1024*1024,item['bytes']-position))
                     if not data:raise OSError('Archive connection ended before the requested range')
-                    if b'<Error><Code>' in tail+data:raise ValueError('Archive error payload detected')
+                    if b'<Error><Code>' in tail+data:raise ArchivePayloadError('Archive error payload detected')
                     if position==0 and not data.startswith(b'\x1f\x8b'):raise ValueError('Archive source is not gzip')
                     tail=data[-32:];output.write(data);position+=len(data)
                     if time.monotonic()-last_save>=5:
@@ -148,7 +153,7 @@ def parallel_transfer(current,cache_root,connections,opener=urlopen,sleep=time.s
                             if abort.is_set():return
                             data=response.read(min(1024*1024,size(index)-received))
                             if not data:raise OSError('Archive range ended early')
-                            if b'<Error><Code>' in tail+data:raise ValueError('Archive error payload detected')
+                            if b'<Error><Code>' in tail+data:raise ArchivePayloadError('Archive error payload detected')
                             if start==0 and received==0 and not data.startswith(b'\x1f\x8b'):raise ValueError('Archive source is not gzip')
                             tail=data[-32:];written=os.pwrite(fd,data,start+received)
                             if written!=len(data):raise OSError('Short partial-file write')
