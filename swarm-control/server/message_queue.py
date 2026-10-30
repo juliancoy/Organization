@@ -81,8 +81,9 @@ class MessageQueue:
         if not changed:raise ValueError('Message changed or another message is already sending')
         payload=json.loads(row['payload']);payload['action']='steer' if state['activity']=='running' else 'send'
         try:result=codex.mutate(payload);status='delivered' if result.get('accepted') else 'uncertain'
+        except codex.NotDispatched:status='queued'
         except Exception:status='uncertain'
-        note='Delivered to the local VS Code thread.' if status=='delivered' else 'Delivery is uncertain. Check the conversation, then mark reviewed. This message will not retry automatically.'
+        note='Connection changed before sending. Your message is saved and will retry.' if status=='queued' else 'Delivered to the local VS Code thread.' if status=='delivered' else 'Delivery is uncertain. Check the conversation, then mark reviewed. This message will not retry automatically.'
         with self.lock,closing(self.db()) as db,db:
             db.execute('UPDATE messages SET status=?,updated=?,note=? WHERE id=?',(status,time.time(),note,row['id']))
             if status=='delivered':db.execute("UPDATE messages SET payload=json_set(payload,'$.images',json('[]')) WHERE id=?",(row['id'],))
@@ -100,7 +101,15 @@ class MessageQueue:
                 if row['status']!='queued':continue
                 try:state=codex.detail(row['thread_id'])
                 except Exception:continue
-                if state.get('activity')!='idle' or not state.get('owner_connected'):continue
+                if not state.get('owner_connected'):
+                    status=state.get('connection_state')
+                    if status in ('detached','connecting'):
+                        status=codex.request_connection(row['thread_id'])
+                    note='Could not attach this conversation. Retry connection; your message is saved.' if status=='needs_attention' else 'Local Codex is unavailable. Your message is saved; waiting for it to reconnect.' if status=='unavailable' else 'Connecting this conversation automatically. Your message is saved.'
+                    with closing(self.db()) as db,db:
+                        db.execute("UPDATE messages SET note=? WHERE id=? AND status='queued' AND note!=?",(note,row['id'],note))
+                    continue
+                if state.get('activity')!='idle':continue
                 with self.lock,closing(self.db()) as db,db:
                     changed=db.execute("UPDATE messages SET status='delivering',updated=?,note='Sending to VS Code…' WHERE id=? AND status='queued' AND NOT EXISTS (SELECT 1 FROM messages active WHERE active.thread_id=messages.thread_id AND active.status='delivering')",(time.time(),row['id'])).rowcount
                 if not changed:continue
@@ -108,8 +117,9 @@ class MessageQueue:
                     with closing(self.db()) as db:payload=json.loads(db.execute('SELECT payload FROM messages WHERE id=?',(row['id'],)).fetchone()[0])
                     result=codex.mutate(payload)
                     status='delivered' if result.get('accepted') else 'uncertain'
+                except codex.NotDispatched:status='queued'
                 except Exception:status='uncertain'
-                note='Delivered to the local VS Code thread.' if status=='delivered' else 'Delivery is uncertain. Check the conversation, then mark reviewed. This message will not retry automatically.'
+                note='Connection changed before sending. Your message is saved and will retry.' if status=='queued' else 'Delivered to the local VS Code thread.' if status=='delivered' else 'Delivery is uncertain. Check the conversation, then mark reviewed. This message will not retry automatically.'
                 with self.lock,closing(self.db()) as db,db:
                     db.execute('UPDATE messages SET status=?,updated=?,note=? WHERE id=?',(status,time.time(),note,row['id']))
                     if status=='delivered':db.execute("UPDATE messages SET payload=json_set(payload,'$.images',json('[]')) WHERE id=?",(row['id'],))

@@ -50,7 +50,7 @@ function showActivity(state,text){activity.hidden=false;activity.dataset.state=s
 const form = el('form', '', 'codex-compose'), promptLabel = el('label', '', 'codex-prompt'), input = el('textarea'); input.rows = 3; input.maxLength = 16000; input.required = false; input.placeholder = 'Ask Codex to do something…'; input.setAttribute('aria-label','Instruction to the selected thread'); input.setAttribute('aria-describedby','codex-compose-help'); promptLabel.append(input);
 const actions = el('div', '', 'codex-actions'), mode = el('select'); mode.setAttribute('aria-label', 'Instruction delivery');
 for (const [value, text] of [['send', 'Queue for next turn'], ['steer', 'Steer current turn']]) { const option = el('option', text); option.value = value; mode.append(option); }
-const send = el('button', 'Send instruction'); send.type = 'submit'; send.disabled=true; const open = el('button', 'Open in VS Code'); open.type = 'button'; send.setAttribute('aria-label','Send instruction');send.title='Send instruction · Ctrl/⌘ + Enter';send.textContent='↑';actions.append(mode, send);open.className='codex-open'; const composeHelp=el('small', 'Stop keeps a draft in this browser tab. Send queues it for this thread; Steer interrupts the active turn. Ctrl/⌘ + Enter submits. Full-access conversations run without local command approval. Restricted conversations keep their approval settings.'); composeHelp.id='codex-compose-help'; const help=el('details','','codex-compose-help');help.append(el('summary','Sending options'),composeHelp,open);form.append(promptLabel, actions, help);
+const send = el('button', 'Send instruction'); send.type = 'submit'; send.disabled=true; const open = el('button', 'Retry connection'); open.type = 'button'; send.setAttribute('aria-label','Send instruction');send.title='Send instruction · Ctrl/⌘ + Enter';send.textContent='↑';actions.append(mode, send);open.className='codex-open'; const composeHelp=el('small', 'Stop keeps a draft in this browser tab. Send queues it for this thread; Steer interrupts the active turn. Ctrl/⌘ + Enter submits. Full-access conversations run without local command approval. Restricted conversations keep their approval settings.'); composeHelp.id='codex-compose-help'; const help=el('details','','codex-compose-help');help.append(el('summary','Sending options'),composeHelp);form.append(promptLabel, actions, help,open);open.hidden=true;
 const screenshots=screenshotPicker(form,input,dirty=>{if(dirty)requestId=null;send.disabled=voiceBusy||busy||screenshots.processing||send.dataset.connected!=='true'||(!input.value.trim()&&!screenshots.count);});form.insertBefore(screenshots.root,actions);screenshots.root.querySelector('button').title='Choose screenshots, paste an image, or drop it here. Up to 4 images, 4 MB total.';
 input.addEventListener('keydown',event=>{if(event.key==='Enter' && (event.ctrlKey||event.metaKey) && !event.isComposing){event.preventDefault();if(!send.disabled)form.requestSubmit();}});
 form.hidden=true; transcript.hidden=true; info.className='codex-thread-info'; conversation.append(back,empty,info, transcript, latest, activity, form); workspace.append(sidebar, conversation); root.append(heading, unlock, status, retrySignIn, reauthenticate, workspace);
@@ -123,16 +123,23 @@ async function choose(id,{recordHistory=true}={}) {
   send.disabled = true;
   try { await readThread(); await load(); await queue.refresh(); } finally { conversation.setAttribute('aria-busy','false'); }
 }
+const autoConnectAt=new Map();
 async function readThread() {
   if (!selected) { form.hidden = true; return; }
   const id = selected, epoch = generation;
   const thread = await api('threads/' + encodeURIComponent(id));
   if (epoch !== generation || selected !== id) return;
   empty.hidden=workspace.classList.contains('codex-reading'); transcript.hidden=false;
-  const metadata=JSON.stringify([id,thread.display_title,thread.cwd,thread.model,thread.owner_connected,thread.ide_context,thread.history_limited]);
+  const connectionState=thread.connection_state || (thread.owner_connected?'connected':'detached');
+  if(!thread.owner_connected && ['detached','connecting'].includes(connectionState) && Date.now()-(autoConnectAt.get(id)||0)>10000){
+    if(autoConnectAt.size>=100)autoConnectAt.delete(autoConnectAt.keys().next().value);
+    autoConnectAt.set(id,Date.now());
+    void api('commands',{thread_id:id,action:'connect'}).catch(()=>{});
+  }
+  const metadata=JSON.stringify([id,thread.display_title,thread.cwd,thread.model,thread.owner_connected,connectionState,thread.ide_context,thread.history_limited]);
   if(renderedThread!==metadata){
   info.replaceChildren(el('h2', thread.display_title || 'Untitled conversation'), el('p', thread.cwd + ' · ' + (thread.model || 'Thread model'), 'muted'));
-  const owner = el('p', thread.owner_connected ? 'Connected to the local VS Code thread' : 'Open this thread in local VS Code to send instructions.'); info.append(owner);
+  const owner = el('p', thread.owner_connected ? 'Conversation connected' : connectionState==='unavailable' ? 'Local Codex is unavailable. Your queued messages are saved.' : connectionState==='needs_attention' ? 'Could not connect this conversation. Retry connection below.' : 'Connecting this conversation automatically. You can queue your message now.'); info.append(owner);
   if (thread.ide_context) { const details = el('details'), summary = el('summary', 'VS Code context'); details.append(summary, el('pre', typeof thread.ide_context === 'string' ? thread.ide_context : JSON.stringify(thread.ide_context, null, 2))); info.append(details); }
   if (thread.history_limited) info.append(el('small', 'Showing the latest 60 messages from the recent history window.'));
   renderedThread=metadata;
@@ -148,13 +155,13 @@ async function readThread() {
   latest.hidden=nearBottom;
   }
   form.hidden = false; send.disabled = voiceBusy || busy || screenshots.processing || (!input.value.trim()&&!screenshots.count);
-  if(!busy)showActivity(!thread.owner_connected?'waiting':thread.activity, !thread.owner_connected?'Waiting for the machine to connect. Check local confirmation prompts.':thread.activity === 'running' ? 'Turn running or waiting for confirmation on the machine. Updates every 5 seconds.' : thread.activity === 'idle' ? 'Codex is ready for your next instruction.' : 'Generation status unavailable. Refresh before sending.');
+  if(!busy)showActivity(!thread.owner_connected?'waiting':thread.activity, !thread.owner_connected ? connectionState==='needs_attention' ? 'Conversation connection needs attention. Your messages are saved.' : connectionState==='unavailable' ? 'Waiting for local Codex to reconnect. Your messages are saved.' : 'Connecting conversation… Queued messages will send automatically.' : thread.activity === 'running' ? 'Codex is working. Updates every 5 seconds.' : thread.activity === 'idle' ? 'Codex is ready for your next instruction.' : 'Generation status unavailable. Your queued messages remain saved.');
   transcript.setAttribute('aria-busy',String(thread.activity==='running'));
   for(const button of list.querySelectorAll('.codex-thread'))if(button.getAttribute('aria-pressed')==='true'){button.dataset.activity=thread.activity;button.querySelector('span').textContent=(thread.activity==='running'?'● Generating response':thread.activity==='idle'?'Past turn completed':'State unknown')+' · '+button.dataset.updated;}
   send.dataset.connected='true';
   if(observedActivity!==thread.activity){mode.value = 'send'; observedActivity=thread.activity;}
   info.dataset.connected=String(thread.owner_connected);
-  open.disabled=busy;
+  open.disabled=busy;open.hidden=thread.owner_connected || ['connecting','detached'].includes(connectionState);
 }
 unlock.onsubmit = async event => {
   event.preventDefault(); if(secureRemote){location.assign('/auth/login?device_label='+encodeURIComponent(deviceLabel.value.trim()));return;} token = password.value.trim(); connect.disabled = true;

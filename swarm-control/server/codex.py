@@ -4,6 +4,7 @@ The follower protocol is internal to the installed OpenAI VS Code extension
 (26.51007). Fail closed when unavailable; never resume a second Codex process.
 """
 from paths import WORKSPACE
+from conversation_connection import ConnectionRecovery
 import json
 import base64
 import binascii
@@ -79,6 +80,11 @@ def new_thread():
 
 
 class ContextError(Exception):
+    pass
+
+
+class NotDispatched(ContextError):
+    """The message never reached a turn-start/steer request and may safely wait."""
     pass
 
 
@@ -254,6 +260,21 @@ def listing(offset=0):
             'machine': socket.gethostname(), 'connected': (HOME / 'ipc/ipc.sock').exists()}
 
 
+
+def open_existing_conversation(ident):
+    thread(ident)  # Only an existing durable conversation; no second app-server.
+    subprocess.run(['code', '--open-url', f'vscode://openai.chatgpt/local/{ident}'],
+                   check=True,timeout=10,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+
+
+CONNECTION_RECOVERY=ConnectionRecovery(open_existing_conversation)
+
+
+def request_connection(ident,retry=False):
+    thread(ident)
+    return CONNECTION_RECOVERY.request(ident,retry=retry)
+
+
 def detail(ident):
     row = thread(ident)
     row.update(history(row))
@@ -262,12 +283,15 @@ def detail(ident):
         with IPC() as client:
             owner = client.owner(ident)
             row['owner_connected'] = True
+            row['connection_state'] = 'connected'
+            CONNECTION_RECOVERY.connected(ident)
             try:
                 row['ide_context'] = client.request('ide-context', {'workspaceRoot': row['cwd']}, target=owner)['result'].get('ideContext')
             except (ContextError, OSError):
                 row['ide_context'] = None
-    except (ContextError, OSError):
+    except (ContextError, OSError) as error:
         row['owner_connected'] = False
+        row['connection_state'] = CONNECTION_RECOVERY.status(ident) if isinstance(error,ContextError) and str(error)=='no-client-found' else 'unavailable'
     return row
 
 
@@ -329,10 +353,9 @@ def mutate(body):
             return RECEIPTS[key]
     images=screenshot_inputs(body.get('images',[]))
     row = thread(body.get('thread_id'))
-    if action == 'open':
-        subprocess.run(['code', '--open-url', f'vscode://openai.chatgpt/local/{row["id"]}'],
-                       check=True, timeout=10, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return {'accepted': True, 'message': 'Open requested on the local VS Code desktop. Wait for the thread to connect.'}
+    if action in ('open','connect'):
+        status=request_connection(row['id'],retry=action=='open')
+        return {'accepted':True,'status':status,'message':'Connecting this conversation. Queued messages remain saved.' if status!='needs_attention' else 'Conversation connection needs attention. Retry connection.'}
     text = body.get('text','')
     if images and isinstance(text,str) and not text.strip():
         text='Please review the attached screenshots.'
@@ -345,27 +368,34 @@ def mutate(body):
             return RECEIPTS[key]
         if len(RECEIPTS) >= 1000:
             RECEIPTS.pop(next(iter(RECEIPTS)))
-        with IPC() as client:
-            owner = client.owner(row['id'])
-            state = history(row)
-            if action == 'send' and state['activity'] != 'idle':
-                raise ContextError('Thread is running or its state is unknown. Refresh and use Steer for a running turn.')
-            if action == 'steer' and state['activity'] != 'running':
-                raise ContextError('No running turn was observed. Refresh before sending.')
-            inputs = [{'type': 'text', 'text': text, 'text_elements': []},*images]
-            params = {'conversationId': row['id']}
-            if action == 'send':
-                params['turnStart'] = {'request': {'threadId': row['id'], 'input': inputs, 'clientUserMessageId': request_id, **full_access_turn_settings(row['id'])}, 'context': {'inheritThreadSettings': True}}
-                method, version = 'thread-follower-start-turn', 2
-            else:
-                params.update(input=inputs, clientUserMessageId=request_id, attachments=[],
-                              restoreMessage={'id': request_id, 'text': text, 'context': {}}, serviceTier=None)
-                method, version = 'thread-follower-steer-turn', 1
-            # Once dispatched, never automatically retry an ambiguous outcome.
-            RECEIPTS[key] = {'accepted': False, 'uncertain': True, 'message': 'Delivery outcome unknown. Check the conversation before sending again.'}
-            reply = client.request(method, params, version, owner)
-            RECEIPTS[key] = {'accepted': True, 'message': 'Instruction delivered to the local VS Code thread.', 'result': reply.get('result')}
-            return RECEIPTS[key]
+        dispatched = False
+        try:
+            with IPC() as client:
+                owner = client.owner(row['id'])
+                state = history(row)
+                if action == 'send' and state['activity'] != 'idle':
+                    raise ContextError('Thread is running or its state is unknown. Refresh and use Steer for a running turn.')
+                if action == 'steer' and state['activity'] != 'running':
+                    raise ContextError('No running turn was observed. Refresh before sending.')
+                inputs = [{'type': 'text', 'text': text, 'text_elements': []},*images]
+                params = {'conversationId': row['id']}
+                if action == 'send':
+                    params['turnStart'] = {'request': {'threadId': row['id'], 'input': inputs, 'clientUserMessageId': request_id, **full_access_turn_settings(row['id'])}, 'context': {'inheritThreadSettings': True}}
+                    method, version = 'thread-follower-start-turn', 2
+                else:
+                    params.update(input=inputs, clientUserMessageId=request_id, attachments=[],
+                                  restoreMessage={'id': request_id, 'text': text, 'context': {}}, serviceTier=None)
+                    method, version = 'thread-follower-steer-turn', 1
+                # Once dispatched, never automatically retry an ambiguous outcome.
+                RECEIPTS[key] = {'accepted': False, 'uncertain': True, 'message': 'Delivery outcome unknown. Check the conversation before sending again.'}
+                dispatched = True
+                reply = client.request(method, params, version, owner)
+                RECEIPTS[key] = {'accepted': True, 'message': 'Instruction delivered to the local VS Code thread.', 'result': reply.get('result')}
+                return RECEIPTS[key]
+        except (ContextError,OSError) as error:
+            if not dispatched:raise NotDispatched('Conversation is not ready. Your message was not sent.') from error
+            raise
+
 
 
 def rest(method, path, query, body):

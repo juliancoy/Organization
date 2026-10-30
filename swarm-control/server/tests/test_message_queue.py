@@ -134,3 +134,25 @@ class QueueTests(unittest.TestCase):
             self.q.tick();self.q.tick();send.assert_called_once()
             self.assertEqual(send.call_args.args[0]['request_id'],body['request_id'])
         self.assertEqual(self.states(),['delivered'])
+
+    def test_detached_conversation_reconnects_without_blocking_connected_queue(self):
+        self.q.submit(self.body());self.q.submit(self.body(2,'b'))
+        def state(ident):
+            return {'activity':'idle','owner_connected':ident=='b','connection_state':'detached' if ident=='a' else 'connected'}
+        with patch.object(codex,'detail',side_effect=state),patch.object(codex,'request_connection',return_value='connecting') as connect,patch.object(codex,'mutate',return_value={'accepted':True}) as send:
+            self.q.tick();connect.assert_called_once_with('a')
+            self.assertEqual(send.call_args.args[0]['thread_id'],'b')
+        self.assertEqual(self.states(),['queued'])
+        self.assertIn('Connecting',self.q.view('a')['messages'][0]['note'])
+        with patch.object(codex,'detail',return_value={'activity':'idle','owner_connected':True}),patch.object(codex,'mutate',return_value={'accepted':True}) as send:
+            self.q.tick();self.q.tick();send.assert_called_once()
+        self.assertEqual(self.states(),['delivered'])
+
+    def test_known_predispatch_disconnect_stays_queued_and_can_retry(self):
+        self.q.submit(self.body())
+        with patch.object(codex,'detail',return_value={'activity':'idle','owner_connected':True}),patch.object(codex,'mutate',side_effect=codex.NotDispatched('not sent')):
+            self.q.tick()
+        self.assertEqual(self.states(),['queued'])
+        with patch.object(codex,'detail',return_value={'activity':'idle','owner_connected':True}),patch.object(codex,'mutate',return_value={'accepted':True}) as send:
+            self.q.tick();self.q.tick();send.assert_called_once()
+        self.assertEqual(self.states(),['delivered'])

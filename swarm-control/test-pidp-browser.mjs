@@ -11,12 +11,14 @@ from api import Handler
 import identity,devices,codex,message_queue
 from http.server import ThreadingHTTPServer
 from urllib.parse import urlsplit
-state={'connected':True,'activity':'idle'};sent=[]
+state={'connected':True,'activity':'idle','recoverable':False};sent=[];connections=[]
 queue=message_queue.MessageQueue();message_queue.manager=lambda:queue
 codex.thread=lambda ident:{'id':ident}
 def detail(ident):
- return {'display_title':'Navigation fixture','cwd':'/fixture','model':'Fixture','owner_connected':state['connected'],'activity':state['activity'],'messages':[{'role':'assistant','text':'**Navigation** test response'}]+[{'role':'user','text':row['text']} for row in sent]}
+ return {'display_title':'Navigation fixture','cwd':'/fixture','model':'Fixture','owner_connected':state['connected'],'connection_state':'connected' if state['connected'] else 'detached' if state['recoverable'] else 'unavailable','activity':state['activity'],'messages':[{'role':'assistant','text':'**Navigation** test response'}]+[{'role':'user','text':row['text']} for row in sent]}
 def mutate(body):
+ if body['action'] in ('connect','open'):
+  connections.append(body['thread_id']);state['connected']=True;return {'accepted':True,'status':'connecting'}
  if not state['connected']:raise codex.ContextError('Fixture machine unavailable')
  if (body['action']=='send' and state['activity']!='idle') or (body['action']=='steer' and state['activity']!='running'):raise codex.ContextError('Fixture state changed')
  sent.append(body);state['activity']='running';return {'accepted':True,'message':'Fixture delivered'}
@@ -36,7 +38,7 @@ class Fixture(Handler):
   return super().do_POST()
  def do_GET(self):
   path=urlsplit(self.path).path
-  if path=='/fixture-metrics':return self.reply(200,{'sent':len(sent),'actions':[row['action'] for row in sent]})
+  if path=='/fixture-metrics':return self.reply(200,{'sent':len(sent),'actions':[row['action'] for row in sent],'connections':len(connections)})
   if path=='/fixture-authorize':return self.reply(303,{},location='/auth/callback?state=fixture&code=fixture&iss=https%3A%2F%2Fidentity.example')
   if path=='/fixture-avatar.svg':return self.reply(200,b'<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="#6c9"/></svg>','image/svg+xml')
   return super().do_GET()
@@ -72,7 +74,7 @@ try{
   await fixture('/fixture-state',{connected:false,activity:'idle'});
   if(width===390)await page.locator('.codex-thread').first().click();
   else {await page.evaluate(()=>history.back());await page.waitForFunction(()=>!document.querySelector('.codex-workspace').classList.contains('codex-reading'));await page.locator('.codex-thread').first().click();}
-  await page.getByText('Waiting for the machine to connect.',{exact:false}).waitFor();
+  await page.getByText('Waiting for local Codex to reconnect.',{exact:false}).waitFor();
   await draft.fill('Queued while waiting for machine confirmation');await page.getByRole('button',{name:'Send instruction',exact:true}).click();await page.locator('[data-status=queued]').waitFor();
   await fixture('/fixture-tick');assert.equal((await metrics()).sent,baseline);
   await fixture('/fixture-state',{connected:true,activity:'running'});await fixture('/fixture-tick');assert.equal((await metrics()).sent,baseline);
@@ -81,6 +83,12 @@ try{
   await draft.fill('Send now through the real queue');await page.getByRole('button',{name:'Send instruction',exact:true}).click();await page.getByRole('button',{name:'Send now',exact:true}).click();
   await page.locator('[data-status=queued]').waitFor({state:'detached'});await fixture('/fixture-tick');const result=await metrics();assert.equal(result.sent,baseline+2);assert.equal(result.actions.at(-1),'steer');
   console.log('Real HTTP queue, machine wait, reconnect, exactly-once delivery and Send now:',width);
+  await fixture('/fixture-state',{connected:false,recoverable:true,activity:'idle'});
+  const beforeReconnect=(await metrics()).sent;await page.reload();
+  await page.getByText('Conversation connected',{exact:true}).waitFor({timeout:12000});
+  assert.ok((await metrics()).connections>=1);assert.equal((await metrics()).sent,beforeReconnect);
+  await fixture('/fixture-state',{recoverable:false});
+  console.log('Selected conversation reconnects automatically without starting a turn:',width);
   await draft.fill('Preserve this expired-session draft');const sentBeforeExpiry=(await metrics()).sent;await fixture('/fixture-expire');await page.getByRole('button',{name:'Send instruction',exact:true}).click();
   await page.getByRole('link',{name:'Sign in again with PIdP',exact:true}).waitFor();assert.equal(await draft.inputValue(),'Preserve this expired-session draft');assert.equal((await metrics()).sent,sentBeforeExpiry);
   const popupReady=context.waitForEvent('page');await page.getByRole('link',{name:'Sign in again with PIdP',exact:true}).click();const popup=await popupReady;await popup.locator('.pidp-user').waitFor();await popup.close();await page.bringToFront();await page.getByRole('link',{name:'Sign in again with PIdP',exact:true}).waitFor({state:'hidden',timeout:12000});assert.equal(await draft.inputValue(),'Preserve this expired-session draft');

@@ -312,3 +312,16 @@ thread. The Conversations button uses that same history. The selected thread is
 kept in the URL fragment so reload can restore it, while an unsent text draft
 stays in this browser tab. Back does not cancel queued work or a running turn.
 At the conversation list, Back retains normal browser navigation behavior.
+
+## Conversation attachment
+
+A signed-in phone and a conversation's local IDE owner are separate connections.
+Selecting a detached conversation or queueing an instruction now requests
+attachment automatically through the existing VS Code conversation URI. It does
+not create a second app-server, duplicate a conversation, start an unsolicited
+turn or change sandbox/approval settings. Running conversations keep their owners.
+Attachment requests are asynchronous, serialized and limited to three attempts
+with backoff; genuine failures expose a Retry connection action. Queue messages
+show their connection state and remain durable while disconnected. Known failures
+before dispatch remain queued; ambiguous outcomes after dispatch remain blocked
+from automatic retry. PIdP expiry preserves drafts and still requires sign-in.
