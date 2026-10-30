@@ -72,10 +72,19 @@ def validate_generation(current,aligned):
         raise RuntimeError('Venter BAMs do not all belong to the current fully verified source generation')
 
 
+def retryable_stage_failure(error):
+    if isinstance(error,PermissionError):return False
+    if isinstance(error,(distributed.CapacityWait,OSError,subprocess.SubprocessError)):return True
+    return isinstance(error,RuntimeError) and (
+        'cleanup unconfirmed' in str(error) or 'lease renewal' in str(error).lower()
+        or 'exit=255' in str(error) or 'exit=137' in str(error)
+    )
+
+
 def main(root,sample="Watson"):
     root=Path(root);base=root/'recall' if sample=='Watson' else root/'recall/venter';folder=base/'finalize';folder.mkdir(mode=0o700,parents=True,exist_ok=True)
     state_path=folder/'state.json';state=json.loads(state_path.read_text()) if state_path.exists() else {'phase':'waiting_for_all_verified_alignments','collected':{},'chromosomes':{}}
-    if state.get('phase')=='complete_private_research_result_pending_review':return
+    if sample=='Watson' and state.get('phase')=='complete_private_research_result_pending_review':return
     atomic_json(state_path,state)
     while True:
         driver=base/'full/driver.json'
@@ -88,9 +97,16 @@ def main(root,sample="Watson"):
     pinned=json.loads((root/'tools.json').read_text())['image']
     if resolver.fingerprint(None,pinned)!=resolver.fingerprint(None,'lifetech/wgs-tools:bookworm-20261026'):raise RuntimeError('Bioimage tag no longer matches pinned contents')
     aligned=json.loads((base/'full/state.json').read_text())['jobs']
+    sample_scope=sample
     if sample=='Venter':
         current=json.loads((base/'generation.json').read_text())
         validate_generation(current,aligned)
+        if state.get('generation')!=current['generation']:
+            state={'phase':'waiting_for_all_verified_alignments','collected':{},'chromosomes':{},'generation':current['generation']}
+            atomic_json(state_path,state)
+        elif state.get('phase')=='complete_private_research_result_pending_review':return
+        sample_scope=sample+'/'+current['generation']
+        folder=folder/'generations'/current['generation'];folder.mkdir(mode=0o700,parents=True,exist_ok=True)
     catalog=json.loads((root/'catalog.json').read_text())['files'];source_runs={f['run'] for f in catalog if f['sample']==sample};expected=source_runs if sample=='Watson' else set(aligned)
     if set(aligned)!=expected or any(aligned[r]['phase']!='complete' for r in expected):raise RuntimeError('Not every manifest run has a completed alignment')
     downloads=json.loads((root/'downloads/state.json').read_text())['jobs']
@@ -135,7 +151,7 @@ def main(root,sample="Watson"):
         state['phase']='waiting_for_sufficient_ssd_scratch';atomic_json(state_path,state);time.sleep(30)
     # Prepare tools only on the selected execution host, not input archives.
     resolver.ensure('lifetech/wgs-tools:bookworm-20261026',[target])
-    work=str(Path(target['cache']).parent/'wgs-final'/sample)
+    work=str(Path(target['cache']).parent/'wgs-final'/sample_scope)
     subprocess.run(distributed.shell_command(target,['mkdir','-p','--',work+'/tmp']),check=True)
     image=subprocess.check_output(distributed.shell_command(target,['docker','image','inspect','lifetech/wgs-tools:bookworm-20261026','--format','{{.Id}}']),text=True).strip()
     state['phase']='gathering_sha256_verified_bams';atomic_json(state_path,state)
@@ -171,6 +187,19 @@ def main(root,sample="Watson"):
     if set(lengths)!=set(PRIMARY):raise RuntimeError('Canonical GRCh38 contigs missing')
     state['phase']='distributed_chromosome_recall';atomic_json(state_path,state)
     call_hosts=hosts
+    for chrom in PRIMARY:
+        if chrom in state['chromosomes']:continue
+        report=folder/('call-'+chrom+'.json')
+        if not report.exists():continue
+        previous=json.loads(report.read_text())
+        if previous.get('phase')!='complete' or previous.get('host') not in by_name:continue
+        h=by_name[previous['host']]
+        evidence=str(Path(h['cache']).parent/'wgs-calls'/sample_scope/chrom/'evidence')
+        try:recovered=remote_json(h,evidence+'/summary.json')
+        except (OSError,subprocess.SubprocessError):continue
+        if recovered.get('chrom')!=chrom or recovered.get('length')!=lengths[chrom]:raise RuntimeError('Recovered chromosome evidence identity mismatch')
+        state['chromosomes'][chrom]={**recovered,'host':h['host'],'private_evidence':evidence}
+        atomic_json(state_path,state)
     lock=threading.Lock();extraction_lock=threading.Lock();jobs=[c for c in PRIMARY if c not in state['chromosomes']]
     def lane(host,slots,reference):
         worker_image=subprocess.check_output(distributed.shell_command(host,['docker','image','inspect','lifetech/wgs-tools:bookworm-20261026','--format','{{.Id}}']),text=True).strip()
@@ -178,61 +207,79 @@ def main(root,sample="Watson"):
             with lock:
                 if not jobs:return
                 chrom=jobs.pop(0)
-            if chrom=='19' and sample=='Watson':
-                result={'chrom':chrom,'length':lengths[chrom],'counts':{'confirmed_same':0,'snv':0,'insertion_anchor':0,'deletion_start':0,'other':0,'unknown':lengths[chrom]},'excluded':True,'reason':'Whole chromosome preserves intentionally withheld Watson locus'}
-            else:
-                part=work+'/chromosomes/'+chrom
-                subprocess.run(distributed.shell_command(target,['mkdir','-p','--',part+'/tmp']),check=True)
-                # Serialize extraction on merged BAM owner; calls proceed in parallel.
-                with extraction_lock:
-                    available=capacity(target,1024,1)
-                    leased_run(target,image,'samtools view -b -o /work/input.bam /merged.bam '+chrom,[(merged,'/merged.bam',True),(merged+'.bai','/merged.bam.bai',True),(part,'/work',False)],part,1,max(1024,available['available_mb']//target['cpus']),folder/('extract-'+chrom+'.json'))
-                bam_receipt=attest(target,part+'/input.bam')
-                disk_query="import shutil,sys;print(shutil.disk_usage(sys.argv[1]).free)"
-                with host_guards[host['host']]:
-                    free=int(subprocess.check_output(distributed.shell_command(host,['python3','-c',disk_query,host['cache']]),text=True))
-                    needed=2*bam_receipt['bytes']+2048*1024*1024
-                    if free-reserved_disk[host['host']]<needed:
-                        with lock:jobs.append(chrom)
-                        time.sleep(5);continue
-                    reserved_disk[host['host']]+=needed
-                try:
-                    copied=copy_receipt(target,host,bam_receipt)
-                    call_work=str(Path(host['cache']).parent/'wgs-calls'/sample/chrom)
-                    subprocess.run(distributed.shell_command(host,['mkdir','-p','--',call_work+'/tmp']),check=True)
-                    # Recover a fully written summary after coordinator interruption;
-                    # incomplete worker evidence remains archived for inspection.
-                    recover="import json,pathlib,sys,time;p=pathlib.Path(sys.argv[1]);s=p/'evidence/summary.json';print(json.dumps(json.loads(s.read_text()) if s.exists() else None));e=p/'evidence';e.rename(p/('interrupted-evidence-'+str(time.time_ns()))) if e.exists() and not s.exists() else None"
-                    recovered=json.loads(subprocess.check_output(distributed.shell_command(host,['python3','-c',recover,call_work]),text=True))
-                    if recovered is not None:
-                        if recovered.get('chrom')!=chrom or recovered.get('length')!=lengths[chrom]:raise RuntimeError('Recovered chromosome evidence identity mismatch')
-                        recovered.update(host=host['host'],private_evidence=call_work+'/evidence')
-                        with lock:state['chromosomes'][chrom]=recovered;atomic_json(state_path,state)
-                        continue
-                    # Flatten pure-stdlib summary dependency to avoid mounting repository.
-                    recall=(Path(__file__).parent/'wgs_recall.py').read_text()
-                    summary=(Path(__file__).parent/'wgs_call_summary.py').read_text().replace('from scripts.wgs_recall import classify',recall.split("def main():")[0])
-                    install(host,call_work+'/summary_worker.py',summary.encode())
-                    install(host,call_work+'/reference_confidence.py',(Path(__file__).parent/'wgs_reference_confidence.py').read_bytes())
-                    reference=reference
-                    command=pipeline([['bcftools','mpileup','-Ov','-f','/ref/reference.fa','-q','20','-Q','20','-d','10000','-a','FORMAT/DP,FORMAT/AD','/input.bam'],['python','/work/reference_confidence.py'],['bcftools','call','-m','-f','GQ','-Ov'],['python','/work/summary_worker.py','--chrom',chrom,'--length',str(lengths[chrom]),'--output','/work/evidence']])
-                    while True:
-                        try:
-                            available=capacity(host,2048,4)
-                            leased_run(host,worker_image,command,[(reference,'/ref',True),(copied['path'],'/input.bam',True),(call_work,'/work',False)],call_work,4,max(2048,available['available_mb']//slots),folder/('call-'+chrom+'.json'));break
-                        except distributed.CapacityWait:time.sleep(1)
-                    result=remote_json(host,call_work+'/evidence/summary.json');result.update(host=host['host'],private_evidence=call_work+'/evidence')
-                finally:
-                    with host_guards[host['host']]:reserved_disk[host['host']]-=needed
-            with lock:state['chromosomes'][chrom]=result;atomic_json(state_path,state)
+            try:
+                if chrom=='19' and sample=='Watson':
+                    result={'chrom':chrom,'length':lengths[chrom],'counts':{'confirmed_same':0,'snv':0,'insertion_anchor':0,'deletion_start':0,'other':0,'unknown':lengths[chrom]},'excluded':True,'reason':'Whole chromosome preserves intentionally withheld Watson locus'}
+                else:
+                    part=work+'/chromosomes/'+chrom
+                    subprocess.run(distributed.shell_command(target,['mkdir','-p','--',part+'/tmp']),check=True)
+                    # Serialize extraction on merged BAM owner; calls proceed in parallel.
+                    with extraction_lock:
+                        available=capacity(target,1024,1)
+                        leased_run(target,image,'samtools view -b -o /work/input.bam /merged.bam '+chrom,[(merged,'/merged.bam',True),(merged+'.bai','/merged.bam.bai',True),(part,'/work',False)],part,1,max(1024,available['available_mb']//target['cpus']),folder/('extract-'+chrom+'.json'))
+                    bam_receipt=attest(target,part+'/input.bam')
+                    disk_query="import shutil,sys;print(shutil.disk_usage(sys.argv[1]).free)"
+                    with host_guards[host['host']]:
+                        free=int(subprocess.check_output(distributed.shell_command(host,['python3','-c',disk_query,host['cache']]),text=True))
+                        needed=2*bam_receipt['bytes']+2048*1024*1024
+                        if free-reserved_disk[host['host']]<needed:
+                            with lock:jobs.append(chrom)
+                            time.sleep(5);continue
+                        reserved_disk[host['host']]+=needed
+                    try:
+                        copied=copy_receipt(target,host,bam_receipt)
+                        call_work=str(Path(host['cache']).parent/'wgs-calls'/sample_scope/chrom)
+                        subprocess.run(distributed.shell_command(host,['mkdir','-p','--',call_work+'/tmp']),check=True)
+                        # Recover a fully written summary after coordinator interruption;
+                        # incomplete worker evidence remains archived for inspection.
+                        recover="import json,pathlib,sys,time;p=pathlib.Path(sys.argv[1]);s=p/'evidence/summary.json';print(json.dumps(json.loads(s.read_text()) if s.exists() else None));e=p/'evidence';e.rename(p/('interrupted-evidence-'+str(time.time_ns()))) if e.exists() and not s.exists() else None"
+                        recovered=json.loads(subprocess.check_output(distributed.shell_command(host,['python3','-c',recover,call_work]),text=True))
+                        if recovered is not None:
+                            if recovered.get('chrom')!=chrom or recovered.get('length')!=lengths[chrom]:raise RuntimeError('Recovered chromosome evidence identity mismatch')
+                            recovered.update(host=host['host'],private_evidence=call_work+'/evidence')
+                            with lock:state['chromosomes'][chrom]=recovered;atomic_json(state_path,state)
+                            continue
+                        # Flatten pure-stdlib summary dependency to avoid mounting repository.
+                        recall=(Path(__file__).parent/'wgs_recall.py').read_text()
+                        summary=(Path(__file__).parent/'wgs_call_summary.py').read_text().replace('from scripts.wgs_recall import classify',recall.split("def main():")[0])
+                        install(host,call_work+'/summary_worker.py',summary.encode())
+                        install(host,call_work+'/reference_confidence.py',(Path(__file__).parent/'wgs_reference_confidence.py').read_bytes())
+                        reference=reference
+                        command=pipeline([['bcftools','mpileup','-Ov','-f','/ref/reference.fa','-q','20','-Q','20','-d','10000','-a','FORMAT/DP,FORMAT/AD','/input.bam'],['python','/work/reference_confidence.py'],['bcftools','call','-m','-f','GQ','-Ov'],['python','/work/summary_worker.py','--chrom',chrom,'--length',str(lengths[chrom]),'--output','/work/evidence']])
+                        while True:
+                            try:
+                                available=capacity(host,2048,4)
+                                leased_run(host,worker_image,command,[(reference,'/ref',True),(copied['path'],'/input.bam',True),(call_work,'/work',False)],call_work,4,max(2048,available['available_mb']//slots),folder/('call-'+chrom+'.json'));break
+                            except distributed.CapacityWait:time.sleep(1)
+                        result=remote_json(host,call_work+'/evidence/summary.json');result.update(host=host['host'],private_evidence=call_work+'/evidence')
+                    finally:
+                        with host_guards[host['host']]:reserved_disk[host['host']]-=needed
+                with lock:state['chromosomes'][chrom]=result;atomic_json(state_path,state)
+            except Exception as error:
+                if not retryable_stage_failure(error):raise
+                # Return the claimed chromosome before retrying or yielding to
+                # another lane. A transient failure must never lose queue work.
+                with lock:
+                    jobs.append(chrom)
+                    state.setdefault('worker_waits',{})[host['host']]={'chrom':chrom,'error':str(error)[:300],'updated':stamp()}
+                    atomic_json(state_path,state)
+                time.sleep(5)
     host_guards={h['host']:threading.Lock() for h in call_hosts};reserved_disk={h['host']:0 for h in call_hosts}
     def dispatch(host):
         # Preparation is independent: slow weak-peer transfers never delay
         # already prepared callers on stronger hosts.
+        with lock:
+            if not jobs:return
         from docker_utils.images import ImageResolver
-        prepare=ImageResolver([h for h in hosts if not h['local']],lambda h:h['ssh'])
-        prepare.ensure('lifetech/wgs-tools:bookworm-20261026',[] if host['local'] else [host])
-        reference=distribute_reference(host,root/'reference',call_only=True)
+        try:
+            prepare=ImageResolver([h for h in hosts if not h['local']],lambda h:h['ssh'])
+            prepare.ensure('lifetech/wgs-tools:bookworm-20261026',[] if host['local'] else [host])
+            reference=distribute_reference(host,root/'reference',call_only=True)
+        except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+            with lock:
+                state.setdefault('worker_waits',{})[host['host']]={'error':str(error)[:300],'updated':stamp()}
+                atomic_json(state_path,state)
+            return
         while True:
             try:
                 available=capacity(host,2048,4);break
@@ -244,6 +291,7 @@ def main(root,sample="Watson"):
         with lock:state.setdefault('call_slots',{})[host['host']]=slots;atomic_json(state_path,state)
         with ThreadPoolExecutor(max_workers=slots) as lanes:list(lanes.map(lambda _:lane(host,slots,reference),range(slots)))
     with ThreadPoolExecutor(max_workers=len(call_hosts)) as pool:list(pool.map(dispatch,call_hosts))
+    if set(state['chromosomes'])!=set(PRIMARY):raise distributed.CapacityWait('Chromosomes remain pending; retry from completed summaries')
     state['phase']='awaiting_full_source_QC';atomic_json(state_path,state)
     while True:
         passed=True

@@ -113,3 +113,31 @@ def test_resuming_shards_keeps_completed_receipts_and_source_checks(tmp_path):
     import pytest
     with pytest.raises(ValueError,match='changed'):
         split_opened(io.BytesIO(first),io.BytesIO(second),tmp_path,records_per_shard=1)
+
+
+def test_complete_old_chunk_mirror_cannot_replace_verified_source(tmp_path,monkeypatch):
+    from scripts import wgs_venter_stream as stream
+    from scripts.wgs_swarm_download import file_id
+    import threading
+    source={'host':'source','local':True,'cache':str(tmp_path/'source')}
+    target={'host':'target','local':True,'cache':str(tmp_path/'target')}
+    item={'url':'https://archive.test/reads','filename':'reads.gz','bytes':4,'md5':hashlib.md5(b'good').hexdigest()}
+    ident=file_id(item);origin=Path(source['cache'])/ident;origin.mkdir(parents=True)
+    (origin/'reads.gz').write_bytes(b'good')
+    receipt={**item,'sha256':hashlib.sha256(b'good').hexdigest()}
+    (origin/'receipt.json').write_text(json.dumps(receipt))
+    destination=tmp_path/'mirror'/ident;(destination/'chunks').mkdir(parents=True)
+    (destination/'chunks/0.bin').write_bytes(b'stale')
+    (destination/'chunks/0.json').write_text(json.dumps({'bytes':5,'sha256':hashlib.sha256(b'stale').hexdigest()}))
+    calls=[]
+    def verified_copy(a,b,r,**kwargs):
+        assert r['sha256']==receipt['sha256'];calls.append(r)
+        return {**r,'path':str(origin/'reads.gz')}
+    monkeypatch.setattr(stream,'copy_receipt',verified_copy)
+    stream.mirror(source,target,item,str(tmp_path/'mirror'),threading.Event())
+    assert len(calls)==1
+    assert (destination/'reads.gz').read_bytes()==b'good'
+    assert (destination/'chunks/0.bin').read_bytes()==b'stale' # preserved evidence, no longer input
+    saved=json.loads((destination/'receipt.json').read_text())
+    assert saved['sha256']==receipt['sha256']
+    assert saved['mtime_ns']==(destination/'reads.gz').stat().st_mtime_ns

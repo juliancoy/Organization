@@ -62,20 +62,19 @@ print(json.dumps(out))
                 subprocess.run(distributed.shell_command(target,['python3','-c',move,incoming['path'],destination+'/chunks/'+str(index)+suffix]),check=True)
             copied.add(index)
         if 'receipt' in current:
+            # A prior chunk mirror can predate a repaired publisher source.
+            # Never bless it merely because all chunk numbers are present.
             receipt=current['receipt'];source_file=origin+'/'+item['filename']
-            # If assembler removed an unmirrored range, fall back to complete,
-            # archive-verified gzip; in-flight readers preserve their offset.
-            total=(item['bytes']+128*1024*1024-1)//(128*1024*1024)
-            if len(copied)<total:
-                transfer={**receipt,'path':source_file,'host':current_source['host']};local=copy_receipt(current_source,target,transfer)
-                move="import os,pathlib,sys;os.replace(sys.argv[1],sys.argv[2])"
-                subprocess.run(distributed.shell_command(target,['python3','-c',move,local['path'],destination+'/'+item['filename']]),check=True)
-            else:
-                # Reader's compressed stream MD5 is enough to verify its own
-                # complete mirrored chunks. A small marker verifies source EOF.
-                install(target,destination+'/source-complete.json',json.dumps(receipt).encode());return
-            code="import json,pathlib,sys;p=pathlib.Path(sys.argv[1]);r=json.loads(sys.argv[2]);r['mtime_ns']=(p/r['filename']).stat().st_mtime_ns;(p/'receipt.json').write_text(json.dumps(r))"
-            subprocess.run(distributed.shell_command(target,['python3','-c',code,destination,json.dumps(receipt)]),check=True);return
+            transfer={**receipt,'path':source_file,'host':current_source['host']}
+            local=copy_receipt(current_source,target,transfer,resume=True)
+            publish="""import json,os,pathlib,sys
+source=pathlib.Path(sys.argv[1]);folder=pathlib.Path(sys.argv[2]);r=json.loads(sys.argv[3]);final=folder/r['filename']
+temp=final.with_suffix(final.suffix+'.verified');temp.unlink(missing_ok=True);os.link(source,temp);os.replace(temp,final)
+r['mtime_ns']=final.stat().st_mtime_ns
+p=folder/'receipt.json';tmp=p.with_suffix('.tmp');tmp.write_text(json.dumps(r));tmp.chmod(0o600);os.replace(tmp,p)
+"""
+            subprocess.run(distributed.shell_command(target,['python3','-c',publish,local['path'],destination,json.dumps(receipt)]),check=True)
+            return
         stop.wait(2)
 
 
@@ -107,6 +106,7 @@ def mapping_complete(jobs,verified,generation):
 
 
 def map_pair(host,owner,receipt,reference,image,folder):
+    available=capacity(host,7000,2)
     copies=[]
     for item in receipt['files']:
         item={**item,'host':owner['host']};copies.append(copy_receipt(owner,host,item))
@@ -158,14 +158,17 @@ def main(root):
     atomic_json(folder/'generation.json',{'generation':generation,'phase':'provisional','work':work,'started':previous.get('started',stamp()) if previous.get('generation')==generation else stamp(),'publication':False,'source_fingerprint':source_fingerprint(items)})
     # Mirror beneath the common parent mount, never read partial network writes.
     mirror_base=str(Path(owner['cache']).parent/'wgs-venter-mirror');stop=threading.Event()
-    def mirror_forever():
-        while not stop.is_set():
-            try:mirror(lambda:download_source(root,by_name,items[0]),owner,items[0],mirror_base,stop);return
-            except Exception as error:
-                atomic_json(folder/'mirror.json',{'phase':'retrying','error':str(error)[:500],'updated':stamp()});stop.wait(2)
-    thread=threading.Thread(target=mirror_forever,daemon=True);thread.start()
-    subprocess.run(distributed.shell_command(owner,['mkdir','-p','--',work+'/tmp',mirror_base,str(Path(owner['cache'])/file_id(items[1]))]),check=True)
-    job={'items':items,'folders':{items[0]['filename']:'/mirror/'+file_id(items[0]),items[1]['filename']:'/mate2'}}
+    # Stage both current verified mates. Old mirrored ranges and provisional
+    # mappings must not be reused after source repair.
+    for item in items:
+        atomic_json(folder/'mirror.json',{'phase':'staging_verified_source','filename':item['filename'],'generation':generation,'updated':stamp()})
+        source=download_source(root,by_name,item)
+        source_state=json.loads((root/'downloads/state.json').read_text())['jobs'][file_id(item)]
+        if source_state.get('status')!='verified':raise distributed.CapacityWait('Waiting for publisher-verified source')
+        mirror(source,owner,item,mirror_base,stop)
+    atomic_json(folder/'mirror.json',{'phase':'both_verified_sources_staged','generation':generation,'updated':stamp()})
+    subprocess.run(distributed.shell_command(owner,['mkdir','-p','--',work+'/tmp']),check=True)
+    job={'items':items,'folders':{item['filename']:'/mirror/'+file_id(item) for item in items}}
     install(owner,work+'/job.json',json.dumps(job).encode());install(owner,work+'/stream_worker.py',streaming_worker_code().encode())
     stream_errors=[]
     def stream():
@@ -173,7 +176,7 @@ def main(root):
         while not stop.is_set():
             try:
                 capacity(owner,1024,1)
-                leased_run(owner,owner['image'],'python /work/stream_worker.py',[(mirror_base,'/mirror',True),(str(Path(owner['cache'])/file_id(items[1])),'/mate2',True),(work,'/work',False)],work,1,1024,folder/'stream.json')
+                leased_run(owner,owner['image'],'python /work/stream_worker.py',[(mirror_base,'/mirror',True),(work,'/work',False)],work,1,1024,folder/'stream.json')
                 return
             except distributed.CapacityWait:
                 stop.wait(5)

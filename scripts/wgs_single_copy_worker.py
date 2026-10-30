@@ -115,12 +115,21 @@ def parallel_transfer(current,cache_root,connections,opener=urlopen,sleep=time.s
     fd=os.open(partial,os.O_RDWR|os.O_CREAT,0o600)
     original_size=os.fstat(fd).st_size
     def size(index):return min(chunk_bytes,total-index*chunk_bytes)
+    def progress(phase):
+        with guard:
+            completed=sum(size(int(index)) for index in manifest['done'])
+            save(progress_path,{'phase':phase,'bytes_completed':completed,'bytes_received':completed+sum(active.values()),
+                'bytes_total':total,'completed_chunks':len(manifest['done']),'total_chunks':count,'connections':connections,
+                'updated':time.time(),'storage_mode':'single-copy-parallel-ranges','elapsed_seconds':round(time.monotonic()-started,1)})
+    heartbeat=[0.0]
     def digest_range(index):
         digest=hashlib.sha256();offset=index*chunk_bytes;remaining=size(index)
         while remaining:
             block=os.pread(fd,min(1024*1024,remaining),offset)
             if not block:raise ValueError('Completed range is missing from partial file')
             digest.update(block);offset+=len(block);remaining-=len(block)
+            if time.monotonic()-heartbeat[0]>5:
+                progress('validating_saved_ranges');heartbeat[0]=time.monotonic()
         return digest.hexdigest()
     try:
         if original_size>total:raise ValueError('Partial file exceeds publisher size')
@@ -134,12 +143,6 @@ def parallel_transfer(current,cache_root,connections,opener=urlopen,sleep=time.s
         completed=sum(size(int(index)) for index in manifest['done'])
         if shutil.disk_usage(folder).free<total-completed+1024**3:raise ValueError('Insufficient remaining single-copy storage')
         os.ftruncate(fd,total);save(checkpoint,manifest)
-        def progress(phase):
-            with guard:
-                completed=sum(size(int(index)) for index in manifest['done'])
-                save(progress_path,{'phase':phase,'bytes_completed':completed,'bytes_received':completed+sum(active.values()),
-                    'bytes_total':total,'completed_chunks':len(manifest['done']),'total_chunks':count,'connections':connections,
-                    'updated':time.time(),'storage_mode':'single-copy-parallel-ranges','elapsed_seconds':round(time.monotonic()-started,1)})
         def fetch(index):
             start=index*chunk_bytes;end=start+size(index)-1
             for attempt in range(20):
@@ -194,6 +197,11 @@ def parallel_transfer(current,cache_root,connections,opener=urlopen,sleep=time.s
         lock.close()
 
 
+def retryable_download_error(error):
+    if isinstance(error,HTTPError):return error.code in (408,429,500,502,503,504)
+    return isinstance(error,OSError) and not isinstance(error,PermissionError)
+
+
 def main():
     os.umask(0o077);job=json.load(sys.stdin);root=Path('/cache')
     for current in job['jobs']:
@@ -202,7 +210,7 @@ def main():
             folder=root/current['id'];folder.mkdir(mode=0o700,parents=True,exist_ok=True)
             old=json.loads((folder/'progress.json').read_text()) if (folder/'progress.json').exists() else {}
             save(folder/'progress.json',{**old,'phase':'failed','updated':time.time(),'last_error':type(error).__name__+': '+str(error)[:300]})
-            print(json.dumps({'id':current['id'],'error':type(error).__name__+': '+str(error)[:300]}),flush=True);raise
+            print(json.dumps({'id':current['id'],'error':type(error).__name__+': '+str(error)[:300],'retryable':retryable_download_error(error)}),flush=True);raise
 
 
 if __name__=='__main__':main()

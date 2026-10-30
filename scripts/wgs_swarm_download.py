@@ -331,8 +331,8 @@ def release_after_cleanup(host,name,client,lease):
     client.call('resource.release',{'id':lease})
 
 
-def run_batch(host,items,changed,connections):
-    name='genomics-'+uuid.uuid4().hex;lease=uuid.uuid4().hex;client=AgentClient(host);process=None;finished=threading.Event();renew_errors=[];received=set()
+def run_batch(host,items,changed,connections,memory_floor_mb=0):
+    name='genomics-'+uuid.uuid4().hex;lease=uuid.uuid4().hex;client=AgentClient(host);process=None;finished=threading.Event();renew_errors=[];received=set();worker_errors=[]
     by_id={file_id(item):item for item in items}
     try:
         status=client.call('status',timeout=10)
@@ -340,6 +340,8 @@ def run_batch(host,items,changed,connections):
         if not distributed.eligible(status) or status.get('machine')!=host['machine']:raise RuntimeError('Worker identity/policy changed')
         if 'renewable-resources' not in status.get('capabilities',[]):raise RuntimeError('Worker needs renewable-resource agent update')
         capacity=client.call('resource.capacity',{'group':GROUP});memory_mb=distributed.memory_allocation(capacity,max(1,host.get('cpus',1)))
+        if capacity.get('available_mb',0)<memory_floor_mb:raise distributed.CapacityWait('Waiting for download memory floor')
+        memory_mb=max(memory_mb,memory_floor_mb)
         for ident in by_id:changed(ident,'waiting_capacity',{'reason':'Waiting for shared download capacity'})
         deadline=time.monotonic()+120
         while not client.call('resource.acquire',{'id':lease,'group':GROUP,'cpus':1,'memory_mb':memory_mb,'container':name})['acquired']:
@@ -350,9 +352,18 @@ def run_batch(host,items,changed,connections):
             renewal_client=AgentClient(host)
             try:
                 while not finished.wait(30):
-                    try:renewal_client.call('resource.renew',{'id':lease},timeout=10)
-                    except Exception as error:
-                        renew_errors.append(str(error));subprocess.run(distributed.shell_command(host,['docker','rm','-f',name]),capture_output=True,timeout=20);return
+                    for attempt in range(3):
+                        try:
+                            renewal_client.call('resource.renew',{'id':lease},timeout=10)
+                            break
+                        except Exception as error:
+                            if isinstance(error,PermissionError) or attempt==2:
+                                renew_errors.append(str(error))
+                                try:subprocess.run(distributed.shell_command(host,['docker','rm','-f',name]),capture_output=True,timeout=20)
+                                except (OSError,subprocess.SubprocessError):pass  # Server expiry remains authoritative.
+                                return
+                            renewal_client.close();renewal_client=AgentClient(host)
+                            if finished.wait(5*(attempt+1)):return
             finally:renewal_client.close()
         threading.Thread(target=renew,daemon=True).start()
         payload={'jobs':[{'id':ident,'item':item,'chunk_bytes':CHUNK_BYTES,'allowed_hosts':sorted(ALLOWED_HOSTS),'transport_worker_version':'sha256:'+hashlib.sha256(DOWNLOAD_WORKER.encode()).hexdigest()} for ident,item in by_id.items()],'connections':connections}
@@ -376,6 +387,7 @@ def run_batch(host,items,changed,connections):
         for line in process.stdout:
             receipt=json.loads(line)
             if 'error' in receipt:
+                worker_errors.append(receipt.get('retryable') is True)
                 changed(receipt['id'],'failed',{'error':receipt['error']});continue
             ident=file_id(receipt);item=by_id[ident]
             if receipt.get('url')!=item['url'] or receipt.get('bytes')!=item['bytes'] or receipt.get('md5','').lower()!=item['md5'].lower():raise ValueError('Download receipt identity mismatch')
@@ -386,6 +398,7 @@ def run_batch(host,items,changed,connections):
             print('Verified '+item['sample']+' '+item['filename']+' on '+host['host'],flush=True)
         process.wait();stderr=process.stderr.read()
         if renew_errors:raise RuntimeError('Download lease renewal failed')
+        if worker_errors and all(worker_errors):raise OSError('Temporary archive transfer failure; saved ranges retained')
         if process.returncode:raise RuntimeError('Public WGS download worker failed ('+str(process.returncode)+'): '+stderr.decode(errors='replace')[-500:])
         if received!=set(by_id):raise RuntimeError('Worker omitted download receipts')
     finally:

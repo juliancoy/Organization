@@ -159,7 +159,7 @@ def map_watson(host,receipt,reference,image,report_folder):
     return result
 
 
-def copy_receipt(source,destination,receipt):
+def copy_receipt(source,destination,receipt,resume=False):
     """Stream one verified public gzip over pinned SSH, SHA-check before rename."""
     if source['host']==destination['host']:return receipt
     client=AgentClient(source)
@@ -168,7 +168,12 @@ def copy_receipt(source,destination,receipt):
         if status.get('machine')!=source['machine']:raise RuntimeError('Source machine identity changed')
     finally:client.close()
     target=str(Path(destination['cache'])/'incoming'/receipt['sha256']/Path(receipt['path']).name)
-    writer="""import hashlib,json,os,pathlib,sys
+    offset=0
+    if resume:
+        probe="import pathlib,sys;p=pathlib.Path(sys.argv[1]);print(p.stat().st_size if p.exists() else 0)"
+        offset=int(subprocess.check_output(distributed.shell_command(destination,['python3','-c',probe,target+'.partial']),text=True,timeout=30))
+        if not 0<=offset<=receipt['bytes']:raise ValueError('Invalid partial transfer size')
+    writer="""import hashlib,json,os,pathlib,sys,time
 path=pathlib.Path(sys.argv[1]);size=int(sys.argv[2]);expected=sys.argv[3]
 path.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
 if path.exists() and path.stat().st_size==size:
@@ -176,18 +181,26 @@ if path.exists() and path.stat().st_size==size:
  with path.open('rb') as s:
   for block in iter(lambda:s.read(8388608),b''):h.update(block)
  if h.hexdigest()==expected:sys.exit(0)
-partial=path.with_suffix(path.suffix+'.partial');h=hashlib.sha256();n=0
-with partial.open('wb') as s:
+partial=path.with_suffix(path.suffix+'.partial');h=hashlib.sha256();n=0;offset=int(sys.argv[4])
+if offset:
+ if not partial.exists() or partial.stat().st_size!=offset:raise RuntimeError('Partial transfer changed before resume')
+ with partial.open('rb') as prefix:
+  for block in iter(lambda:prefix.read(8388608),b''):h.update(block);n+=len(block)
+with partial.open('ab' if offset else 'wb') as s:
  while block:=sys.stdin.buffer.read(8388608):
   n+=len(block)
   if n>size:raise RuntimeError('Read transfer exceeded declared size')
   h.update(block);s.write(block)
-if n!=size or h.hexdigest()!=expected:raise RuntimeError('Read transfer SHA256 mismatch')
+if n!=size or h.hexdigest()!=expected:
+ partial.rename(partial.with_name(partial.name+'.mismatch-'+str(time.time_ns())))
+ raise RuntimeError('Read transfer SHA256 mismatch')
 partial.chmod(0o600);partial.replace(path)
 """
-    producer=subprocess.Popen(distributed.shell_command(source,['cat','--',receipt['path']]),stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    reader="import shutil,sys;s=open(sys.argv[1],'rb');s.seek(int(sys.argv[2]));shutil.copyfileobj(s,sys.stdout.buffer,8388608)"
+    source_command=['python3','-c',reader,receipt['path'],str(offset)] if offset else ['cat','--',receipt['path']]
+    producer=subprocess.Popen(distributed.shell_command(source,source_command),stdout=subprocess.PIPE,stderr=subprocess.PIPE)
     try:
-        consumer=subprocess.Popen(distributed.shell_command(destination,['python3','-c',writer,target,str(receipt['bytes']),receipt['sha256']]),stdin=producer.stdout,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+        consumer=subprocess.Popen(distributed.shell_command(destination,['python3','-c',writer,target,str(receipt['bytes']),receipt['sha256'],str(offset)]),stdin=producer.stdout,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
         producer.stdout.close()
         _,errors=consumer.communicate(timeout=1800)
         # A valid cached destination may exit before consuming a duplicate stream.

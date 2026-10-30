@@ -6,6 +6,21 @@ import os
 from pathlib import Path
 import signal
 import sys
+import subprocess
+
+
+def failure_exit_code(error):
+    """Retry transport/lease failures; keep integrity and identity failures stopped."""
+    if isinstance(error, PermissionError):
+        return 78
+    if isinstance(error, (OSError, subprocess.SubprocessError, distributed.CapacityWait)):
+        return 75
+    if isinstance(error, RuntimeError) and str(error) in (
+        "Download lease renewal failed",
+        "Owned WGS container cleanup unconfirmed; lease retained for server expiry",
+    ):
+        return 75
+    return 78
 from scripts import genomics_distributed as distributed
 from scripts import wgs_swarm_download as download
 
@@ -43,7 +58,7 @@ def main():
     try:
         state['status']='running';save()
         while not download.STOP.is_set():
-            try:download.run_batch(host,files,changed,8);break
+            try:download.run_batch(host,files,changed,8,memory_floor_mb=1024);break
             except distributed.CapacityWait:
                 state['status']='waiting_capacity';save();download.STOP.wait(5)
         state['status']='stopped' if download.STOP.is_set() else 'passed' if state['jobs'][ident]['status']=='verified' else 'failed'
@@ -57,4 +72,4 @@ if __name__=='__main__':
     try:main()
     except Exception as error:
         print(type(error).__name__+': '+str(error),file=sys.stderr,flush=True)
-        raise SystemExit(78)
+        raise SystemExit(failure_exit_code(error))
