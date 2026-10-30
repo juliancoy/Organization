@@ -291,9 +291,9 @@ if errors:sys.exit(1)
 '''
 
 
-def preflight(host,local_cache,scan_sizes=True):
+def preflight(host,local_cache,scan_sizes=True,timeout=35):
     cache=str(local_cache) if host['local'] else '~/.local/state/lifetech-launcher/wgs-cache'
-    result=subprocess.run(distributed.shell_command(host,['python3','-c',PREFLIGHT,host['machine'],cache,'1' if scan_sizes else '0']),capture_output=True,text=True,timeout=35)
+    result=subprocess.run(distributed.shell_command(host,['python3','-c',PREFLIGHT,host['machine'],cache,'1' if scan_sizes else '0']),capture_output=True,text=True,timeout=timeout)
     if result.returncode:raise RuntimeError('Worker WGS cache check failed: '+result.stderr[-300:])
     host={**host,**json.loads(result.stdout)}
     return host
@@ -355,7 +355,7 @@ def run_batch(host,items,changed,connections,memory_floor_mb=0):
                 while not finished.wait(30):
                     for attempt in range(3):
                         try:
-                            renewal_client.call('resource.renew',{'id':lease},timeout=10)
+                            renewal_client.call('resource.renew',{'id':lease},timeout=30)
                             break
                         except Exception as error:
                             if isinstance(error,PermissionError) or attempt==2:
@@ -398,11 +398,13 @@ def run_batch(host,items,changed,connections,memory_floor_mb=0):
             changed(ident,'verified',{'receipt':receipt})
             print('Verified '+item['sample']+' '+item['filename']+' on '+host['host'],flush=True)
         process.wait();stderr=process.stderr.read()
-        if renew_errors:raise RuntimeError('Download lease renewal failed')
+        if renew_errors:raise OSError('Download lease renewal failed: '+str(renew_errors[-1])[:300])
         if worker_errors and all(worker_errors):raise OSError('Temporary archive transfer failure; saved ranges retained')
+        if process.returncode in (137,143,255):raise OSError('Download transport/worker interrupted: '+str(process.returncode)+' '+stderr.decode(errors='replace')[-300:])
         if process.returncode:raise RuntimeError('Public WGS download worker failed ('+str(process.returncode)+'): '+stderr.decode(errors='replace')[-500:])
         if received!=set(by_id):raise RuntimeError('Worker omitted download receipts')
     finally:
+        failed=sys.exc_info()[0] is not None
         finished.set()
         try:
             if process is None:
@@ -411,6 +413,9 @@ def run_batch(host,items,changed,connections,memory_floor_mb=0):
                 client.call('resource.release',{'id':lease})
             else:
                 release_after_cleanup(host,name,client,lease)
+        except Exception as cleanup_error:
+            if not failed:raise
+            print('Secondary download cleanup failure: '+str(cleanup_error)[:300],file=sys.stderr,flush=True)
         finally:
             if process is not None and process.poll() is None:process.kill();process.wait()
             client.close()

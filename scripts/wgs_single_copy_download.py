@@ -40,7 +40,7 @@ def main():
     files=download.validate_manifest(json.loads(args.manifest.read_text()))
     if len(files)!=1:raise ValueError('Single-copy job requires exactly one manifest file')
     host=next(h for h in json.loads(args.hosts.read_text()) if h['host']==args.host and h.get('eligible'))
-    host=download.preflight(host,Path('/unused-remote-cache'),scan_sizes=False)
+    host=download.preflight(host,Path('/unused-remote-cache'),scan_sizes=False,timeout=120)
     if host.get('local'):raise ValueError('This entry point requires an explicitly enrolled remote peer')
     download.DOWNLOAD_WORKER=Path(__file__).with_name('wgs_single_copy_worker.py').read_text()
     ident=download.file_id(files[0]);state={'status':'queued','started':download.stamp(),'host':host['host'],'cache':host['cache'],

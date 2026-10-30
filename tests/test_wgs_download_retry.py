@@ -55,3 +55,29 @@ def test_archive_exhaustion_remains_retryable_but_http_denial_does_not():
     assert retryable_download_error(HTTPError('https://archive',503,'unavailable',{},None))
     assert not retryable_download_error(HTTPError('https://archive',403,'denied',{},None))
     assert not retryable_download_error(ValueError('Publisher checksum verification failed'))
+
+
+def test_cleanup_error_does_not_hide_retryable_transfer_failure(monkeypatch):
+    import io,json
+    from scripts import wgs_swarm_download as download
+    class Client:
+        def __init__(self,host):pass
+        def call(self,op,*args,**kwargs):
+            if op=='status':return {'ready':True,'protocol':'lifetech-agent.v1','worker_policy':{'accepting_jobs':True},'machine':'peer','capabilities':['renewable-resources']}
+            if op=='resource.capacity':return {'available_mb':2048,'available_cpus':4}
+            return {'acquired':True}
+        def close(self):pass
+    item={'url':'https://archive.test/reads'};ident=download.file_id(item)
+    class Process:
+        returncode=1
+        def __init__(self,*args,**kwargs):
+            self.stdin=io.BytesIO();self.stdout=io.BytesIO((json.dumps({'id':ident,'error':'TimeoutError','retryable':True})+'\n').encode());self.stderr=io.BytesIO(b'')
+        def wait(self):return 1
+        def poll(self):return 1
+    monkeypatch.setattr(download,'AgentClient',Client)
+    monkeypatch.setattr(download.subprocess,'Popen',Process)
+    def cleanup(*args):raise RuntimeError('Owned WGS container cleanup unconfirmed; lease retained for server expiry')
+    monkeypatch.setattr(download,'release_after_cleanup',cleanup)
+    host={'host':'peer','local':True,'machine':'peer','cpus':4,'cache':'/unused','image':'approved','container_user':'0:0'}
+    with pytest.raises(OSError,match='Temporary archive transfer failure'):
+        download.run_batch(host,[item],lambda *args:None,8,memory_floor_mb=1024)
