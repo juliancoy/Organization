@@ -52,3 +52,9 @@ and publishes only after the complete expected SHA-256 matches; a corrupt
 prefix is quarantined. Existing source reads and retired generations remain
 intact. Rechecking saved download ranges emits a progress heartbeat so slow disk
 validation is distinguishable from a stopped worker.
+
+Single-copy downloads reserve at least 1 GiB through the signed lease rather
+than dividing memory among all host CPU cores. Their preflight skips the
+unneeded recursive cache-size inventory, avoiding a metadata scan of the whole
+archive before every retry. Identity, ownership, rootless isolation and free
+space checks still run.

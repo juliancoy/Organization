@@ -64,7 +64,8 @@ def atomic_json(path,value):
 
 
 PREFLIGHT=r'''import hashlib,json,os,pathlib,shutil,subprocess,sys
-expected,requested=sys.argv[1:]
+expected,requested=sys.argv[1:3]
+scan_sizes=len(sys.argv)<4 or sys.argv[3]!='0'
 if hashlib.sha256(pathlib.Path('/etc/machine-id').read_bytes()).hexdigest()!=expected:raise RuntimeError('SSH identity differs from authenticated agent')
 path=pathlib.Path(requested).expanduser().absolute()
 if any(parent.is_symlink() for parent in [path,*path.parents]):raise RuntimeError('Symlink cache path rejected')
@@ -74,7 +75,7 @@ if path.stat().st_uid!=os.getuid():raise RuntimeError('WGS cache ownership misma
 path.chmod(0o700)
 security=json.loads(subprocess.check_output(['docker','info','--format','{{json .SecurityOptions}}'],text=True))
 rootless=any('rootless' in item for item in security)
-print(json.dumps({'cache':str(path),'free_bytes':shutil.disk_usage(path).free,'uid':os.getuid(),'gid':os.getgid(),'container_user':'0:0' if rootless else str(os.getuid())+':'+str(os.getgid()),'cache_sizes':{child.name:sum(item.stat().st_size for item in child.rglob('*') if item.is_file() and not item.is_symlink()) for child in path.iterdir() if child.is_dir() and not child.is_symlink()}}))
+print(json.dumps({'cache':str(path),'free_bytes':shutil.disk_usage(path).free,'uid':os.getuid(),'gid':os.getgid(),'container_user':'0:0' if rootless else str(os.getuid())+':'+str(os.getgid()),'cache_sizes':{child.name:sum(item.stat().st_size for item in child.rglob('*') if item.is_file() and not item.is_symlink()) for child in path.iterdir() if child.is_dir() and not child.is_symlink()} if scan_sizes else {}}))
 '''
 
 
@@ -290,9 +291,9 @@ if errors:sys.exit(1)
 '''
 
 
-def preflight(host,local_cache):
+def preflight(host,local_cache,scan_sizes=True):
     cache=str(local_cache) if host['local'] else '~/.local/state/lifetech-launcher/wgs-cache'
-    result=subprocess.run(distributed.shell_command(host,['python3','-c',PREFLIGHT,host['machine'],cache]),capture_output=True,text=True,timeout=35)
+    result=subprocess.run(distributed.shell_command(host,['python3','-c',PREFLIGHT,host['machine'],cache,'1' if scan_sizes else '0']),capture_output=True,text=True,timeout=35)
     if result.returncode:raise RuntimeError('Worker WGS cache check failed: '+result.stderr[-300:])
     host={**host,**json.loads(result.stdout)}
     return host
