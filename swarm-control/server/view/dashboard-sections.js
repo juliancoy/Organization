@@ -6,11 +6,11 @@ for(const [key,title]of Object.entries(sections)){const a=document.createElement
 document.querySelector('.command-bar').after(nav);
 const groups={
  traffic:['throughput-sources','congestion'],
- runs:['run-activity','snapshot-staging','run-history','terminal-job','matrix','timeline','jobs','scope'],
+ runs:['status','error','run-activity','snapshot-staging','run-history','terminal-job','matrix','timeline','jobs','scope'],
  tools:['mobile-devices','codex-context','cpu-readout']
 };
 for(const [group,ids]of Object.entries(groups))for(const id of ids){const el=document.getElementById(id);if(!el)continue;const panel=el.closest('main > section, main > footer')||el;panel.hidden=current!==group;}
-for(const id of ['device-levels','overall-progress','summary','topology']){const el=document.getElementById(id);const panel=el?.closest('main > section')||el;if(panel)panel.hidden=id==='device-levels'?!['overview','traffic'].includes(current):!['overview','runs'].includes(current);}
+for(const id of ['device-levels','overall-progress','summary','topology']){const el=document.getElementById(id);const panel=el?.closest('main > section')||el;if(panel)panel.hidden=id==='device-levels'?!['overview','traffic'].includes(current):current!=='runs';}
 const intro=document.querySelector('.intro');if(intro)intro.hidden=current!=='runs';
 const map=document.querySelector('.lan-particles');if(map){map.hidden=true;map.querySelector('iframe')?.remove();}
 const title=document.querySelector('header h1');title.textContent=current==='overview'?'Global Task Manager':sections[current];

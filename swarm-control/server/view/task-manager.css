@@ -6,9 +6,3 @@ header{height:auto;min-height:86px;padding:18px 28px;flex-wrap:wrap}header nav{d
 .connection-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}.connection-card{border:1px solid #536376;border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:7px;min-width:0;overflow-wrap:anywhere}.connection-card strong{font-size:14px}.connection-card span{font-size:13px;color:#c4cedb}.connection-card small{font-size:12px;color:#a8b5c7}.connection-card[data-state=connected]{border-color:#54b893}.connection-card[data-state=connected] span{color:#a8ecc6}.connection-card[data-state=disconnected] span,.connection-card[data-state=authentication_denied] span{color:#ffc28a}@media(max-width:480px){.connection-grid{grid-template-columns:1fr}}
 
 .wgs-progress progress{width:100%;height:14px;accent-color:#a8ecc6}.wgs-progress details{margin-top:16px}.wgs-progress summary{cursor:pointer;min-height:44px;padding:10px 0}.wgs-storage p{font-size:13px;overflow-wrap:anywhere}.wgs-progress>p{font-size:14px;line-height:1.6}
-/* Compare upload and download without switching directions. */
-#levels-plot.levels-network-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;background:transparent}
-.levels-direction-chart{display:flex;flex-direction:column;min-width:0;min-height:0;background:#080f1633;border-radius:8px;overflow:hidden}
-.levels-direction-chart h3{margin:10px 12px 0;font-size:16px;line-height:24px;color:#dce8ef}
-#levels-plot .levels-direction-chart svg{flex:1;min-height:0;height:calc(100% - 34px)}
-@media(max-width:560px){#levels-plot.levels-network-pair{gap:8px}.levels-direction-chart h3{font-size:14px;margin-left:8px}}

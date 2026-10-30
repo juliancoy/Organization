@@ -5,7 +5,7 @@ import {breadcrumbNav,setBreadcrumbs} from './breadcrumbs.js';
 import {cpuColor} from './cpu-colors.js';
 import {hardwareLines} from './hardware.js';
 let host=null,report=null,cpuReport=null,busy=false;
-const panel=document.createElement('section');panel.id='host-terminal';panel.hidden=false;panel.setAttribute('role','region');panel.setAttribute('aria-label','Machine test terminal');
+const panel=document.createElement('section');panel.id='host-terminal';panel.hidden=true;panel.setAttribute('role','region');panel.setAttribute('aria-label','Machine test terminal');
 const heading=document.createElement('strong'),status=document.createElement('p'),output=document.createElement('pre');
 output.tabIndex=0;output.setAttribute('aria-label','Machine terminal output');
 const cpuSummary=document.createElement('p'),grid=document.createElement('div'),legend=document.createElement('div');grid.className='logical-cpu-grid';grid.setAttribute('aria-label','Logical CPU utilization');legend.className='cpu-heat-legend';legend.textContent='0% · Black → Red → Orange → Yellow → White · 100%';
@@ -49,7 +49,7 @@ function openHost(name){
  if(changed){output.textContent='';render();void refresh();}
 }
 export function selectHostTerminal(name){if(name)openHost(name);}
-function dismiss(){host=null;heading.textContent='Machine details';status.textContent='Select a machine.';output.textContent='';grid.replaceChildren();containerGrid.replaceChildren();cpuSummary.textContent='';clearWebsite();selectedContainer=null;containerPanel.hidden=true;}
+function dismiss(){panel.hidden=true;host=null;heading.textContent='Machine details';status.textContent='Select a machine.';output.textContent='';grid.replaceChildren();containerGrid.replaceChildren();cpuSummary.textContent='';clearWebsite();selectedContainer=null;containerPanel.hidden=true;}
 document.addEventListener('click',event=>{const node=event.target.closest('[data-terminal-host]');if(node)selectHostTerminal(node.dataset.terminalHost);});
 setInterval(()=>{if(!panel.hidden&&document.visibilityState==='visible')void refresh();},1000);
 
