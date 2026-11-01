@@ -1,4 +1,7 @@
 import json
+import base64
+import hashlib
+import subprocess
 import io
 import tarfile
 from pathlib import Path
@@ -11,6 +14,44 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from launcher_agent import browser_request,Agent
 
 class BrowserTransportTests(unittest.TestCase):
+    def test_cleanup_accepts_concurrent_removal_and_missing_container(self):
+        from docker.errors import APIError, NotFound
+        response=Mock(status_code=409)
+        for error in (NotFound('gone'), APIError('conflict',response=response,
+                     explanation='removal of container '+64*'a'+' is already in progress')):
+            with self.subTest(error=type(error).__name__):
+                container=Mock();container.remove.side_effect=error
+                Agent.remove_container(container)
+                container.remove.assert_called_once_with(force=True)
+
+    def test_cleanup_preserves_unrelated_docker_errors(self):
+        from docker.errors import APIError
+        for status,explanation in ((409,'container is paused'),(500,'daemon unavailable')):
+            with self.subTest(status=status):
+                error=APIError('failure',response=Mock(status_code=status),explanation=explanation)
+                container=Mock();container.remove.side_effect=error
+                with self.assertRaises(APIError):Agent.remove_container(container)
+
+    def test_worker_module_imports_as_a_standalone_bundle(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            worker=Path(temporary)/'worker.py'
+            worker.write_bytes((Path(__file__).resolve().parents[1]/'scripts/launcher_agent.py').read_bytes())
+            subprocess.run([sys.executable,'-I','-c','import runpy,sys; runpy.run_path(sys.argv[1])',str(worker)],check=True,capture_output=True)
+
+    def test_upload_verifies_bytes_without_python_311_file_digest(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            agent=Agent.__new__(Agent);agent.root=Path(temporary)
+            agent.lock=threading.RLock();agent.uploads={};agent.busy=Mock()
+            raw=b'fixture bytes'*100000
+            with patch.object(hashlib,'file_digest',None,create=True):
+                token=agent.upload('upload.begin',{'size':len(raw),'sha256':hashlib.sha256(raw).hexdigest()})['upload']
+                for offset in range(0,len(raw),64*1024):
+                    agent.upload('upload.chunk',{'upload':token,'offset':offset,'data':base64.b64encode(raw[offset:offset+64*1024]).decode()})
+                self.assertTrue(agent.upload('upload.finish',{'upload':token})['verified'])
+                agent.uploads[token]['path'].write_bytes(b'corrupted bytes')
+                with self.assertRaisesRegex(ValueError,'checksum mismatch'):
+                    agent.upload('upload.finish',{'upload':token})
+
     def test_requests_use_the_owned_container_namespace_without_a_shell(self):
         container=Mock();container.exec_run.return_value=(0,b'{"value":{"ready":true}}')
         data={'script':'return "$(do-not-execute)";','args':['x'*(256*1024)]}

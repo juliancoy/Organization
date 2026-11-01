@@ -21,6 +21,13 @@ import time
 import urllib.request
 import urllib.error
 
+def sha256_stream(stream):
+    """Keep hashing available in the standalone worker bundle on Python 3.10."""
+    digest=hashlib.sha256()
+    for chunk in iter(lambda:stream.read(1024*1024),b''):digest.update(chunk)
+    return digest.hexdigest()
+
+
 def persist_job_event(root, ident, job, event):
     """Commit worker events before publishing them, independent of the RAM buffer."""
     import sqlite3
@@ -1083,11 +1090,26 @@ class Agent:
         import docker
         return contextlib.closing(docker.from_env(timeout=120))
 
+    @staticmethod
+    def remove_container(container):
+        """Accept a concurrent Docker removal without masking other failures."""
+        from docker.errors import APIError, NotFound
+        try:
+            container.remove(force=True)
+        except NotFound:
+            pass
+        except APIError as error:
+            if error.status_code != 409 or not re.fullmatch(
+                r'removal of container [a-f0-9]{12,64} is already in progress',
+                error.explanation or '',
+            ):
+                raise
+
     def remove_containers(self, ident):
         with self.client() as client:
             for container in client.containers.list(all=True, filters={'name':'orgportal-test-'+ident+'-'}):
                 if container.name.startswith('orgportal-test-'+ident+'-'):
-                    container.remove(force=True)
+                    self.remove_container(container)
 
     async def handle(self, request):
         import asyncio
@@ -1445,7 +1467,7 @@ class Agent:
             temporary.replace(path)
         def good(path,part):
             if not path.is_file() or path.stat().st_size!=part['size']:return False
-            with path.open('rb') as stream:return hashlib.file_digest(stream,'sha256').hexdigest()==part['sha256']
+            with path.open('rb') as stream:return sha256_stream(stream)==part['sha256']
         with self.lock:
             if op=='backup.status':
                 copies=[]
@@ -1510,7 +1532,7 @@ class Agent:
                 row.update(offset=offset+len(data),updated=time.time())
                 return {'offset':row['offset']}
             if op == 'upload.finish':
-                with row['path'].open('rb') as stream:digest=hashlib.file_digest(stream,'sha256').hexdigest()
+                with row['path'].open('rb') as stream:digest=sha256_stream(stream)
                 if row['offset']!=row['size'] or digest!=row['sha256']:raise ValueError('Upload checksum mismatch')
                 row['complete']=True
                 return {'verified':True}

@@ -209,3 +209,10 @@
 !/scripts/huref_projected_swarm.py
 !/tests/test_huref_evidence.py
 !/tests/test_huref_projected.py
+
+# Containerized enrolled-agent runtime.
+!/scripts/agent_container.py
+!/docs/
+/docs/*
+!/docs/container-agent.md
+!/tests/test_agent_container.py

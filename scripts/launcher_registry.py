@@ -18,6 +18,13 @@ import urllib.request
 import urllib.error
 from urllib.parse import urlsplit
 
+def sha256_stream(stream):
+    """Hash bounded chunks on Python 3.10 workers as well as newer hosts."""
+    digest=hashlib.sha256()
+    for chunk in iter(lambda:stream.read(1024*1024),b''):digest.update(chunk)
+    return digest.hexdigest()
+
+
 PROTOCOL='lifetech-agent.v1'
 CHUNK=4*1024*1024
 CACHE_LOCK=threading.Lock()
@@ -187,7 +194,7 @@ def _cache_publish(cache,temporary,path,media,total):
     if total>2*1024**3:return False
     if os.fstat(temporary.fileno()).st_size!=total:return False
     digest=path.rsplit(':',1)[1]
-    if hashlib.file_digest(temporary,'sha256').hexdigest()!=digest:raise ValueError('Layer cache digest mismatch')
+    if sha256_stream(temporary)!=digest:raise ValueError('Layer cache digest mismatch')
     cache=Path(cache);destination=cache/digest
     (cache/(digest+'.type')).write_text(media)
     os.replace(temporary.name,destination)

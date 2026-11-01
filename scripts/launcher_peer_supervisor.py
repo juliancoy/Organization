@@ -81,10 +81,11 @@ def main():
                         pending=True
                     child=launch(active);started=time.monotonic()
                 elif pending:
+                    # Recovering thousands of durable job records can exceed 45s on HDD nodes.
                     ready=json.loads(marker.read_text()) if marker.exists() else {}
                     if ready.get('folder')==str(active) and time.time()-ready.get('time',0)<15:
                         pending=False;prior=None
-                    elif child.poll() is not None or time.monotonic()-started>45:
+                    elif child.poll() is not None or time.monotonic()-started>180:
                         rejected.add(active);stop_child();active=prior;prior=None;pending=False
                         pointer=releases/'current'
                         if active==base:pointer.unlink(missing_ok=True)
