@@ -193,3 +193,4 @@
 !/docs/
 /docs/*
 !/docs/container-agent.md
+!/tests/test_agent_container.py

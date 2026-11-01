@@ -8,8 +8,12 @@ staging are separate from the long-running agent runtime.
 
 Use a locally verified immutable image ID with Python 3.12 and the dependencies
 from `Dockerfile.launcher`. Verify its Python version and imports before switching.
-The current service supports the system Docker socket and host networking.
-Rootless Docker needs a separate networking migration; the generator rejects it.
+The control container uses the system Docker daemon for actual host networking.
+Use `--worker-socket` to keep jobs on an existing rootless Docker daemon and
+preserve its images, caches and containers. The agent only receives that worker
+socket; its control daemon socket need not be mounted into the container.
+Running the control container itself on rootless Docker is rejected because its
+host network namespace differs from the physical host.
 
 Before switching, close admission using owner maintenance, preserve the prior
 worker preference, and wait for active jobs, preparations, resource leases,
