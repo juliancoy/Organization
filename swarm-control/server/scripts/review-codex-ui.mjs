@@ -47,7 +47,7 @@ export async function reviewCodexUi(output){
     res.end(JSON.stringify(item?{...item,model:'Codex',owner_connected:ownerConnected,messages:[{role:'user',text:'Make the remote workspace easier to scan and use on a phone.'},{role:'assistant',text:'I’ll organize the conversation list, clarify connection status and keep the instruction composer stable while updates arrive.\n\nThe active conversation will stay visible, and your draft will be preserved.'}]}:{threads,next_offset:null,machine:'Fixture workstation',connected:true}));return
    }
    if(url.pathname==='/'){res.setHeader('Content-Type','text/html');res.end('<!doctype html><html lang="en"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Codex UI review</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/codex.css"><body><main><section id="codex-context"></section></main><script type="module" src="/codex.js"></script></body></html>');return}
-   if(!['/wgs-progress.js','/machine-connections.js','/task-manager.js','/task-manager.css','/tests.css','/levels.js','/levels-model.js','/resource-history.js','/cpu-report.js','/snapshot-fetch.js','/docker-downloads.js','/research.css','/research.js','/style.css','/codex.css','/codex.js','/codex-screenshots.js','/codex-voice.js','/codex-queue.js','/swarm-status.css','/swarm-status.js','/swarm-machines.js'].includes(url.pathname)){res.writeHead(404).end();return}
+   if(!['/marked-vendor.js','/message-markdown.js','/wgs-progress.js','/machine-connections.js','/task-manager.js','/task-manager.css','/tests.css','/levels.js','/levels-model.js','/resource-history.js','/cpu-report.js','/snapshot-fetch.js','/docker-downloads.js','/research.css','/research.js','/style.css','/codex.css','/codex.js','/codex-screenshots.js','/codex-voice.js','/codex-queue.js','/swarm-status.css','/swarm-status.js','/swarm-machines.js'].includes(url.pathname)){res.writeHead(404).end();return}
    res.setHeader('Content-Type',url.pathname.endsWith('.js')?'text/javascript':'text/css');res.end(await readFile(join(view,url.pathname.slice(1))))
   }catch(error){res.writeHead(500).end(error.message)}
  })
@@ -70,10 +70,11 @@ export async function reviewCodexUi(output){
   assert.match(await page.locator('#levels-plot path[fill="none"]').first().getAttribute('d'),/L/);
   await page.locator('#task-hosts summary').click();
   assert.match(await page.locator('#task-hosts').textContent(),/Browser checks · running/);
-  for(const [name,value] of [['CPU','42.0%'],['GPU','25.0%'],['GPU memory','40.0%'],['Memory','35.0%'],['Disk','12.0%'],['Network','7.0 Mb/s']]){
+  for(const [name,value] of [['CPU','42.0%'],['GPU','25.0%'],['GPU memory','40.0%'],['Memory','35.0%'],['Disk','12.0%'],['Network','3.0 Mb/s']]){
    await page.getByRole('button',{name,exact:true}).click();
    assert.match(await page.locator('#levels-legend').textContent(),new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
-   assert.equal(await page.locator('#levels-plot svg').count(),1);
+   if(name==='Network')assert.match(await page.locator('#levels-legend').textContent(),/Receive4\.0 Mb\/s/);
+   assert.equal(await page.locator('#levels-plot svg').count(),name==='Network'?2:1);
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   }
   await page.screenshot({path:join(output,`task-manager-${width}.png`),fullPage:true});
@@ -85,7 +86,7 @@ export async function reviewCodexUi(output){
   assert.equal(await page.locator('#task-hosts').textContent(),'');
   statusUnauthorized=false;
   await page.waitForFunction(()=>document.querySelector('#levels-status')?.textContent.startsWith('Updated'),{},{timeout:10000});
-  assert.match(await page.locator('#levels-legend').textContent(),/7.0 Mb/);
+  assert.match(await page.locator('#levels-legend').textContent(),/3.0 Mb/);
   if(process.env.TASK_MANAGER_ONLY){assert.deepEqual(errors,[]);results.push({width,status:'passed',checks:['history-restored-after-reload','six-resources','session-expiry','same-origin-feed','no-overflow']});await context.close();continue;}
   resourceRequests.length=0;
   await page.goto(base+'/research.html');await page.getByText('214 / 214',{exact:true}).waitFor()
@@ -133,7 +134,7 @@ export async function reviewCodexUi(output){
   await page.getByRole('searchbox').fill('release');assert.equal(await page.locator('.codex-thread:visible').count(),1)
   await page.getByRole('searchbox').fill('');await page.locator('.codex-thread').first().click()
   await page.locator('.codex-message').first().waitFor()
-  assert.match(await page.locator('.codex-activity').textContent(),/generating a response/)
+  assert.match(await page.locator('.codex-activity').textContent(),/Codex is working/)
   assert.equal(await page.getByRole('button',{name:'Send instruction',exact:true}).isDisabled(),true)
   assert.equal(await page.locator('.codex-thread-info h2').textContent(),'Improve the remote control workspace')
   assert.equal(await page.locator('.codex-thread').first().locator('strong').textContent(),'Improve the remote control workspace')
