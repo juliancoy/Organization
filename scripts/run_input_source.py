@@ -39,14 +39,15 @@ def main():
     address=endpoint['address'];port=endpoint['port']
     if not ipaddress.ip_address(address).is_private or not 1024<=port<=65535:raise ValueError('LAN input endpoint required')
     objects={j['spec']['source_md5']:j['spec'] for j in auth['jobs']}
-    allowed=set(auth.get('cache_peers',{}))|{auth['worker']}
+    allowed=set(auth.get('cache_peers',{}))|{auth['worker'],auth['source']}
     fingerprints={hashlib.sha256(x509.load_pem_x509_certificate(peer.manifest['nodes'][name]['certificate'].encode()).public_bytes(serialization.Encoding.DER)).hexdigest() for name in allowed}
     cache=None
     if args.cache_only:
-        from run_input_cache import InputCache
+        from run_input_cache import InputCache,ram_cache
         if auth.get('cache_module_sha256')!=w.digest(Path(__file__).with_name('run_input_cache.py')):raise ValueError('Cache code differs from authorization')
-        cache=InputCache(Path.home()/'.cache/swarm-control/inputs')
+        cache=ram_cache(auth['input_cache']['budget_bytes']) if auth.get('input_cache',{}).get('tier')=='ram' else InputCache(Path.home()/'.cache/swarm-control/inputs')
     class Handler(http.server.BaseHTTPRequestHandler):
+        protocol_version='HTTP/1.1'
         def log_message(self,*args):pass
         def do_GET(self):
             try:

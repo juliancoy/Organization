@@ -79,6 +79,17 @@ def project_status(network, tests):
                           for host in run.get('hosts', [])[:64]]}}
 
 
+def read_resources():
+    """Fixed local monitor destination; identity checks remain at the owner API."""
+    with urlopen(Request('http://127.0.0.1:8795/api/resources'), timeout=4) as response:
+        raw=response.read(MAX_COORDINATOR_SNAPSHOT_BYTES+1)
+    if len(raw)>MAX_COORDINATOR_SNAPSHOT_BYTES:raise ValueError('Resource snapshot exceeded size limit')
+    value=json.loads(raw)
+    if not isinstance(value,dict) or not isinstance(value.get('hosts'),list):raise ValueError('Invalid resource snapshot')
+    # The resource service already bounds details, omits argv and projects history.
+    return {key:value[key] for key in ('hosts','history','history_window_seconds') if key in value}
+
+
 def task_manager():
     """Resource measurements for the same authenticated owner on any network."""
     network = read_coordinator('/api/devices?resolve=0')
@@ -117,7 +128,9 @@ def task_manager():
     progress = (tests.get('run') or {}).get('image_progress')
     if isinstance(progress, dict):
         run['image_progress'] = pick(progress, 'image phase source destination updated transfer_phase eta_seconds bytes_total bytes_completed bytes_per_second')
-    return {'network': data, 'metrics': summary, 'run': run}
+    try:resources=read_resources()
+    except (OSError,ValueError):resources={'hosts':[],'history':[],'status':'unavailable'}
+    return {'network': data, 'metrics': summary, 'resources': resources, 'run': run}
 
 
 def research_jobs(body=None):

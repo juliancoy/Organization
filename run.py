@@ -18,18 +18,20 @@ def launch_container(args):
     """Keep the local launcher visible alongside the services it starts."""
     from tempfile import TemporaryDirectory
     import shutil
-    name = ('lifetech' if args.prefix == 'bmoremedtech-' else args.prefix.rstrip('-') or 'local') + '-launcher'
-    image = 'organization-launcher:webrtc-1'
+    name = 'swarm-node'
+    for legacy in ('lifetech-launcher','lifetech-launcher-session'):
+        if subprocess.run(['docker','inspect',name],capture_output=True).returncode==0:break
+        if subprocess.run(['docker','inspect',legacy],capture_output=True).returncode==0:
+            subprocess.run(['docker','rename',legacy,name],check=True);break
+    image = 'organization-swarm-node:1'
     existing = subprocess.run(['docker', 'inspect', '--format', '{{.State.Running}}', name], capture_output=True, text=True)
     if existing.returncode == 0 and existing.stdout.strip() == 'true' and not args.recreate_launcher:
         print(f'{name} is already running. View its output with: docker logs -f {name}')
         if args.login:
             container_login(args, name)
         return 0
-    with TemporaryDirectory(prefix='organization-launcher-') as folder:
-        shutil.copyfile(ROOT / 'Dockerfile.launcher', Path(folder) / 'Dockerfile')
-        from docker_utils import build_image
-        build_image(image,folder)
+    from scripts.swarm_node import build_node_image
+    build_node_image(image)
     if existing.returncode == 0:
         subprocess.run(['docker', 'rm', '--force', name], check=True)
     # The full launcher takes over the peer port from a test-initialized session.
@@ -39,7 +41,7 @@ def launch_container(args):
     command = ['docker', 'run', '--pull=never', '--detach', '--init', '--name', name, '--restart', 'unless-stopped',
                '--log-opt', 'max-size=5m', '--log-opt', 'max-file=3',
                '--network', 'host', '--user', f'{os.getuid()}:{os.getgid()}', '--group-add', str(socket.stat().st_gid),
-               '--label', 'organization.container-class=launcher', '--label', 'organization.color=biotech-gold',
+               '--label', 'organization.container-class=swarm-node', '--label', 'organization.color=biotech-gold',
                '--mount', f'type=bind,src={ROOT},dst={ROOT}',
                '--mount', f'type=bind,src={socket},dst=/var/run/docker.sock', '--workdir', str(ROOT),
                '--mount', f'type=bind,src={docker_cli},dst=/usr/local/bin/docker,readonly',
@@ -67,7 +69,7 @@ def launch_container(args):
             command += ['--env', key]
     command += [image, 'python', str(ROOT / 'run.py'), '--prefix', args.prefix, '--network', args.network, '--port', str(args.port)]
     subprocess.run(command, check=True)
-    print(f'Launcher: {name}\nConsole: docker logs -f {name}')
+    print(f'Swarm node: {name}\nConsole: docker logs -f {name}')
     if args.login:
         container_login(args, name)
     return 0
@@ -96,7 +98,7 @@ def container_login(args, name):
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--recreate-launcher', action='store_true', help='Recreate the launcher container to load updated code/configuration; keep service containers and data.')
+    parser.add_argument('--recreate-node','--recreate-launcher',dest='recreate_launcher', action='store_true', help='Recreate the swarm-node container to load updated code/configuration; keep service containers and data.')
     parser.add_argument('--worker-mode',choices=['auto','always','paused'],help='Accept jobs on AC power, always, or submit only. Existing jobs finish.')
     parser.add_argument('--swarm',action='store_true',help='Open this launcher’s local swarm controls.')
     parser.add_argument('--peer-register', type=Path, help='Register this machine using a private internet launcher invitation file.')
@@ -245,7 +247,7 @@ def main(argv=None):
     print(f'Local administrator: {ROOT / "local-login"} --admin')
     if os.getenv('ORGANIZATION_LAUNCHER_CONTAINER'):
         Path('/tmp/launcher-ready').touch()
-        print('Startup complete. Launcher is available in the machine container view.')
+        print('Startup complete. Swarm node is available in the machine container view.')
         def shutdown(*_):
             stop_peers()
             sys.exit(0)

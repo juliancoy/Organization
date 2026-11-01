@@ -51,3 +51,26 @@ def test_successful_peer_prioritized_next_time():
     ranges,calls,_=selector(outcomes)
     ranges(0,4);ranges.cooldown.clear();calls.clear()
     assert ranges(0,4)==b'data' and calls[0][0]=='b:cache'
+
+
+def test_persistent_ranges_reuse_authenticated_connection(monkeypatch):
+    from unittest.mock import Mock
+    from scripts import run_cache_peers as module
+    peer=SimpleNamespace(name='worker',manifest={'nodes':{'origin':{'address':'10.42.0.137','port':28981}}},context=Mock(return_value='pinned-context'))
+    response=Mock(status=206);response.getheader.side_effect=lambda k,*args:{'Content-Range':'bytes 0-3/4','Content-Length':'4'}[k];response.read.return_value=b'data'
+    connection=Mock();connection.getresponse.return_value=response;factory=Mock(return_value=connection);monkeypatch.setattr(module.http.client,'HTTPSConnection',factory)
+    ranges=PeerRanges(peer,{'source':'origin'},'a'*32,4,persistent=True)
+    assert ranges(0,4)==b'data' and ranges(0,4)==b'data'
+    factory.assert_called_once_with('10.42.0.137',28981,timeout=60,context='pinned-context')
+    assert connection.request.call_count==2
+    ranges.close();connection.close.assert_called_once()
+
+
+def test_bad_persistent_range_drops_connection(monkeypatch):
+    from unittest.mock import Mock
+    from scripts import run_cache_peers as module
+    peer=SimpleNamespace(name='worker',manifest={'nodes':{'origin':{'address':'10.42.0.137','port':28981}}},context=Mock())
+    connection=Mock();connection.getresponse.return_value.status=200;monkeypatch.setattr(module.http.client,'HTTPSConnection',Mock(return_value=connection))
+    ranges=PeerRanges(peer,{'source':'origin'},'a'*32,4,persistent=True)
+    with pytest.raises(ValueError,match='signed input'):ranges(0,4)
+    connection.close.assert_called_once();assert not ranges.connections

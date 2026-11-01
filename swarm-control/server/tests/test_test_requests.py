@@ -12,6 +12,11 @@ from test_requests import TestRequests
 
 
 class ScopeTests(unittest.TestCase):
+    def test_internal_retry_of_one_build_check_does_not_expand_to_all_component_tests(self):
+        specs={'test':{'base':'web','file':'src/one.test.ts'},'build':{'base':'web','check':'build'}}
+        self.assertEqual(select(list(specs),specs,{'paths':[],'suites':['web'],'task_ids':['build']}),['build'])
+        with self.assertRaises(ValueError):select(list(specs),specs,{'paths':[],'suites':['web'],'task_ids':['absent']})
+
     def setUp(self):
         self.specs = {'one': {'base': 'monitor', 'file': 'tests/test_one.py'},
                       'two': {'base': 'monitor', 'file': 'tests/test_two.py'},

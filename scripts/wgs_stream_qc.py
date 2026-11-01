@@ -106,7 +106,17 @@ def validate_gpu_counts(value,length,request_id=None):
 
 
 def request_gpu_batch(sequence,quality,config):
-    """Private files and one bounded RPC; a failed transaction is never committed."""
+    """One bounded owner-only RPC; inline transport keeps batch payloads in RAM."""
+    if config.get('transport')=='inline':
+        if len(sequence)!=len(quality):raise ValueError('Sequence/quality lengths differ')
+        ident=uuid.uuid4().hex
+        request={'version':1,'request_id':ident,'op':'qc-inline','bases':len(sequence),'verify':config.get('verify',False)}
+        with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
+            client.settimeout(config.get('timeout',10));client.connect(str(Path(config['local_root'])/'service.sock'))
+            client.sendall(json.dumps(request).encode()+b'\n');client.sendall(sequence);client.sendall(quality)
+            with client.makefile('rb') as stream:line=stream.readline(65537)
+        if not line.endswith(b'\n') or len(line)>65536:raise ValueError('Invalid GPU response framing')
+        return validate_gpu_counts(json.loads(line),len(sequence),ident)
     ident=uuid.uuid4().hex;local=Path(config['local_root']);batch=local/'batches';batch.mkdir(mode=0o700,parents=True,exist_ok=True)
     paths=[batch/(ident+'.seq'),batch/(ident+'.qual')]
     try:
@@ -243,7 +253,7 @@ def run_remote(host,item,ident,output,mapping_reserve_mb=0,changed=None,download
         return run_native(host,item,ident,output,changed,STOP,gpu_verify)
     from scripts import genomics_distributed as distributed
     from scripts.wgs_swarm_download import AgentClient,atomic_json,release_after_cleanup
-    name='genomics-'+uuid.uuid4().hex;lease=uuid.uuid4().hex;client=AgentClient(host);done=threading.Event();process=None;errors=[]
+    lease=uuid.uuid4().hex;name='genomics-'+lease;client=AgentClient(host);done=threading.Event();process=None;errors=[]
     gpu_enabled=host.get('gpu_qc') is True or host['host']=='julian-minipc.local'
     memory=qc_memory_mb(min(CHUNK_BYTES,item['bytes']),gpu_parallel=gpu_enabled);report_path=output/(ident+'.json')
     try:
@@ -271,7 +281,7 @@ def run_remote(host,item,ident,output,mapping_reserve_mb=0,changed=None,download
                     except Exception:
                         errors.append('Resource renewal failed');subprocess.run(distributed.shell_command(host,['docker','rm','-f',name]),capture_output=True,timeout=20);return
             finally:other.close()
-        threading.Thread(target=renew,daemon=True).start()
+        if 'docker-workers' not in status.get('capabilities',[]):threading.Thread(target=renew,daemon=True).start()
         def cancel():
             while not done.wait(1):
                 failed=False
@@ -293,7 +303,7 @@ def run_remote(host,item,ident,output,mapping_reserve_mb=0,changed=None,download
             payload['gpu_parallel']=True
             gpu_mount=['--mount','type=bind,src='+gpu_root+',dst=/gpu-qc']
         worker=Path(__file__).read_text()
-        argv=['docker','run','--rm','--pull=never','--name',name,'--label','org.lifetech.genomics=true','--label','org.lifetech.public-wgs-qc=true','--network','none','--read-only','--log-driver','none','--cpus','1','--memory',str(memory)+'m','--memory-swap',str(memory)+'m','--pids-limit','32','--cap-drop','ALL','--security-opt','no-new-privileges','--ulimit','core=0:0','--user',host.get('container_user','1000:1000'),'--mount','type=bind,src='+host['cache']+',dst=/input,readonly',*gpu_mount,'-i',host['image'],'python','-c',worker,'--worker']
+        argv=['docker','run','--rm','--pull=never','--name',name,'--label','org.lifetech.genomics=true','--label','org.lifetech.worker=true','--label','org.lifetech.job='+name.removeprefix('genomics-'),'--label','org.lifetech.group='+GROUP,'--label','org.lifetech.public-wgs-qc=true','--network','none','--read-only','--log-driver','none','--cpus','1','--memory',str(memory)+'m','--memory-swap',str(memory)+'m','--pids-limit','32','--cap-drop','ALL','--security-opt','no-new-privileges','--ulimit','core=0:0','--user',host.get('container_user','1000:1000'),'--mount','type=bind,src='+host['cache']+',dst=/input,readonly',*gpu_mount,'-i',host['image'],'python','-c',worker,'--worker']
         process=subprocess.Popen(distributed.shell_command(host,argv),stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,bufsize=1)
         process.stdin.write(json.dumps(payload));process.stdin.close()
         last={}

@@ -11,8 +11,10 @@ from disk_metrics import DiskSampler
 from resource_history import ResourceHistory
 from gpu_metrics import GpuSampler
 from paths import WORKSPACE
-sys.path.insert(0,str(WORKSPACE/'scripts'))
-from launcher_agent import hardware_sample, ResourceSampler
+from pathlib import Path
+PINNED_SCRIPTS=Path(__file__).resolve().parents[2]/'scripts'
+sys.path.insert(0,str(PINNED_SCRIPTS if PINNED_SCRIPTS.is_dir() else WORKSPACE/'scripts'))
+from launcher_agent import hardware_sample, ResourceSampler, PerformanceCollector
 from distributed import targets
 from agent_client import AgentClient, CONFIG
 
@@ -33,6 +35,7 @@ class CpuMonitor:
         self.disks={}
         self.gpu_samplers={}
         self.sampler=ResourceSampler()
+        self.performance=PerformanceCollector()
         self.activity=activity
         self.network=network
         self.telemetry_policy=None
@@ -42,6 +45,7 @@ class CpuMonitor:
         try:
             if local:
                 values=self.sampler.sample()
+                values['performance']=self.performance.sample()
                 hardware=hardware_sample(disk=WORKSPACE)
                 try:
                     config=json.loads(CONFIG.read_text())
@@ -96,6 +100,8 @@ class CpuMonitor:
             host.update(activity.get(host['host'],{'running_test_jobs':0,'scheduled_cpu_slots':0,'workload_phase':'idle' if activity_status=='available' else 'unknown'}))
             if host['sample_age_seconds']>15:
                 host.update(status='stale',percent=None,logical_cpus=[],ram_percent=None,disk_busy_percent=None,network_mbps=None)
+            if host.get('performance'):
+                host['performance']={**host['performance'],'stale':now-host['performance'].get('sampled_at',0)>15}
             if host.get('hardware'):
                 host['hardware']={**host['hardware'],'stale':now-host['hardware'].get('sampled_at',host['sampled_at'])>15}
         live=[h for h in hosts if h['status']=='live' and h.get('percent') is not None]

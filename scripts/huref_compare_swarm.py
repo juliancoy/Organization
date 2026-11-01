@@ -45,16 +45,17 @@ if h['image']!=auth['comparison_image_ids'][peer.name]:
  fingerprint=hashlib.sha256(json.dumps(content,sort_keys=True,separators=(',',':')).encode()).hexdigest()
  if fingerprint!=auth.get('comparison_image_fingerprints',{}).get(peer.name):raise ValueError('Unapproved comparison image')
 runtime=(config.parent/'input-releases/current').resolve();sys.path.insert(0,str(runtime))
-from scripts.run_input_cache import InputCache,CachedInput
+from scripts.run_input_cache import InputCache,CachedInput,ram_cache
 from scripts.run_cache_peers import PeerRanges
 if w.digest(runtime/'scripts/run_input_cache.py')!=auth['cache_module_sha256'] or w.digest(runtime/'scripts/run_cache_peers.py')!=auth['peer_selector_sha256']:raise ValueError('Unapproved cache runtime')
 source=auth['source'];peer.manifest['nodes'][source]={**peer.manifest['nodes'][source],'address':auth['source_address'],'port':auth['source_port']}
-s=job['spec'];ranges=PeerRanges(peer,auth,s['source_md5'],s['bytes'])
-stream=CachedInput(InputCache(pathlib.Path.home()/'.cache/swarm-control/inputs'),s['source_md5'],s['bytes'],ranges)
-command=['docker','run','--rm','--pull=never','--name',h['container'],'--label','org.lifetech.genomics=true','--label','org.lifetech.huref-comparison='+auth['id'],'--network','none','--read-only','--log-driver','none','--cpus',str(h['cpus']),'--memory-reservation',str(h['memory_mb'])+'m','--pids-limit','32','--cap-drop','ALL','--security-opt','no-new-privileges','--ulimit','core=0:0','--ulimit','memlock=-1:-1','--tmpfs','/work:rw,nosuid,nodev,size='+str(h['host_memory_mb'])+'m,mode=0700','-i',h['image'],'python3','-c',h['worker']]
+s=job['spec'];ranges=PeerRanges(peer,auth,s['source_md5'],s['bytes'],persistent=True)
+cache=ram_cache(auth['input_cache']['budget_bytes']) if auth.get('input_cache',{}).get('tier')=='ram' else InputCache(pathlib.Path.home()/'.cache/swarm-control/inputs')
+stream=CachedInput(cache,s['source_md5'],s['bytes'],ranges)
+command=['docker','run','--rm','--pull=never','--name',h['container'],'--label','org.lifetech.genomics=true','--label','org.lifetech.worker=true','--label','org.lifetech.job='+h['container'].removeprefix('genomics-'),'--label','org.lifetech.group='+auth['id'],'--label','org.lifetech.huref-comparison='+auth['id'],'--network','none','--read-only','--log-driver','none','--cpus',str(h['cpus']),'--memory-reservation',str(h['memory_mb'])+'m','--pids-limit','32','--cap-drop','ALL','--security-opt','no-new-privileges','--ulimit','core=0:0','--ulimit','memlock='+str(h.get('memlock_bytes',-1))+':'+str(h.get('memlock_bytes',-1)),'--tmpfs','/work:rw,nosuid,nodev,size='+str(h['host_memory_mb'])+'m,mode=0700','-i',h['image'],'python3','-c',h['worker']]
 p=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=sys.stdout.buffer,stderr=sys.stderr.buffer)
 try:
- header={'chromosome':s['chromosome'],'public_bytes':s['bytes'],'public_sha256':s['sha256'],'private_bytes':s['private_bytes'],'private_sha256':s['private_sha256'],'cpus':h['cpus'],'query_start':s['query_start'],'query_end':s['query_end']}
+ header={'chromosome':s['chromosome'],'public_bytes':s['bytes'],'public_sha256':s['sha256'],'private_bytes':s['private_bytes'],'private_sha256':s['private_sha256'],'cpus':h['cpus'],'query_start':s['query_start'],'query_end':s['query_end'],'method':s.get('method','compare'),'dataset':s.get('dataset','comparison'),'controller_public_key':w.load(config)['controller_public_key'],'job_spec_sha256':hashlib.sha256(w.canonical(s)).hexdigest()}
  p.stdin.write((json.dumps(header)+'\n').encode());buffer=bytearray(1024**2);digest=hashlib.md5();count=0
  while n:=stream.readinto(buffer):p.stdin.write(memoryview(buffer)[:n]);digest.update(memoryview(buffer)[:n]);count+=n
  if count!=s['bytes'] or digest.hexdigest()!=s['source_md5']:raise ValueError('Public input checksum mismatch')
@@ -66,6 +67,7 @@ try:
  p.stdin.close()
  if p.wait()!=0:raise RuntimeError('Comparison container did not validate')
 finally:
+ ranges.close()
  if p.poll() is None:p.kill();p.wait()
 '''
 
@@ -82,8 +84,13 @@ def digest(path,algorithm='sha256'):
 def memory_reservation(spec):
     """Estimate index, resident input and tile scratch bytes; never a hard cap."""
     span=spec['query_end']-spec['query_start']
-    required=8*spec['reference_bases']+2*spec['query_bases']+4*span+4*spec['private_bytes']+spec['bytes']
+    required=spec.get('runtime_overhead_mb',0)*1024**2+8*spec['reference_bases']+2*spec['query_bases']+4*span+4*spec['private_bytes']+spec['bytes']
     return max(1,(required+1024**2-1)//1024**2)
+
+
+def cpu_reservation(spec,capacity):
+    cpus=1 if spec.get('method') in ('normalize','representation','callability','receipt-audit','sv-scope') else int(spec.get('cpus',2))
+    return min(cpus,max(0,int(capacity.get('available_cpus',0))))
 
 
 def region_jobs(jobs,lengths,reference_lengths,span=40*1024**2):
@@ -238,35 +245,87 @@ class Comparison:
         save(self.folder/'workers.json',[{k:v for k,v in h.items() if k not in ('ssh','_image_ready')} for h in self.hosts])
 
     def serving(self,ready):
-        m=self.peer.manifest;worker=(ROOT/'scripts/huref_compare_worker.py').read_text();self.worker=worker
-        auth={'schema':'venter-stream-offload.v1','id':self.state['id'],'parent_run':m['id'],'worker':self.peer.name,'source':self.peer.name,
-              'created':time.time()-5,'expires':m['expires'],'jobs':ready['jobs'],'source_files':ready['source_files'],
-              'source_address':m['nodes'][self.peer.name]['address'],'source_port':28981,
+        m=self.peer.manifest;worker=getattr(self,'worker_source',None) or (ROOT/'scripts/huref_compare_worker.py').read_text();self.worker=worker
+        origin='julian-latitude.local'
+        source_files=self.stage_public_origin(ready,origin)
+        auth={'schema':'venter-stream-offload.v1','id':self.state['id'],'parent_run':m['id'],'worker':self.peer.name,'source':origin,
+              'created':time.time()-5,'expires':m['expires'],'jobs':ready['jobs'],'source_files':source_files,
+              'source_address':m['nodes'][origin]['address'],'source_port':28981,
+              'input_cache':{'tier':'ram','budget_bytes':512*1024**2},
               'source_module_sha256':self.w.digest(ROOT/'scripts/run_input_source.py'),
               'cache_module_sha256':self.w.digest(ROOT/'scripts/run_input_cache.py'),
               'peer_selector_sha256':self.w.digest(ROOT/'scripts/run_cache_peers.py'),
               'comparison_worker_sha256':hashlib.sha256(worker.encode()).hexdigest(),
               'comparison_image_ids':{h['host']:h['compare_image'] for h in self.hosts},
               'comparison_image_fingerprints':{h['host']:self.image_fingerprint for h in self.hosts},
-              'cache_peers':{h['host']:{'address':m['nodes'][h['host']]['address'],'port':38981} for h in self.hosts if h['host']!=self.peer.name}}
+              'cache_peers':{h['host']:{'address':m['nodes'][h['host']]['address'],'port':38981} for h in self.hosts if h['host']!=origin}}
         envelope=rm.sign(auth,self.w);self.auth=auth;self.delegation='comparison-delegation.json'
         files={name:__import__('base64').b64encode((ROOT/'scripts'/name).read_bytes()).decode() for name in ('run_input_source.py','run_input_cache.py')}
         payload={**files,'stream-delegation.json':__import__('base64').b64encode(self.w.canonical(envelope)).decode(),'delegation_file':self.delegation}
         for host in self.hosts:
-            name=host['host'];p={**payload,'root':m['nodes'][name]['root'],'unit':'run-input-comparison-origin.service' if host['local'] else 'run-input-comparison-cache.service','cache_only':not host['local']}
+            name=host['host'];p={**payload,'root':m['nodes'][name]['root'],'unit':'run-input-comparison-origin.service' if name==origin else 'run-input-comparison-cache.service','cache_only':name!=origin}
             subprocess.run(self.updater.command(host,rm.INSTALL_SOURCE),input=self.w.canonical(p),stdout=subprocess.DEVNULL,check=True,timeout=60)
             restart='import subprocess;subprocess.run('+repr(['systemctl','--user','restart'])+'+'+repr([p['unit']])+',check=True)'
             subprocess.run(self.updater.command(host,restart),check=True,timeout=30)
+            obsolete='run-input-comparison-cache.service' if name==origin else 'run-input-comparison-origin.service'
+            subprocess.run(self.updater.command(host,'import subprocess;subprocess.run('+repr(['systemctl','--user','disable','--now',obsolete])+',stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)'),check=True,timeout=30)
         return auth
+
+    def stage_public_origin(self,ready,origin):
+        """Place only checksum-pinned public bundles on the Latitude source SSD."""
+        host=next(h for h in self.hosts if h['host']==origin)
+        specs={job['spec']['source_md5']:job['spec'] for job in ready['jobs']}
+        rows={key:{'bytes':specs[key]['bytes'],'sha256':specs[key]['sha256']} for key in ready['source_files']}
+        code=r'''import hashlib,json,os,pathlib,shutil,sys
+rows=json.loads(sys.stdin.buffer.readline());root=pathlib.Path.home()/'.cache/swarm-control/huref-public';root.mkdir(parents=True,exist_ok=True,mode=0o700)
+def sha256(path):
+ h=hashlib.sha256()
+ with path.open('rb') as stream:
+  while data:=stream.read(1024**2):h.update(data)
+ return h.hexdigest()
+needed=[]
+for key,row in rows.items():
+ if len(key)!=32 or any(c not in '0123456789abcdef' for c in key):raise ValueError('Invalid public object')
+ path=root/(key+'.tar.gz')
+ if not path.exists() or path.stat().st_size!=row['bytes'] or sha256(path)!=row['sha256']:needed.append(key)
+if shutil.disk_usage(root).free<sum(rows[k]['bytes'] for k in needed)+1024**3:raise RuntimeError('Public origin needs SSD space')
+print(json.dumps(needed),flush=True)
+for key in needed:
+ path=root/(key+'.partial');remaining=rows[key]['bytes'];h=hashlib.sha256()
+ with path.open('wb') as out:
+  while remaining:
+   data=sys.stdin.buffer.read(min(1024**2,remaining))
+   if not data:raise ValueError('Truncated public bundle')
+   out.write(data);h.update(data);remaining-=len(data)
+ if h.hexdigest()!=rows[key]['sha256']:path.unlink();raise ValueError('Public bundle checksum mismatch')
+ path.chmod(0o600);path.replace(root/(key+'.tar.gz'))
+receipts={}
+for key in rows:
+ path=root/(key+'.tar.gz');st=path.stat();receipts[key]={'path':str(path),**{k:getattr(st,k) for k in ('st_size','st_mtime_ns','st_ctime_ns','st_ino','st_dev')}}
+print(json.dumps(receipts),flush=True)
+'''
+        process=subprocess.Popen(self.updater.command(host,code),stdin=subprocess.PIPE,stdout=subprocess.PIPE)
+        try:
+            process.stdin.write((json.dumps(rows)+'\n').encode());process.stdin.flush()
+            needed=json.loads(process.stdout.readline())
+            if not isinstance(needed,list) or any(key not in rows for key in needed):raise ValueError('Invalid public staging response')
+            for key in needed:
+                with Path(ready['source_files'][key]['path']).open('rb') as source:shutil.copyfileobj(source,process.stdin,1024**2)
+            process.stdin.close();receipts=json.loads(process.stdout.readline())
+            if process.wait(timeout=30) or set(receipts)!=set(rows):raise RuntimeError('Public origin staging failed')
+            return receipts
+        finally:
+            if process.poll() is None:process.kill();process.wait()
 
     def execute(self,host,job):
         if host.get('_image_error'):raise RuntimeError(host['_image_error'])
         if not host['_image_ready'].is_set():raise distributed.CapacityWait('Worker image is preparing; ready workers continue')
-        ident=job['id'];s=job['spec'];client=AgentClient(host);lease=uuid.uuid4().hex;name='genomics-'+uuid.uuid4().hex
+        ident=job['id'];s=job['spec'];client=AgentClient(host);lease=uuid.uuid4().hex;name='genomics-'+lease
         renew_done=threading.Event();errors=[];process=None;admitted=False;monitor=None
         try:
+            status=client.call('status')
             capacity=client.call('resource.capacity',{'group':self.state['id']})
-            memory_mb=memory_reservation(s);cpus=min(2,capacity.get('available_cpus',0))
+            memory_mb=memory_reservation(s);cpus=cpu_reservation(s,capacity)
             if cpus<1 or memory_mb>capacity['available_mb']:raise distributed.CapacityWait('Waiting for data-sized CPU/RAM reservation')
             request={'id':lease,'group':self.state['id'],'cpus':cpus,'memory_mb':memory_mb,'container':name}
             if not client.call('resource.acquire',request)['acquired']:raise distributed.CapacityWait('Waiting for data-sized CPU/RAM reservation')
@@ -281,11 +340,11 @@ class Comparison:
                             try:other.call('resource.renew',{'id':lease},timeout=15)
                             except Exception:errors.append('Lease renewal failed');return
                 finally:other.close()
-            threading.Thread(target=renew,daemon=True).start()
+            if 'docker-workers' not in status.get('capabilities',[]):threading.Thread(target=renew,daemon=True).start()
             with self.lock:
                 self.state['jobs'][ident]={'status':'running','query_bases':s['query_end']-s['query_start'],'worker':host['host'],'started':time.time(),'container':name,'lease_id':lease,'memory_reservation_mb':memory_mb,'hard_memory_cap':False,'cpus':cpus};self.publish()
             header={'root':self.peer.manifest['nodes'][host['host']]['root'],'delegation':self.delegation,'job':ident,
-                    'worker':self.worker,'image':host['compare_image'],'container':name,'memory_mb':memory_mb,'host_memory_mb':capacity['memory_mb'],'cpus':cpus}
+                    'worker':self.worker,'image':host['compare_image'],'container':name,'memory_mb':memory_mb,'host_memory_mb':capacity['memory_mb'],'cpus':cpus,'memlock_bytes':host.get('memlock_bytes',-1)}
             result=self.folder/(ident+'.result.json');error=self.folder/(ident+'.stderr')
             with result.with_suffix('.partial').open('wb') as out,error.open('wb') as err:
                 process=subprocess.Popen(distributed.shell_command(host,['python3','-c',HELPER]),stdin=subprocess.PIPE,stdout=out,stderr=err)
@@ -304,15 +363,16 @@ class Comparison:
                                 self.publish()
                 monitor=threading.Thread(target=observe,daemon=True);monitor.start()
                 process.stdin.write((json.dumps(header)+'\n').encode())
-                with (self.folder/'prepared'/(s['chromosome']+'.julian.vcf.gz')).open('rb') as private:shutil.copyfileobj(private,process.stdin,1024**2)
+                with (self.folder/'prepared'/s.get('private_file',s['chromosome']+'.julian.vcf.gz')).open('rb') as private:shutil.copyfileobj(private,process.stdin,1024**2)
                 process.stdin.close()
                 if process.wait() or errors:raise RuntimeError('Comparison worker failed; private diagnostic retained')
             data=json.loads(result.with_suffix('.partial').read_text())
             if data['public_sha256']!=s['sha256'] or data['private_sha256']!=s['private_sha256'] or data['chromosome']!=s['chromosome'] or data['query_start']!=s['query_start'] or data['query_end']!=s['query_end']:raise ValueError('Result identity mismatch')
+            if s.get('method') and data.get('job_spec_sha256')!=hashlib.sha256(self.w.canonical(s)).hexdigest():raise ValueError('Recipe spec identity mismatch')
             result.with_suffix('.partial').replace(result)
             receipt={'schema':'huref-comparison-result.v1','run':self.state['id'],'job':ident,'worker':host['host'],
                      'machine':host['machine'],'image':host['compare_image'],'worker_sha256':self.auth['comparison_worker_sha256'],
-                     'public_sha256':s['sha256'],'private_sha256':s['private_sha256'],'query_start':s['query_start'],'query_end':s['query_end'],'memory_reservation_mb':memory_mb,'hard_memory_cap':False,'output_sha256':digest(result),'time':time.time()}
+                     'public_sha256':s['sha256'],'private_sha256':s['private_sha256'],'query_start':s['query_start'],'query_end':s['query_end'],'memory_reservation_mb':memory_mb,'hard_memory_cap':False,'job_spec_sha256':hashlib.sha256(self.w.canonical(s)).hexdigest(),'output_sha256':digest(result),'time':time.time()}
             save(self.folder/(ident+'.receipt.json'),rm.sign(receipt,self.w))
             with self.lock:self.state['jobs'][ident].update(status='completed',finished=time.time());self.publish()
         finally:
@@ -334,7 +394,12 @@ class Comparison:
                       'public_sha256':spec['sha256'],'private_sha256':spec['private_sha256'],
                       'query_start':spec['query_start'],'query_end':spec['query_end'],
                       'output_sha256':digest(self.folder/(job['id']+'.result.json'))}
-            return all(value.get(k)==v for k,v in expected.items()) and value.get('image')==self.auth['comparison_image_ids'].get(value.get('worker'))
+            if spec.get('method'):expected['job_spec_sha256']=hashlib.sha256(self.w.canonical(spec)).hexdigest()
+            images={self.auth['comparison_image_ids'].get(value.get('worker'))}
+            # Engine-specific image IDs may differ despite verified identical contents.
+            for host in self.hosts:
+                if host['host']==value.get('worker') and host['_image_ready'].is_set():images.add(host['compare_image'])
+            return all(value.get(k)==v for k,v in expected.items()) and value.get('image') in images
         except (OSError,ValueError,KeyError):return False
 
     def publish(self):

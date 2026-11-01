@@ -27,15 +27,25 @@ def task_view(task):
     if children:
         states = [c.get('status') for c in children]
         if all(s in ('completed', 'passed', 'reused', 'verified') for s in states):
-            result['status'] = 'completed'
+            result['status'] = 'partial' if task.get('status')=='partial' else 'completed'
         elif any(s in ('failed', 'error', 'conflict', 'timed_out', 'interrupted') for s in states):
             result['status'] = 'failed'
         elif any(s in ('running', 'active', 'transferring', 'starting', 'streaming') for s in states):
             result['status'] = 'running'
         elif all(s == 'not scheduled' for s in states):
             result['status'] = 'not scheduled'
+        elif any(s=='waiting_inputs' for s in states) and all(s in ('completed','passed','reused','verified','waiting_inputs','partial') for s in states):
+            result['status'] = 'partial' if task.get('status')=='partial' else 'waiting_inputs'
+        elif any(s=='partial' for s in states) and all(s in ('completed','passed','reused','verified','partial') for s in states):
+            result['status']='partial'
         elif task.get('status') not in ('failed', 'interrupted', 'partial', 'preparing', 'not scheduled'):
             result['status'] = 'waiting' if any(s in ('waiting', 'blocked', 'waiting_capacity') for s in states) else 'queued'
+        blockers=[]
+        for child in children:
+            blockers.extend(child.get('input_blockers',[]))
+            if child.get('status')=='waiting_inputs' and not child.get('input_blockers'):
+                blockers.append(child.get('detail') or child.get('name') or 'Required evidence is missing')
+        if blockers:result['input_blockers']=list(dict.fromkeys(blockers))
         # Bounded sibling work items supply a rough stage estimate only after
         # verified completions. Never extrapolate this over workflow dependencies.
         timed=[c for c in children if c.get('attempt_started') and c.get('elapsed_seconds') is not None]

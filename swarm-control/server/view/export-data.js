@@ -7,7 +7,7 @@ export async function collectDashboardData(read, settings = {}, browserObservati
     catch (error) { errors.push({ source: path, error: String(error.message || error) }); return null; }
   };
   const started = new Date().toISOString();
-  const [network, tests] = await Promise.all([get('/api/devices?resolve=0'), get('/api/distributed-tests')]);
+  const [network, tests, resources] = await Promise.all([get('/api/devices?resolve=0'), get('/api/distributed-tests'), get('/api/resources')]);
   const reports = tests?.run ? [tests.run] : [];
   const pending = (tests?.history || []).filter(item => item.id !== tests.run?.id);
   // Bound concurrent requests while including every retained report.
@@ -23,12 +23,14 @@ export async function collectDashboardData(read, settings = {}, browserObservati
     complete: errors.length === 0,
     scope: {
       network: 'Full current collector response, including retained device history, perspectives, router observations, traffic, DNS and geography. Unknown, stale and unavailable observations retain their original labels.',
+      resources: 'Latest bounded enrolled-node CPU, memory, GPU, disk, socket and LAN observations, with aggregate five-minute histories. Per-record timestamps and scope apply.',
       application_tests: 'Every retained test report, including job status, phases, exit codes, durations, exact source hashes and bounded log tails. Not just the selected host, filtered graph, or latest run.',
       limits: { test_retention_days: tests?.retention_days ?? 30, test_run_limit: 100, test_log_lines_per_job: 80, traffic: 'Collector retention applies; expired observations and packet payloads are not available.' },
       credentials: 'No private SSH keys, passwords, deployment credentials, raw browser storage, or configuration files are read. Export is copied locally; nothing is sent to an LLM service.',
       consistency: 'Live observations may change during collection; original per-record timestamps are included.',
     },
     network,
+    resources,
     application_tests: tests ? { running: tests.running, current_run_id: tests.run?.id ?? null, history: tests.history, reports } : null,
     browser: { map_settings: settings, benchmark_status_text: browserObservation },
     collection_errors: errors,

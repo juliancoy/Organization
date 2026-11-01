@@ -23,6 +23,7 @@ ASSETS.update({'/swarm-status':'swarm-status.html','/swarm-status.js':'swarm-sta
 ASSETS.update({'/research': 'research.html', '/research.html': 'research.html', '/research.js': 'research.js', '/research.css': 'research.css'})
 ASSETS.update({'/'+name: name for name in ('task-manager.html','task-manager.js','task-manager.css','tests.css','levels.js','levels-model.js','resource-history.js','cpu-report.js','snapshot-fetch.js','docker-downloads.js')})
 ASSETS['/task-manager']='task-manager.html'
+ASSETS.update({'/'+name:name for name in ('monitor.js','monitor.css','monitor-model.js')})
 ASSETS.update({'/history':'history.html','/history.html':'history.html','/history.js':'history.js','/history-contributions.js':'history-contributions.js','/history.css':'history.css'})
 ASSETS['/machine-connections.js']='machine-connections.js'
 ASSETS.update({'/'+name:name for name in ('message-markdown.js','marked-vendor.js','marked-LICENSE.txt')})

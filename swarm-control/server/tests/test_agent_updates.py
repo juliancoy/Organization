@@ -43,6 +43,23 @@ class LauncherUpdateTests(unittest.TestCase):
                 self.updates.ensure(self.host,Mock(),{**self.status,'active_jobs':['existing-run']})
         stage.assert_not_called()
 
+    def test_busy_ready_worker_can_be_verified_without_interrupting_work(self):
+        status={**self.status,'active_jobs':['existing-run']}
+        with patch.object(self.updates,'stage') as stage:
+            self.assertIs(self.updates.ensure(self.host,Mock(),status,allow_compatible=True),status)
+        stage.assert_not_called()
+        self.assertEqual(self.host['launcher_update']['status'],'deferred')
+
+    def test_idle_compatible_worker_does_not_wait_for_an_update(self):
+        with patch.object(self.updates,'stage') as stage:
+            self.assertIs(self.updates.ensure(self.host,Mock(),self.status,allow_compatible=True),self.status)
+        stage.assert_not_called()
+        self.assertEqual(self.host['launcher_update']['status'],'deferred')
+
+    def test_busy_unready_worker_is_not_admitted_as_compatible(self):
+        with self.assertRaisesRegex(RuntimeError,'busy'):
+            self.updates.ensure(self.host,Mock(),{**self.status,'ready':False,'active_jobs':['run']},allow_compatible=True)
+
     def test_replacement_machine_cannot_pass_update_readiness(self):
         client=Mock();client.call.return_value={**self.status,'machine':'another','source_revision':self.updates.revision}
         with patch.object(self.updates,'stage'):

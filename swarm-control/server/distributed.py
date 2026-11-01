@@ -50,9 +50,12 @@ def no_remote_shell(target):
     raise RuntimeError('SSH is not an execution transport; provision an authenticated launcher agent')
 
 
-def plan(hosts):
+def plan(hosts,selection=None):
     hosts = copy.deepcopy(hosts)
     for host in hosts:
+        if selection and 'p2p' not in selection.get('suites',[]):
+            host.update(status='queued',suites=[],jobs={})
+            continue
         host.update(status='queued', suites=['p2p'], jobs={
             'p2p': {'name': SUITES['p2p']['name'], 'status': 'queued', 'phase': None, 'logs': []}})
     return hosts
@@ -147,7 +150,7 @@ class DistributedTests:
         with self.lock:
             if self.running:
                 return False
-            hosts = copy.deepcopy(selected_hosts) if selected_hosts is not None else plan(targets())
+            hosts = copy.deepcopy(selected_hosts) if selected_hosts is not None else plan(targets(),selection)
             self.prune()
             self.run = {'id': dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:8],
                         'status': 'preparing', 'started': now(), 'finished': None, 'force':force,
@@ -342,15 +345,15 @@ class DistributedTests:
                     run['excluded_hosts'] = [{'host':h['host'],'stage':h['exclusion_stage'],'reason':h['error']} for h in excluded.values()]
                     self.save()
             reachable = sessions.accessible()
-            alternatives=[h for h in reachable if h['host'] not in run.get('avoid_workers',[])]
-            if alternatives:reachable=alternatives
+            # A previous task failure must not remove an enrolled, reachable
+            # machine from the fleet. Retry placement remains capacity based.
             exclude(hosts,reachable,'preflight')
             hosts = reachable
             images.hosts = hosts
             publish()
             initialized = sessions.verify(hosts) if hosts else []
             exclude(hosts,initialized,'launcher_verification')
-            hosts = initialized if run.get('targeted') else plan(initialized) if initialized else []
+            hosts = initialized if run.get('targeted') else plan(initialized,run.get('selection')) if initialized else []
             images.hosts = hosts
             publish()
             if not hosts:

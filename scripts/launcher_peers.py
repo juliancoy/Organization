@@ -20,7 +20,7 @@ PROTOCOL = 'lifetech-launcher.v1'
 def owner_launcher_url(path=CONFIG):
     """OS-owner launch creates a one-use browser capability; never trust loopback alone."""
     import hashlib
-    path=Path(path);url='http://127.0.0.1:8791/launcher'
+    path=Path(path);url='http://127.0.0.1:8791/swarm-node'
     config=json.loads(path.read_text()) if path.is_file() else {}
     if config.get('master_api') is not True or config.get('name')!=config.get('master','compai.local'):return url
     token=secrets.token_urlsafe(32)
@@ -446,9 +446,9 @@ def main():
     asyncio.run(supervise(path,args.prefix,stopped))
 
 
-LAUNCHER_PAGE = '''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>LifeTech · Swarm</title>
+LAUNCHER_PAGE = '''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Swarm Node</title>
 <style>body{font:16px system-ui;background:#eff5f3;color:#173833;margin:0}main{max-width:900px;margin:auto;padding:32px 20px}h1{font-size:36px;margin:10px 0}h2{font-size:20px}section{background:white;padding:24px;border:1px solid #c6d9d2;border-radius:16px;margin:18px 0}label{display:block;margin:14px 0}button,select,input,textarea{font:inherit;padding:12px;border:1px solid #a4bdb5;border-radius:8px;max-width:100%;box-sizing:border-box}button{background:#17665b;color:white;cursor:pointer;margin:4px 0}input,textarea{width:100%}textarea{min-height:110px}#phone-qr{display:block;max-width:100%;height:auto;margin-top:16px;background:white}#phone-code p{overflow-wrap:anywhere}#wan-service{overflow-wrap:anywhere}.connection-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.connection-grid div{background:#eff5f3;padding:14px;border-radius:10px}.connection-grid strong{display:block;margin-top:6px}.muted{color:#526c65}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}#message{min-height:24px}small{display:block;margin-top:8px}</style>
-<main><span class="muted">LIFETECH LAUNCHER</span><h1>Your place in the swarm</h1><p id="identity">Connecting to your launcher…</p>
+<main><span class="muted">SWARM NODE</span><h1>Swarm Node</h1><p id="identity">Connecting to your launcher…</p>
 <section><h2>Connect from anywhere</h2><p class="muted">Connect this computer to Wi-Fi or Ethernet, then keep the launcher running. Your internet connection joins the swarm automatically.</p><div class="connection-grid"><div>Enrollment<strong id="enrollment">Checking…</strong></div><div>Internet signaling<strong id="signaling">Checking…</strong></div><div>Master WebRTC channel<strong id="master-channel">Checking…</strong></div></div><p id="connections"></p><p id="wan-service" class="muted"></p><p id="relay" class="muted"></p><details><summary>Network interfaces</summary><p id="interfaces" class="muted"></p></details><p><button id="remote">Test remote WebRTC</button> <button id="reconnect">Reconnect internet</button> <button id="check">Check LAN or internet</button></p><p id="connection-result" role="status"></p><details id="enrollment-form"><summary>Join or renew with a device invitation</summary><p>Use the invitation issued for this device by your swarm administrator. Credentials stay on this computer.</p><form id="enroll"><label>Import invitation JSON<input id="invitation-file" type="file" accept="application/json,.json"></label><label>Or paste invitation JSON<textarea id="invitation" autocomplete="off" spellcheck="false" placeholder='{"url":"https://your-signaling-service","token":"…"}'></textarea></label><button>Save invitation &amp; connect</button></form><p id="enrollment-result" role="status"></p></details></section>
 <section id="phone-pairing"><h2>Pair a phone with CompAI</h2><p>Scan a one-time code to control CompAI’s Codex threads from your phone. Your browser stays paired for 30 days.</p><button id="phone-generate" disabled>Generate phone setup code</button><p id="phone-message" role="status">Checking owner launcher…</p><div id="phone-code" hidden><img id="phone-qr" alt="Scan to pair your phone with CompAI" width="280" height="280"><p><a id="phone-link" rel="noreferrer">Open setup link on your phone</a> <button id="phone-copy">Copy setup link</button></p><p id="phone-expiry" role="status"></p><small>Use this only for your own phone. Generating a new code replaces the previous unused code. Bookmark https://compai.lifetech.fyi/ after pairing.</small></div></section>
 <section><h2>Contribute computing power</h2><p><button id="join-worker">Join swarm</button> <button id="pause-worker">Pause new jobs</button></p><label>Worker mode <select id="mode"><option value="auto">Automatic · AC power only</option><option value="always">Always accept jobs</option><option value="paused">Submit only · save battery</option></select></label><p id="power"></p><small class="muted">Already accepted jobs finish. You can submit work in every mode.</small></section>
@@ -647,7 +647,7 @@ class JobGateway:
         from aiohttp import web
         from launcher_agent import worker_policy
         self.local_browser(request)
-        if request.path=='/launcher':
+        if request.path in ('/launcher','/swarm-node'):
             return web.Response(text=LAUNCHER_PAGE,content_type='text/html',headers={'Cache-Control':'no-store','X-Frame-Options':'DENY'})
         try:
             if request.method=='GET':
@@ -726,6 +726,7 @@ class JobGateway:
         app=web.Application(client_max_size=2*1024*1024)
         app.router.add_post('/agent/v1',self.request)
         app.router.add_get('/launcher',self.browser)
+        app.router.add_get('/swarm-node',self.browser)
         app.router.add_get('/launcher/status',self.browser)
         for route in ('policy','request','master','enroll','reconnect','phone-pair','owner-unlock','jobs-stop'):app.router.add_post('/launcher/'+route,self.browser)
         self.runner=web.AppRunner(app,access_log=None);await self.runner.setup()
@@ -882,6 +883,7 @@ async def supervise(path,prefix,stopped):
         for task in gateway.inflight:task.cancel()
         await asyncio.gather(*gateway.inflight,return_exceptions=True)
         await asyncio.to_thread(agent.close)
+        agent.instance_lock.close()
         for _,task in tasks.values():task.cancel()
         await asyncio.gather(*(task for _,task in tasks.values()),return_exceptions=True)
 

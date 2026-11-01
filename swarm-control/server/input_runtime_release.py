@@ -5,7 +5,8 @@ from pathlib import Path
 import subprocess
 
 FILES=('__init__.py','run_inputs.py','run_input_cache.py','run_cache_peers.py','run_input_source.py',
-       'venter_stream_offload.py','run_manager.py','huref_compare_worker.py','huref_compare_swarm.py')
+       'venter_stream_offload.py','run_manager.py','huref_compare_worker.py','huref_compare_swarm.py',
+       'huref_followup_worker.py','huref_followup_swarm.py')
 
 INSTALL=r'''import hashlib,json,os,pathlib,sys,tempfile
 p=json.load(sys.stdin)
@@ -13,7 +14,7 @@ if hashlib.sha256(pathlib.Path('/etc/machine-id').read_bytes()).hexdigest()!=p['
 config=pathlib.Path(os.environ.get('LIFETECH_PEER_CONFIG',str(pathlib.Path.home()/'.config/lifetech-launcher/peers.json')))
 if json.loads(config.read_text())['name']!=p['node']:raise ValueError('Wrong enrolled owner')
 files=p['files']
-expected={'__init__.py','run_inputs.py','run_input_cache.py','run_cache_peers.py','run_input_source.py','venter_stream_offload.py','run_manager.py','huref_compare_worker.py','huref_compare_swarm.py'}
+expected={'__init__.py','run_inputs.py','run_input_cache.py','run_cache_peers.py','run_input_source.py','venter_stream_offload.py','run_manager.py','huref_compare_worker.py','huref_compare_swarm.py','huref_followup_worker.py','huref_followup_swarm.py'}
 if set(files)!=expected:raise ValueError('Incomplete input release')
 manifest={name:hashlib.sha256(text.encode()).hexdigest() for name,text in files.items()}
 revision=hashlib.sha256(json.dumps(manifest,sort_keys=True).encode()).hexdigest()

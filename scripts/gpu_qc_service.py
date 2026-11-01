@@ -18,7 +18,7 @@ def main():
     setup=SETUP.replace("gpu-dna-qc","gpu-qc")
     payload={'machine':host['machine'],'assets':{n:base64.b64encode((assets/n).read_bytes()).decode() for n in names}}
     result=subprocess.run(distributed.shell_command(host,['python3','-c',setup]),input=json.dumps(payload),capture_output=True,text=True,check=True,timeout=25);runtime=json.loads(result.stdout)
-    root=runtime['work'];name='genomics-'+uuid.uuid4().hex;lease=uuid.uuid4().hex;client=AgentClient(host);done=threading.Event();process=None;acquired=False;renew_errors=[]
+    root=runtime['work'];lease=uuid.uuid4().hex;name='genomics-'+lease;client=AgentClient(host);done=threading.Event();process=None;acquired=False;renew_errors=[]
     try:
         status=client.call('status')
         if not distributed.eligible(status) or status['machine']!=host['machine']:raise RuntimeError('Worker policy or identity changed')
@@ -36,9 +36,9 @@ def main():
                     try:other.call('resource.renew',{'id':lease})
                     except Exception as error:renew_errors.append(str(error));STOP.set();return
             finally:other.close()
-        threading.Thread(target=renew,daemon=True).start()
+        if 'docker-workers' not in status.get('capabilities',[]):threading.Thread(target=renew,daemon=True).start()
         command='cd /gpu-qc && glslangValidator -V qc_engine.comp -o qc_engine.spv && glslangValidator -V genome_masks.comp -o genome_masks.spv && gcc -O3 -march=native qc_engine.c -lvulkan -o qc_engine && exec python3 qc_server.py'
-        argv=['docker','run','--rm','--pull=never','--name',name,'--label','org.lifetech.gpu-qc-service=true','--network','none','--read-only','--cpus','1','--memory',str(memory)+'m','--memory-swap',str(memory)+'m','--pids-limit','32','--cap-drop','ALL','--security-opt','no-new-privileges','--user',host.get('container_user',str(runtime['uid'])+':'+str(runtime['gid'])),'--group-add',str(runtime['render_gid']),'--device',runtime['render'],'-e','TMPDIR=/work/tmp','-e','XDG_CACHE_HOME=/work/tmp','-e','GPU_QC_ROOT=/gpu-qc','-e','GPU_QC_HOST_ROOT='+root,'-e','GPU_QC_VERSION='+version,'-e','GPU_QC_MAX_BATCH='+str(max_batch),'--mount','type=bind,src=/usr,dst=/usr,readonly','--mount','type=bind,src='+root+',dst=/work','--mount','type=bind,src='+root+',dst=/gpu-qc','-w','/work',host['image'],'bash','-o','pipefail','-c',command]
+        argv=['docker','run','--rm','--pull=never','--name',name,'--label','org.lifetech.gpu-qc-service=true','--label','org.lifetech.worker=true','--label','org.lifetech.job='+name.removeprefix('genomics-'),'--label','org.lifetech.group='+'gpu-qc-service','--network','none','--read-only','--cpus','1','--memory',str(memory)+'m','--memory-swap',str(memory)+'m','--pids-limit','32','--cap-drop','ALL','--security-opt','no-new-privileges','--user',host.get('container_user',str(runtime['uid'])+':'+str(runtime['gid'])),'--group-add',str(runtime['render_gid']),'--device',runtime['render'],'-e','TMPDIR=/work/tmp','-e','XDG_CACHE_HOME=/work/tmp','-e','GPU_QC_ROOT=/gpu-qc','-e','GPU_QC_HOST_ROOT='+root,'-e','GPU_QC_VERSION='+version,'-e','GPU_QC_MAX_BATCH='+str(max_batch),'--mount','type=bind,src=/usr,dst=/usr,readonly','--mount','type=bind,src='+root+',dst=/work','--mount','type=bind,src='+root+',dst=/gpu-qc','-w','/work',host['image'],'bash','-o','pipefail','-c',command]
         save(status='starting',memory_mb=memory,cpus=1,container=name,socket=root+'/service.sock',max_batch_bytes=max_batch)
         process=subprocess.Popen(distributed.shell_command(host,argv));next_scan=0
         while process.poll() is None and not STOP.wait(1):

@@ -189,13 +189,13 @@ class AgentSessions:
                 if value.get('worker_policy',{}).get('accepting_jobs') is False:
                     host['worker_policy']=value['worker_policy']
                     raise RuntimeError(value['worker_policy']['reason'])
-                value=self.updater.ensure(host,client,value)
+                value=self.updater.ensure(host,client,value,allow_compatible=True)
                 required={'controller-signature','github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','peer-layer-cache','mptcp-transport','file-queue','snapshot-stage','event-wait','shared-resources'}
                 if value.get('protocol')!=PROTOCOL:raise RuntimeError('Agent protocol mismatch after launcher update')
                 if not value.get('ready'):raise RuntimeError('Agent is not ready or is draining for an update')
                 missing=required-set(value.get('capabilities',[]))
                 if missing:raise RuntimeError('Agent capabilities missing: '+', '.join(sorted(missing))+' after launcher update')
-                if value.get('source_revision')!=expected:raise RuntimeError('Launcher update revision verification failed')
+                if value.get('source_revision')!=expected and host.get('launcher_update',{}).get('status')!='deferred':raise RuntimeError('Launcher update revision verification failed')
                 if value.get('worker_policy',{}).get('accepting_jobs') is False:
                     host['worker_policy']=value['worker_policy']
                     raise RuntimeError(value['worker_policy']['reason'])

@@ -57,7 +57,7 @@ def main():
     payload=gzip.compress(json.dumps({'reference_context':context,'context_start':1392581,'start':1393581,'end':1393985}).encode(),mtime=0)
     hosts=distributed.discover();host=next(h for h in hosts if h.get('eligible') and h.get('local'))
     from agent_client import AgentClient
-    client=AgentClient(host);lease=uuid.uuid4().hex;name='genomics-'+uuid.uuid4().hex
+    client=AgentClient(host);lease=uuid.uuid4().hex;name='genomics-'+lease
     acquired=False;done=threading.Event();lease_errors=[];renewer=None
     state={'status':'validating','image':args.image,'worker':host['host'],'code_sha256':hashlib.sha256(source.encode()).hexdigest(),'reference_window_sha256':hashlib.sha256(context.encode()).hexdigest(),'private_sample_genotyped':False,'absence_confirmed':False}
     save_state(folder,state);print('Public-reference assay validation, private diagnostics:',folder,flush=True)
@@ -82,8 +82,9 @@ def main():
         acquired=client.call('resource.acquire',{'id':lease,'group':'genomics-dat1-assay','cpus':1,'memory_mb':2048,'container':name})['acquired']
         if not acquired:raise distributed.CapacityWait('Capacity reservation changed')
         client.call('resource.renew',{'id':lease})
-        renewer=threading.Thread(target=renew,daemon=True);renewer.start()
-        cmd=['docker','run','--pull=never','--name',name,'--label','org.lifetech.genomics=true','-i','--network','none','--read-only','--log-driver','none','--memory','2048m','--memory-swap','2048m','--cpus','1','--pids-limit','64','--cap-drop','ALL','--security-opt','no-new-privileges','--ulimit','core=0:0','--tmpfs','/work:rw,nosuid,nodev,size=512m,mode=1777','--user','1000:1000','-e','HOME=/work','-e','TMPDIR=/work','-e','OPENBLAS_NUM_THREADS=1','-e','OMP_NUM_THREADS=1','-e','PYTHONDONTWRITEBYTECODE=1',args.image,'python','-c',source]
+        if 'docker-workers' not in status.get('capabilities',[]):
+            renewer=threading.Thread(target=renew,daemon=True);renewer.start()
+        cmd=['docker','run','--pull=never','--name',name,'--label','org.lifetech.genomics=true','--label','org.lifetech.worker=true','--label','org.lifetech.job='+name.removeprefix('genomics-'),'--label','org.lifetech.group='+'genomics-dat1-assay','-i','--network','none','--read-only','--log-driver','none','--memory','2048m','--memory-swap','2048m','--cpus','1','--pids-limit','64','--cap-drop','ALL','--security-opt','no-new-privileges','--ulimit','core=0:0','--tmpfs','/work:rw,nosuid,nodev,size=512m,mode=1777','--user','1000:1000','-e','HOME=/work','-e','TMPDIR=/work','-e','OPENBLAS_NUM_THREADS=1','-e','OMP_NUM_THREADS=1','-e','PYTHONDONTWRITEBYTECODE=1',args.image,'python','-c',source]
         result=subprocess.run(cmd,input=payload,capture_output=True,timeout=1200)
         (folder/'worker.stderr').write_bytes(result.stderr)
         inspected=subprocess.run(['docker','inspect','--format','{{json .State}}',name],capture_output=True,text=True,timeout=15)

@@ -2,6 +2,24 @@ import unittest
 from task_progress import peer_task, application_test_task
 
 class TaskProgressTests(unittest.TestCase):
+    def test_focused_preparation_never_claims_p2p_is_selected(self):
+        task=application_test_task({'id':'run','status':'preparing','selection':{'paths':['tests/one.py'],'suites':[]},
+            'hosts':[{'host':'node','session':{'verified':True},'jobs':{'p2p':{'name':'Cross-device WebRTC P2P','status':'queued'}}}]})
+        self.assertEqual(task['children'][0]['id'],'worker-preparation')
+        self.assertEqual(task['children'][0]['status'],'preparing')
+        self.assertIn('1/1 workers verified',task['children'][0]['detail'])
+        self.assertNotIn('p2p',str(task))
+
+    def test_missing_inputs_propagate_without_becoming_queued(self):
+        from task_registry import task_view
+        task=task_view({'status':'partial','children':[{'id':'prepare','status':'queued','children':[
+            {'status':'completed'},{'status':'partial'},{'status':'waiting_inputs','detail':'Full HuRef confidence evidence is missing'}]}]})
+        self.assertEqual(task['status'],'partial')
+        self.assertEqual(task['children'][0]['status'],'waiting_inputs')
+        self.assertEqual(task['input_blockers'],['Full HuRef confidence evidence is missing'])
+        partial=task_view({'status':'partial','children':[{'status':'completed'}]})
+        self.assertEqual(partial['status'],'partial')
+
     def test_stale_worker_cannot_claim_running_or_completion(self):
         manifest={'id':'run','jobs':[{'id':'a','preferred_worker':'peer','spec':{'kind':'bam-read-qc','path':'reads.bam','scope':'QC'}}]}
         state={'node':'peer','time':1,'current_job':'a','completed':['a']}

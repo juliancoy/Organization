@@ -43,7 +43,7 @@ def main():
     source=max(candidates,key=lambda x:x['bytes']);assets=Path(__file__).parent/'gpu-tools';names=['base_counts.c','base_counts.comp','extract_batch.py']
     payload={'machine':host['machine'],'assets':{n:base64.b64encode((assets/n).read_bytes()).decode() for n in names}}
     stage=subprocess.run(distributed.shell_command(host,['python3','-c',SETUP]),input=json.dumps(payload),capture_output=True,text=True,timeout=25,check=True);runtime=json.loads(stage.stdout)
-    name='genomics-'+uuid.uuid4().hex;lease=uuid.uuid4().hex;client=AgentClient(host);done=threading.Event();process=None;renew_errors=[];acquired=False
+    lease=uuid.uuid4().hex;name='genomics-'+lease;client=AgentClient(host);done=threading.Event();process=None;renew_errors=[];acquired=False
     def interrupted(*_):raise KeyboardInterrupt()
     signal.signal(signal.SIGTERM,interrupted)
     try:
@@ -63,9 +63,9 @@ def main():
                         if process:process.terminate()
                         return
             finally:other.close()
-        threading.Thread(target=renew,daemon=True).start()
+        if 'docker-workers' not in status.get('capabilities',[]):threading.Thread(target=renew,daemon=True).start()
         command="trap 'rm -f bases.bin' EXIT; python3 extract_batch.py /input.fastq.gz "+shlex.quote(source['sha256'])+' '+str(args.batch_bytes)+' && glslangValidator -V base_counts.comp -o count.spv && gcc -O3 -march=native base_counts.c -lvulkan -o count && ./count bases.bin count.spv && cat batch.json'
-        argv=['docker','run','--rm','--pull=never','--name',name,'--label','org.lifetech.gpu-qc=true','--network','none','--read-only','--cpus','1','--memory',str(memory)+'m','--memory-swap',str(memory)+'m','--pids-limit','32','--cap-drop','ALL','--security-opt','no-new-privileges','--user',str(runtime['uid'])+':'+str(runtime['gid']),'--group-add',str(runtime['render_gid']),'--device',runtime['render'],'-e','TMPDIR=/work/tmp','-e','XDG_CACHE_HOME=/work/tmp','--mount','type=bind,src=/usr,dst=/usr,readonly','--mount','type=bind,src='+runtime['work']+',dst=/work','--mount','type=bind,src='+source['path']+',dst=/input.fastq.gz,readonly','-w','/work',host['image'],'bash','-o','pipefail','-c',command]
+        argv=['docker','run','--rm','--pull=never','--name',name,'--label','org.lifetech.gpu-qc=true','--label','org.lifetech.worker=true','--label','org.lifetech.job='+name.removeprefix('genomics-'),'--label','org.lifetech.group='+'gpu-qc','--network','none','--read-only','--cpus','1','--memory',str(memory)+'m','--memory-swap',str(memory)+'m','--pids-limit','32','--cap-drop','ALL','--security-opt','no-new-privileges','--user',str(runtime['uid'])+':'+str(runtime['gid']),'--group-add',str(runtime['render_gid']),'--device',runtime['render'],'-e','TMPDIR=/work/tmp','-e','XDG_CACHE_HOME=/work/tmp','--mount','type=bind,src=/usr,dst=/usr,readonly','--mount','type=bind,src='+runtime['work']+',dst=/work','--mount','type=bind,src='+source['path']+',dst=/input.fastq.gz,readonly','-w','/work',host['image'],'bash','-o','pipefail','-c',command]
         process=subprocess.Popen(distributed.shell_command(host,argv),stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True);stdout,stderr=process.communicate(timeout=180)
         if process.returncode or renew_errors:raise RuntimeError('GPU crosscheck failed: '+stderr[-1000:])
         rows=[json.loads(line) for line in stdout.splitlines() if line.startswith('{')];result=validate_result(next(r for r in rows if 'exact_match'in r));batch=next(r for r in rows if 'prefix_batch'in r)

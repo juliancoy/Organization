@@ -181,9 +181,31 @@
 
 !/scripts/huref_compare_worker.py
 !/scripts/huref_compare_swarm.py
+!/scripts/huref_followup_worker.py
+!/scripts/huref_followup_swarm.py
+!/tests/test_huref_followup.py
 !/tests/test_huref_compare_worker.py
 !/genomics/comparison-image/
 !/genomics/comparison-image/Dockerfile
 
 !/scripts/worker_maintenance.py
 !/tests/test_worker_maintenance.py
+!/tests/test_docker_worker_restart.py
+
+!/swarm-node
+!/Dockerfile.swarm-node
+!/scripts/swarm_node.py
+!/tests/test_swarm_node.py
+
+# Built-in swarm-node terminal and headless monitor.
+!/ramtop/
+/ramtop/**/__pycache__/
+/ramtop/*.egg-info/
+/ramtop/preview.svg
+
+# HuRef combined-evidence workers and swarm acceptance tests.
+!/scripts/huref_evidence.py
+!/scripts/huref_projected_worker.py
+!/scripts/huref_projected_swarm.py
+!/tests/test_huref_evidence.py
+!/tests/test_huref_projected.py

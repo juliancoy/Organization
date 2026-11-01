@@ -1,5 +1,6 @@
 import unittest
 import tempfile
+import gzip
 from pathlib import Path
 from scripts.wgs_recall import alignment, allowed_intervals, call_commands, classify, fastq_audit, split_pilot_fastq
 
@@ -36,3 +37,32 @@ class RecallTests(unittest.TestCase):
             counts=split_pilot_fastq(path,Path(folder)/'out')
             self.assertEqual(counts,{'short':1,'long':1})
             self.assertIn('@a', (Path(folder)/'out/short.fastq').read_text())
+
+    def test_gzip_input_stays_compressed_and_preserves_both_read_classes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'reads.fq.gz'
+            short='@short\nACGT\n+\nIIII\n'
+            long='@long\n'+'A'*70+'\n+\n'+'I'*70+'\n'
+            # Concatenated gzip members also occur in streamed archive inputs.
+            path.write_bytes(gzip.compress(short.encode())+gzip.compress(long.encode()))
+            output=Path(folder)/'out'
+            self.assertEqual(split_pilot_fastq(path,output,compressed=True),{'short':1,'long':1})
+            self.assertEqual(sorted(p.name for p in output.iterdir()),['long.fastq.gz','short.fastq.gz'])
+            for name,expected in [('short',short),('long',long)]:
+                with gzip.open(output/(name+'.fastq.gz'),'rt') as stream:
+                    self.assertEqual(stream.read(),expected)
+
+    def test_corrupt_gzip_cannot_complete_split(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'reads.fq.gz'
+            payload=bytearray(gzip.compress(b'@a\nACGT\n+\nIIII\n'))
+            payload[-8]^=1  # CRC corruption must be detected at EOF.
+            path.write_bytes(payload)
+            with self.assertRaises(gzip.BadGzipFile):
+                split_pilot_fastq(path,Path(folder)/'out',compressed=True)
+
+    def test_incomplete_fastq_cannot_complete_compressed_split(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'reads.fq.gz';path.write_bytes(gzip.compress(b'@a\nACGT\n+\n'))
+            with self.assertRaisesRegex(ValueError,'Malformed FASTQ'):
+                split_pilot_fastq(path,Path(folder)/'out',compressed=True)

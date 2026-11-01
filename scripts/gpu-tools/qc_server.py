@@ -3,6 +3,12 @@ import fcntl,json,os,pathlib,re,socket,stat,struct,subprocess,time
 ROOT=pathlib.Path(os.environ.get('GPU_QC_ROOT','/gpu-qc'));HOST_ROOT=pathlib.Path(os.environ.get('GPU_QC_HOST_ROOT',str(ROOT)))
 MAX_BATCH=int(os.environ.get('GPU_QC_MAX_BATCH','16777216'));VERSION=os.environ.get('GPU_QC_VERSION','unknown')
 
+def read_inline(stream,size):
+    if type(size) is not int or not 0<size<=MAX_BATCH:raise ValueError('Inline batch outside admitted bounds')
+    data=stream.read(2*size)
+    if len(data)!=2*size:raise ValueError('Truncated inline GPU batch')
+    return data[:size],data[size:]
+
 
 def read_batch(path):
     candidate=pathlib.Path(path)
@@ -118,7 +124,10 @@ def main():
                         row['timings']['engine_ms']=row['timings']['request_ms'];row['timings']['request_ms']=(time.monotonic()-started)*1000
                         response={**row,'version':1,'request_id':request_id,'backend':'vulkan','validated_backend':True};state['mask_batches']=state.get('mask_batches',0)+1;state['mask_positions']=state.get('mask_positions',0)+row['positions'];save()
                     else:
-                        started=time.monotonic();seq=read_batch(request['sequence_path']);qual=read_batch(request['quality_path']);row=execute(seq,qual,request.get('verify') is True)
+                        started=time.monotonic()
+                        if request.get('op')=='qc-inline':seq,qual=read_inline(stream,request['bases'])
+                        else:seq=read_batch(request['sequence_path']);qual=read_batch(request['quality_path'])
+                        row=execute(seq,qual,request.get('verify') is True)
                         row['timings']['engine_ms']=row['timings']['request_ms'];row['timings']['request_ms']=(time.monotonic()-started)*1000
                         response={**row,'version':1,'request_id':request_id,'backend':'vulkan','validated_backend':True};state['batches']+=1;state['bases']+=row['bases'];save()
                 except (ValueError,KeyError,TypeError,OSError) as error:response={'version':1,'request_id':request_id,'error':str(error)}

@@ -725,3 +725,64 @@ while visible. Estimates cover transfers only; unknown, blocked, stalled and
 stale sources suppress a numeric estimate. Only aggregate operational counts
 are returned, with no reads, genotypes, credentials or source paths. Histories
 warm up in memory after the collector restarts.
+
+## Built-in Swarm Node resource monitor
+
+**http://map.local/monitor.html** selects an enrolled node and exposes its Memory,
+CPU, GPU, Disk, Network and LAN observations. The read-only `/api/resources` feed
+runs as `swarm-control-resources.service` on loopback port 8795 and is proxied by
+map.local under the existing LAN allowlist. It is independent of the job
+coordinator, so resource UI changes do not require restarting active test runs.
+The monitor is linked from the existing map/task pages and included in JSON export.
+
+`swarm-performance.service` collects on each native enrolled node and publishes
+bounded, encrypted, freshness-checked, acknowledged samples to the existing master.
+The full collector is built into the node runtime/image and its atomically
+checksum-covered agent sources. It requires no Textual or psutil dependencies for
+headless collection. `./swarm-node monitor`, `telemetry`, `performance`, `dashboard`
+and `build` expose these components from the public node command.
+
+Deploy node monitor components and an isolated map resource release with:
+
+```bash
+~/global/bin/python swarm-control/server/scripts/deploy-resource-monitor.py
+```
+
+The installer attests machine identity using the authenticated agent, uses the
+existing verified SSH account, stages a digest-checked monitor ZIP, and restarts
+only the monitor service. Busy workers and agents are not restarted. The dashboard
+installer copies the current immutable release, updates the stateless frontend
+and new resource service, and preserves the running coordinator. Deployment
+receipts are stored under `~/.local/state/swarm-control/monitor-*.json`.
+
+Memory bandwidth remains separate from cache events, allocation, faults, swap,
+GPU requests and TCP payload rates. AMD without exposed IMC counters reports
+cache/OS fallback; Intel IMC and mounted resctrl MBM remain supported. Stale
+measurements are not zero. Raw process/socket/client details are bounded in latest
+snapshots; aggregate-only history avoids repeatedly retaining those details.
+
+The Task Manager now embeds the six resource detail tabs and five-minute memory
+read/write graphs. Task-machine entries show live machine DRAM rates and an
+"Inspect machine resources" button; values cover the whole host, not individual
+jobs. The authenticated `/api/v1/swarm/task-manager` response carries `resources`
+from the bounded local monitor feed. Monitor outages leave task activity visible.
+The LAN frontend uses the same fixed read-only path via its LAN-restricted proxy;
+remote access continues through owner authentication.
+
+Deploy this integration without restarting job coordination or workers:
+
+```bash
+~/global/bin/python swarm-control/server/scripts/deploy-task-resources.py
+```
+
+Focused test preparation has no implicit P2P job. Until the selected task catalog
+is ready, the task chart reports worker preparation and the verified/waiting
+machine counts. Workflow stages whose remaining work requires unavailable inputs
+propagate `waiting_inputs`; completed prerequisite audits do not promote a
+scientifically partial stage to full completion.
+
+Automatic retries claim up to 32 due logical tasks sharing the same pinned parent
+run in one transaction. One focused child run prepares those immutable sources
+and shares the selected file queue across the enrolled workers. Dispatch records
+all tickets atomically; results, attempt limits and backoff remain per task. The
+chart separates pending retries, attention-required retries and recovered history.

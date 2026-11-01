@@ -4,6 +4,13 @@ import pytest
 
 spec=importlib.util.spec_from_file_location('gpu_server',Path(__file__).parents[1]/'scripts/gpu-tools/qc_server.py');server=importlib.util.module_from_spec(spec);spec.loader.exec_module(server)
 
+def test_inline_batches_are_bounded_and_cannot_be_truncated():
+    import io
+    assert server.read_inline(io.BytesIO(b'AC!!'),2)==(b'AC',b'!!')
+    for size in (0,-1,True,server.MAX_BATCH+1):
+        with pytest.raises(ValueError,match='bounds'):server.read_inline(io.BytesIO(),size)
+    with pytest.raises(ValueError,match='Truncated'):server.read_inline(io.BytesIO(b'AC!'),2)
+
 
 def test_private_batch_reader_rejects_escape_symlinks_modes_and_oversize(tmp_path,monkeypatch):
     root=tmp_path/'gpu-qc';batch=root/'batches';batch.mkdir(parents=True);data=batch/'batch.seq';data.write_bytes(b'ACGTN');data.chmod(0o600)

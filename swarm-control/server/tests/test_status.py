@@ -40,7 +40,7 @@ class SnapshotProjectionTests(unittest.TestCase):
 class TaskManagerProjectionTests(unittest.TestCase):
     def test_normal_large_snapshot_is_projected_without_forwarding_flow_details(self):
         network={'devices':[], 'flow_details':'private'*(700000)}
-        with patch('status.urlopen',side_effect=[io.BytesIO(json.dumps(v).encode()) for v in [network,{},{}]]):
+        with patch('status.urlopen',side_effect=[io.BytesIO(json.dumps(v).encode()) for v in [network,{},{},{'hosts':[],'history':[]}]]):
             result=status.task_manager()
         self.assertNotIn('private',json.dumps(result))
         self.assertEqual(result['network']['devices'],[])
@@ -61,9 +61,9 @@ class TaskManagerProjectionTests(unittest.TestCase):
                  'session':{'token':'private'},'hardware':{'storage':{'path':'private'},'gpus':[{'name':'GPU','utilization_percent':12,'memory_total_mib':100,'memory_free_mib':50,'secret':'private'}]}}]}
         metrics['history']=[{'sampled_at':123,'partial':True,'hosts':[metrics['hosts'][0]],'network':network}]
         tests={'run':{'id':'fixture','status':'running','hosts':[],'credentials':'private'}}
-        with patch('status.urlopen',side_effect=[io.BytesIO(json.dumps(v).encode()) for v in [network,metrics,tests]]) as fetch:
+        with patch('status.urlopen',side_effect=[io.BytesIO(json.dumps(v).encode()) for v in [network,metrics,tests,{'hosts':[],'history':[]}]]) as fetch:
             result=status.task_manager()
-        self.assertEqual([call.args[0].full_url for call in fetch.call_args_list],['http://127.0.0.1:8089/api/devices?resolve=0','http://127.0.0.1:8089/api/cpu','http://127.0.0.1:8089/api/distributed-tests'])
+        self.assertEqual([call.args[0].full_url for call in fetch.call_args_list],['http://127.0.0.1:8089/api/devices?resolve=0','http://127.0.0.1:8089/api/cpu','http://127.0.0.1:8089/api/distributed-tests','http://127.0.0.1:8795/api/resources'])
         self.assertTrue(result['metrics']['history'][0]['partial'])
         host=result['metrics']['hosts'][0]
         for key in ['percent','ram_percent','disk_busy_percent','network_mbps']:
@@ -76,13 +76,28 @@ class TaskManagerProjectionTests(unittest.TestCase):
         self.assertEqual(result['metrics']['history'][0]['network']['link_traffic']['peers']['aa']['rx_mbps'],3)
         self.assertNotIn('private',json.dumps(result))
 
+    def test_live_monitor_details_and_history_reach_task_manager(self):
+        resources={'hosts':[{'host':'worker.local','performance':{'schema_version':1,'processes':[{'pid':7,'rss_bytes':4096}],'memory':{'dram_read_bytes_per_second':123}}}],
+                   'history':[{'sampled_at':123,'hosts':[]}],'credential':'private'}
+        with patch('status.urlopen',side_effect=[io.BytesIO(json.dumps(v).encode()) for v in [{},{},{},resources]]):
+            result=status.task_manager()
+        self.assertEqual(result['resources']['hosts'],resources['hosts'])
+        self.assertEqual(result['resources']['history'],resources['history'])
+        self.assertNotIn('credential',result['resources'])
+
+    def test_monitor_outage_does_not_hide_tasks(self):
+        with patch('status.read_coordinator',return_value={}),patch('status.read_resources',side_effect=OSError('offline')):
+            result=status.task_manager()
+        self.assertEqual(result['resources']['status'],'unavailable')
+        self.assertIn('run',result)
+
     def test_resource_feed_is_bounded(self):
         with patch('status.urlopen',return_value=io.BytesIO(b' '*(4*1024*1024+1))):
             with self.assertRaises(ValueError):status.task_manager()
 
 class RemoteTaskManagerBoundaryTests(RemoteStatusBoundaryTests):
     def test_task_manager_and_resources_are_available_to_paired_owner(self):
-        for path in ('/task-manager','/task-manager.html','/task-manager.js','/task-manager.css','/levels.js','/levels-model.js','/cpu-report.js','/snapshot-fetch.js','/docker-downloads.js','/tests.css'):
+        for path in ('/task-manager','/task-manager.html','/task-manager.js','/task-manager.css','/levels.js','/levels-model.js','/cpu-report.js','/snapshot-fetch.js','/docker-downloads.js','/tests.css','/monitor.js','/monitor.css','/monitor-model.js'):
             self.assertEqual(self.request(path),200,path)
         with patch('status.task_manager',return_value={'network':{},'metrics':{},'run':{}}) as feed:
             path='/api/v1/swarm/task-manager'

@@ -280,3 +280,26 @@ Existing processes launched before this adapter/supervisor was installed need a 
 Image resolution follows local cache → saved LAN SSH peers → registry. Container startup, SDK implicit pulls, explicit image pulls, readiness helpers, recovery image startup, release-runtime startup and Dockerfile external bases use the same policy. Images stream between Docker stores through memory pipes and their native platform/content are checked. Dockerfile bases are prepared before the engine builder runs, so a separate BuildKit store cannot silently fetch them again. Package downloads inside a Dockerfile remain separate network operations.
 
 See [the module README](docker_utils/README.md) for API, CLI and inventory configuration. This policy governs these workspace entrypoints and its SDK client, not unrelated bare Docker/Compose commands or inactive vendored checkouts. Dependencies can be installed once in the shared Python environment; the launcher mounts the saved LAN inventory and SSH configuration read-only so its `HOME=/tmp` does not bypass peer discovery.
+
+### Swarm node
+
+`./swarm-node` runs the single node runtime: peer discovery, authenticated job
+dispatch, Docker-worker discovery, resource admission, status and local controls.
+`./swarm-node status`, `drain`, and `resume` manage the local node; add `--all`
+for fleet maintenance. `update --watch` uses the standard fleet deployer. `enroll --target user@hostname.local` adds a
+node through verified SSH. The Docker runtime is named `swarm-node`.
+
+The host dispatches work using cached Docker images; missing image layers stream
+over the LAN. Inputs can stream into RAM/tmpfs. Docker retains image layers in its
+local store. Worker containers remain identifiable across node restarts. Existing
+`launcher_*` modules, URLs and enrollment directories remain compatibility paths;
+keys, worker state and wire protocols do not need re-enrollment for this rename.
+
+### Built-in node monitoring
+
+`./swarm-node build` packages the map backend/UI, `ramtop` terminal, and headless
+resource collectors in the node image. `./swarm-node monitor` opens the local TUI;
+`./swarm-node telemetry` prints its kernel-backed snapshot. Shared fleet data is
+available at **http://map.local/monitor.html** with Memory, CPU, GPU, Disk, Network
+and LAN tabs. Native monitor updates use the existing authenticated enrollment
+and can run alongside busy workers without restarting them.

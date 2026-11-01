@@ -9,6 +9,10 @@ from launcher_agent import worker_environment
 
 
 class WorkerEnvironmentTests(unittest.TestCase):
+    def test_pinned_worker_can_import_sibling_script_modules(self):
+        env=worker_environment(Path('/isolated'),Path('/checkout'))
+        self.assertEqual(env['PYTHONPATH'].split(os.pathsep),['/checkout','/checkout/scripts','/checkout/swarm-control/server'])
+
     def test_rootless_engine_is_preserved_without_deployment_credentials(self):
         with patch.dict(os.environ, {'DOCKER_HOST': 'unix:///run/user/1000/docker.sock',
                                     'CLOUDFLARE_API_TOKEN': 'private', 'HOME': '/owner'}, clear=True):

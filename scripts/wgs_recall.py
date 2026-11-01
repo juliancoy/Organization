@@ -69,10 +69,11 @@ def fastq_audit(path,limit=100000):
             'audit_scope':'first records only; not a whole-file integrity check'}
 
 
-def split_pilot_fastq(source,folder,limit=10000):
-    """Keep short 454 reads for BWA-backtrack rather than silently dropping them."""
+def split_pilot_fastq(source,folder,limit=10000,*,compressed=False):
+    """Keep short 454 reads; swarm workers retain gzip for both read classes."""
     folder=Path(folder);folder.mkdir(mode=0o700,parents=True,exist_ok=True)
-    outputs={key:(folder/(key+'.fastq')).open('x') for key in ('short','long')};counts={'short':0,'long':0}
+    paths={key:folder/(key+('.fastq.gz' if compressed else '.fastq')) for key in ('short','long')}
+    outputs={key:gzip.open(path,'xt',compresslevel=1) if compressed else path.open('x') for key,path in paths.items()};counts={'short':0,'long':0}
     opener=gzip.open if str(source).endswith('.gz') else open
     try:
         with opener(source,'rt') as stream:
@@ -80,12 +81,12 @@ def split_pilot_fastq(source,folder,limit=10000):
                 header=stream.readline()
                 if not header:break
                 seq=stream.readline();plus=stream.readline();qual=stream.readline()
-                if not header.startswith('@') or not plus.startswith('+') or len(seq.rstrip())!=len(qual.rstrip()):raise ValueError('Malformed FASTQ')
+                if not header.startswith('@') or not plus.startswith('+') or not seq.rstrip() or len(seq.rstrip())!=len(qual.rstrip()):raise ValueError('Malformed FASTQ')
                 key='short' if len(seq.rstrip())<70 else 'long'
                 outputs[key].write(header+seq+plus+qual);counts[key]+=1
     finally:
         for stream in outputs.values():stream.close()
-        for key in outputs:(folder/(key+'.fastq')).chmod(0o600)
+        for path in paths.values():path.chmod(0o600)
     return counts
 
 

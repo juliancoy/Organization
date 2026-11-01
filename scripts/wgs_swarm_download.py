@@ -333,7 +333,7 @@ def release_after_cleanup(host,name,client,lease):
 
 
 def run_batch(host,items,changed,connections,memory_floor_mb=0):
-    name='genomics-'+uuid.uuid4().hex;lease=uuid.uuid4().hex;client=AgentClient(host);process=None;finished=threading.Event();renew_errors=[];received=set();worker_errors=[]
+    lease=uuid.uuid4().hex;name='genomics-'+lease;client=AgentClient(host);process=None;finished=threading.Event();renew_errors=[];received=set();worker_errors=[]
     by_id={file_id(item):item for item in items}
     try:
         status=client.call('status',timeout=10)
@@ -366,9 +366,9 @@ def run_batch(host,items,changed,connections,memory_floor_mb=0):
                             renewal_client.close();renewal_client=AgentClient(host)
                             if finished.wait(5*(attempt+1)):return
             finally:renewal_client.close()
-        threading.Thread(target=renew,daemon=True).start()
+        if 'docker-workers' not in status.get('capabilities',[]):threading.Thread(target=renew,daemon=True).start()
         payload={'jobs':[{'id':ident,'item':item,'chunk_bytes':CHUNK_BYTES,'allowed_hosts':sorted(ALLOWED_HOSTS),'transport_worker_version':'sha256:'+hashlib.sha256(DOWNLOAD_WORKER.encode()).hexdigest()} for ident,item in by_id.items()],'connections':connections}
-        command=['docker','run','--rm','--pull=never','--name',name,'--label','org.lifetech.genomics=true','--label','org.lifetech.public-wgs=true','-i','--read-only','--log-driver','none','--cpus','1','--memory',str(memory_mb)+'m','--memory-swap',str(memory_mb)+'m','--pids-limit','32','--cap-drop','ALL','--security-opt','no-new-privileges','--ulimit','core=0:0','--user',host['container_user'],'--mount','type=bind,src='+host['cache']+',dst=/cache',host['image'],'python','-c',DOWNLOAD_WORKER]
+        command=['docker','run','--rm','--pull=never','--name',name,'--label','org.lifetech.genomics=true','--label','org.lifetech.worker=true','--label','org.lifetech.job='+name.removeprefix('genomics-'),'--label','org.lifetech.group='+GROUP,'--label','org.lifetech.public-wgs=true','-i','--read-only','--log-driver','none','--cpus','1','--memory',str(memory_mb)+'m','--memory-swap',str(memory_mb)+'m','--pids-limit','32','--cap-drop','ALL','--security-opt','no-new-privileges','--ulimit','core=0:0','--user',host['container_user'],'--mount','type=bind,src='+host['cache']+',dst=/cache',host['image'],'python','-c',DOWNLOAD_WORKER]
         for ident in by_id:changed(ident,'queued',{'memory_mb':memory_mb,'connections':connections})
         process=subprocess.Popen(distributed.shell_command(host,command),stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         def cancel():

@@ -24,7 +24,7 @@ def cleanup_container(host,name):
 
 def leased_run(host,image,command,mounts,work,cpus,memory_mb,report,wait_for_capacity=False,on_admitted=None):
     """All Docker CPU/RAM bounds exactly match the acquired signed lease."""
-    name='genomics-'+uuid.uuid4().hex;lease=uuid.uuid4().hex
+    lease=uuid.uuid4().hex;name='genomics-'+lease
     client=AgentClient(host);done=threading.Event();errors=[];process=None
     try:
         status=client.call('status')
@@ -60,8 +60,8 @@ def leased_run(host,image,command,mounts,work,cpus,memory_mb,report,wait_for_cap
                             other.close();other=AgentClient(host)
                             if done.wait(5*(attempt+1)):return
             finally:other.close()
-        threading.Thread(target=renew,daemon=True).start()
-        argv=['docker','run','--pull=never','--name',name,'--label','org.lifetech.genomics=true','--network','none','--read-only','--log-driver','none','--cpus',str(cpus),'--memory',str(memory_mb)+'m','--memory-swap',str(memory_mb)+'m','--pids-limit','32','--cap-drop','ALL','--security-opt','no-new-privileges','--ulimit','core=0:0','--ulimit','nofile=65536:65536','--user',host.get('container_user','1000:1000'),'-e','TMPDIR=/work/tmp','-w','/work']
+        if 'docker-workers' not in status.get('capabilities',[]):threading.Thread(target=renew,daemon=True).start()
+        argv=['docker','run','--pull=never','--name',name,'--label','org.lifetech.genomics=true','--label','org.lifetech.worker=true','--label','org.lifetech.job='+name.removeprefix('genomics-'),'--label','org.lifetech.group='+GROUP,'--network','none','--read-only','--log-driver','none','--cpus',str(cpus),'--memory',str(memory_mb)+'m','--memory-swap',str(memory_mb)+'m','--pids-limit','32','--cap-drop','ALL','--security-opt','no-new-privileges','--ulimit','core=0:0','--ulimit','nofile=65536:65536','--user',host.get('container_user','1000:1000'),'-e','TMPDIR=/work/tmp','-w','/work']
         for source,target,readonly in mounts:
             argv+=['--mount','type=bind,src='+str(source)+',dst='+target+(',readonly' if readonly else '')]
         argv +=[image,'bash','-o','pipefail','-c',command]
@@ -143,11 +143,11 @@ def map_watson(host,receipt,reference,image,report_folder):
     source=(Path(__file__).parent/'wgs_recall.py').read_bytes()
     writer="import pathlib,sys;p=pathlib.Path(sys.argv[1]);p.write_bytes(sys.stdin.buffer.read());p.chmod(0o600)"
     subprocess.run(distributed.shell_command(host,['python3','-c',writer,work+'/runner.py']),input=source,check=True)
-    setup="import importlib.util,json;from pathlib import Path;s=importlib.util.spec_from_file_location('recall','/work/runner.py');m=importlib.util.module_from_spec(s);s.loader.exec_module(m);print(json.dumps(m.split_pilot_fastq('/input.fastq.gz','/work/reads',10**12)))"
-    commands=['rm -f /work/reads/short.fastq /work/reads/long.fastq /work/long.bam /work/short.bam /work/short.sai /work/alignment.partial.bam /work/alignment.partial.bam.bai', 'python -c '+shlex.quote(setup)+' > /work/read-counts.json',
-        alignment('/ref/reference.fa',['/work/reads/long.fastq'],'/work/long.bam','Watson',receipt['run'],cpus,memory_mb),
-        'bwa aln -t '+str(cpus)+' /ref/reference.fa /work/reads/short.fastq > /work/short.sai',
-        pipeline([['bwa','samse','-r','@RG\\tID:'+receipt['run']+'-short\\tSM:Watson\\tLB:Watson','/ref/reference.fa','/work/short.sai','/work/reads/short.fastq'],['samtools','sort','-m',str(max(128,memory_mb//4))+'M','-T','/work/tmp/sort','-o','/work/short.bam','-']]),
+    setup="import importlib.util,json;from pathlib import Path;s=importlib.util.spec_from_file_location('recall','/work/runner.py');m=importlib.util.module_from_spec(s);s.loader.exec_module(m);print(json.dumps(m.split_pilot_fastq('/input.fastq.gz','/work/reads',10**12,compressed=True)))"
+    commands=['rm -f /work/reads/short.fastq /work/reads/long.fastq /work/reads/short.fastq.gz /work/reads/long.fastq.gz /work/long.bam /work/short.bam /work/short.sai /work/alignment.partial.bam /work/alignment.partial.bam.bai', 'python -c '+shlex.quote(setup)+' > /work/read-counts.json',
+        alignment('/ref/reference.fa',['/work/reads/long.fastq.gz'],'/work/long.bam','Watson',receipt['run'],cpus,memory_mb),
+        'bwa aln -t '+str(cpus)+' /ref/reference.fa /work/reads/short.fastq.gz > /work/short.sai',
+        pipeline([['bwa','samse','-r','@RG\\tID:'+receipt['run']+'-short\\tSM:Watson\\tLB:Watson','/ref/reference.fa','/work/short.sai','/work/reads/short.fastq.gz'],['samtools','sort','-m',str(max(128,memory_mb//4))+'M','-T','/work/tmp/sort','-o','/work/short.bam','-']]),
         'samtools merge /work/alignment.partial.bam /work/long.bam /work/short.bam',
         'samtools quickcheck /work/alignment.partial.bam','samtools index /work/alignment.partial.bam',
         'samtools flagstat -O json /work/alignment.partial.bam > /work/flagstat.json',
@@ -199,16 +199,21 @@ partial.chmod(0o600);partial.replace(path)
     reader="import shutil,sys;s=open(sys.argv[1],'rb');s.seek(int(sys.argv[2]));shutil.copyfileobj(s,sys.stdout.buffer,8388608)"
     source_command=['python3','-c',reader,receipt['path'],str(offset)] if offset else ['cat','--',receipt['path']]
     producer=subprocess.Popen(distributed.shell_command(source,source_command),stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    consumer=None
     try:
         consumer=subprocess.Popen(distributed.shell_command(destination,['python3','-c',writer,target,str(receipt['bytes']),receipt['sha256'],str(offset)]),stdin=producer.stdout,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
         producer.stdout.close()
-        _,errors=consumer.communicate(timeout=1800)
+        # Large verified genomes can take hours on a healthy LAN. SSH keepalives
+        # detect broken transports; total elapsed time is not a transfer failure.
+        _,errors=consumer.communicate()
         # A valid cached destination may exit before consuming a duplicate stream.
         producer.wait(timeout=20)
         if consumer.returncode:raise RuntimeError('LAN read transfer failed: '+errors.decode(errors='replace')[-300:])
     finally:
-        if producer.poll() is None:producer.kill();producer.wait()
-        if producer.stderr:producer.stderr.close()
+        for process in (consumer,producer):
+            if process is not None:
+                if process.poll() is None:process.kill();process.wait()
+                if process.stderr:process.stderr.close()
     return {**receipt,'host':destination['host'],'path':target,'original_host':source['host']}
 
 

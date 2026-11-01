@@ -5,6 +5,7 @@ import ipaddress
 import json
 from pathlib import Path
 import re
+import runpy
 import shlex
 import subprocess
 import sys
@@ -13,7 +14,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 FILES = ('launcher_peers.py', 'launcher_discovery.py', 'launcher_registration.py',
          'launcher_agent.py', 'launcher_registry.py', 'launcher_peer_supervisor.py',
-         'launcher_update.py')
+         'launcher_update.py','swarm_node.py')
 
 
 def save(path, value):
@@ -79,8 +80,11 @@ print(json.dumps(dict(host=socket.gethostname().lower()+'.local',home=str(pathli
     config['peers'][node] = address
     destination = probe['home'] + '/.local/share/organization-node'
     remote_config = {**config, 'name': node}
+    monitor=ROOT/'ramtop/ramtop'
+    sources={name:(ROOT/'scripts'/name).read_text() for name in FILES}
+    sources['launcher_agent.py'] += '\nPERFORMANCE_RUNTIME_B64 = '+repr(runpy.run_path(str(monitor/'bundle.py'))['encoded_runtime'](monitor))+'\n'
     payload = dict(config=remote_config, folder=destination,
-                   files={name: (ROOT / 'scripts' / name).read_text() for name in FILES},
+                   files=sources,
                    public_key=key.with_suffix('.pub').read_text().strip() if key.with_suffix('.pub').exists() else '')
     remote('''import json,os,pathlib,sys
 os.umask(0o077)
@@ -108,7 +112,7 @@ unit=pathlib.Path.home()/'.config/systemd/user/organization-test-agent.service'
 unit.parent.mkdir(parents=True,exist_ok=True)
 # Quote paths as systemd arguments, and escape literal percent specifiers.
 def quote(value):return json.dumps(str(value).replace('%','%%'))
-text='[Unit]\\nDescription=Organization distributed test agent\\nAfter=network-online.target\\n\\n[Service]\\n'
+text='[Unit]\\nDescription=Swarm Node — discovery, admission and Docker workers\\nAfter=network-online.target\\n\\n[Service]\\n'
 text+='ExecStart='+quote(venv/'bin/python')+' '+quote(root/'scripts/launcher_peer_supervisor.py')+'\\n'
 text+='Environment='+quote('DOCKER_HOST='+v['endpoint'])+'\\n'
 text+='Environment='+quote('LIFETECH_PEER_CONFIG='+str(pathlib.Path.home()/'.config/lifetech-launcher/peers.json'))+'\\n'

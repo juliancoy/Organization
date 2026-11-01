@@ -136,8 +136,20 @@ class LiveDistributedTests:
     def retry_pinned(self,parent,ticket):
         """Retry one failed logical job against its existing published commits."""
         task=ticket['task']
+        specs=None
+        def recover(ident):
+            nonlocal specs
+            if ident not in parent.get('task_catalog',[]):raise ValueError('Pinned failed task no longer exists')
+            if specs is None:
+                from work_queue import catalog
+                from distributed_worker import SUITES
+                specs=copy.deepcopy(SUITES);catalog(self.runner.root,specs,parent['repositories'])
+            if ident not in specs:raise ValueError('Pinned failed task no longer exists')
+            spec=specs[ident]
+            return {'suite':spec.get('base',ident),'file':spec.get('file'),'check':spec.get('check')}
         matches=[(h,j) for h in parent.get('hosts',[]) for key,j in h.get('jobs',{}).items() if key==task]
-        if not matches:raise ValueError('Pinned failed task no longer exists')
+        if not matches:
+            matches=[({'host':'unassigned'},recover(task))]
         original,job=matches[-1];base=job.get('suite') or task.split('--',1)[0]
         if base in ('p2p','mobile','gpu'):raise ValueError('Specialized hardware jobs require their explicit retry workflow')
         if job.get('file'):
@@ -145,13 +157,27 @@ class LiveDistributedTests:
             from pathlib import PurePosixPath
             repo,prefix,_=FILES[base];selection={'paths':[str(PurePosixPath(repo)/prefix/job['file'])],'suites':[]}
         else:selection={'paths':[],'suites':[base]}
+        for sibling in ticket.get('batch',[]):
+            if sibling['task']==task:continue
+            rows=[j for h in parent.get('hosts',[]) for key,j in h.get('jobs',{}).items() if key==sibling['task']]
+            if not rows:rows=[recover(sibling['task'])]
+            item=rows[-1];component=item.get('suite') or sibling['task'].split('--',1)[0]
+            if component in ('p2p','mobile','gpu'):raise ValueError('Specialized hardware jobs require their explicit retry workflow')
+            if item.get('file'):
+                from work_queue import FILES
+                from pathlib import PurePosixPath
+                repo,prefix,_=FILES[component];selection['paths'].append(str(PurePosixPath(repo)/prefix/item['file']))
+            else:selection['suites'].append(component)
+        selection={key:sorted(set(values)) for key,values in selection.items()}
+        selection['task_ids']=[t['task'] for t in ticket.get('batch',[ticket])]
         from github_sources import source_digest
         repositories=copy.deepcopy(parent['repositories'])
         if source_digest(repositories)!=parent['source_sha256']:raise ValueError('Pinned source identity mismatch')
-        runner=self.create_run(force=True,selection=selection)
+        runner=self.create_run(force=any(t['attempts']>0 for t in ticket.get('batch',[ticket])),selection=selection)
         if runner is None:raise RuntimeError('Retry waiting for ordinary admission')
         runner.run.update(pinned_repositories=repositories,retry_family=parent.get('retry_family',parent['id']),
                           retry_ticket=ticket['id'],retry_attempt=ticket['attempts']+1,parent_run_id=parent['id'],
+                          retry_tickets=[t['id'] for t in ticket.get('batch',[ticket])],
                           avoid_workers=[original['host']],scope='Automatic bounded retry of the original published commits; no commit, push or deployment.')
         runner.save();return runner
 

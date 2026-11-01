@@ -9,3 +9,5 @@
 .step-progress{justify-content:flex-end}
 .step-file{display:block;color:var(--muted);font-size:12px;font-weight:400;overflow-wrap:anywhere}
 @media(max-width:560px){.job-metrics{flex-wrap:wrap;gap:4px 12px}.meter-label{font-size:11px}.step-row,.step-content .step-row{padding-bottom:8px}}
+
+.status-filters{border:0;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:8px 16px;min-width:0}.status-filters legend{font-size:13px;color:var(--muted);margin-bottom:7px}.toolbar .status-filters label{flex-direction:row;align-items:center;gap:6px;white-space:nowrap}.toolbar .status-filters input{width:18px;height:18px;margin:0;accent-color:#a9baf1}.toolbar{flex-wrap:wrap}.status-partial{--state:#c1abff;--tint:#c1abff16}

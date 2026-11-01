@@ -44,7 +44,7 @@ def run_native(host,item,ident,output,changed,stop,verify=False):
     from .wgs_stream_qc import aggregate_qc,CHUNK_BYTES,qc_memory_mb
     from .wgs_swarm_download import atomic_json
     root=Path(host['cache']).parent/'gpu-qc'
-    config={'local_root':str(root),'host_root':str(root),'verify':verify,'verify_first':True}
+    config={'local_root':str(root),'host_root':str(root),'verify':verify,'verify_first':True,'transport':'inline'}
     memory=qc_memory_mb(min(CHUNK_BYTES,item['bytes']),gpu_parallel=True)
     metadata={key:item[key] for key in ('sample','run','filename') if key in item}
     metadata.update(host=host['host'],memory_mb=memory)

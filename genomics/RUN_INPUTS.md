@@ -111,28 +111,121 @@ there is no fixed per-job runtime timeout. Reservations are calculated from the
 reference/query lengths, compressed inputs and the selected query span instead
 of being clamped to 4 GiB. Reference indices are still chromosome-scoped.
 
-### Worker maintenance and future updates
+### One launcher and Docker-backed workers
 
-Use `python -m scripts.worker_maintenance status` to inspect enrolled workers.
-`drain --reason 'fleet update'` closes admission through a durable maintenance
-marker and preserves each owner's worker preference. Existing signed leases can
-still renew and release, so bounded work can finish and commit receipts.
-Persistent GPU services must be stopped through their owning systemd services;
-the marker does not terminate them. Keep a record of previously active services
-and restart them after the update, rather than starting completed runs again.
+Each enrolled machine runs one launcher supervisor and one agent child. Shared
+file locks in the enrolled configuration directory reject duplicate native or
+container launches. The files remain in place; the operating system releases
+the locks when the processes exit.
 
-The standard SSH launcher deployer installs supervisor fixes in native agents
-and owned container sessions as well as staging agent releases. Verify all nodes
-have the expected revision before `python -m scripts.worker_maintenance resume`;
-the command checks the selected fleet before reopening admission. Deferred
-updates leave busy workers available, while an actual update blocks new resource
-acquisitions and continues to allow renewals. Agent status includes the active
-and desired release and whether an update is current, applying, or deferred.
+Worker containers use `genomics-<job ID>` names and the labels
+`org.lifetech.worker=true`, `org.lifetech.job`, and `org.lifetech.group`.
+Docker is authoritative for running workers. Capacity comes from their configured
+CPU, memory, and PID limits. The shared admission lock and short pending-start
+reservations prevent simultaneous requests from promising the same capacity.
+Reservations are replaced by Docker accounting when the containers start;
+there is no running-worker lease journal, expiry timer, or lease service.
+Native jobs continue using the shared resource pool and are not counted twice.
 
-This is a path toward rolling updates, not stopless lease handoff. Resource
-ownership and expiry timers currently live in the agent process. A stopless
-upgrade needs an independent lease supervisor, authenticated reattachment to
-existing containers, durable ownership fencing between old and new agents, and
-rollback tests that prove capacity cannot be double allocated. Native GPU
-controllers already hold their own shared-pool leases independently of agent
-reloads and provide a useful starting point for that separation.
+A launcher restart leaves these Docker workers running. The replacement discovers
+them by label and inspects their limits. Updated controllers skip renewal threads;
+legacy `resource.renew` calls remain compatible as worker-status checks. Workers
+end when their task completes or the owner explicitly stops them. Agent updates
+still defer active test-coordination sessions, browser sessions, uploads, and
+pending starts, whose orchestration remains attached to the agent process.
+
+Use `python -m scripts.worker_maintenance status` to inspect the fleet. `drain`
+closes admission while current workers finish. After verifying the selected
+machines have the expected revision, `resume` restores the saved worker policies.
+The standard SSH deployer installs supervisor changes for native and container
+launches. Worker isolation stays in Docker; no additional network or scheduler
+service is needed for this lifecycle.
+
+### HuRef comparison follow-up queue
+
+`python -m scripts.huref_followup_swarm --original <completed-comparison> --folder <follow-up-folder>`
+persists its job specifications and dependency edges in `prepared/ready.json`,
+operational state in `state.json`, and signed receipts beside owner-only results.
+It retains the original mapping evidence and exposes operational progress through
+the existing comparison task registry. Representation checks depend on the
+matching native-coordinate normalization shard. Completed work is reused only
+after validating its signature, output digest, input identities and recipe digest.
+
+Native-coordinate work uses 40 Mi-base windows and shared public chromosome
+objects. CPU/RAM admission still controls concurrency; RAM reservations are soft.
+Rootless Docker workers receive a finite memory-lock setting supported by their
+host. Jobs whose private inputs cannot fit that locked-memory allowance run on
+other machines, rather than allowing private pages to become swappable.
+
+Published HuRef heterozygous variants do not supply genome-wide reference
+confidence. Native normalization, source-confidence audits, structural-call
+inventories and signed-result audits can run immediately. Full comparable-region,
+reference-agreement and downstream reporting stages remain explicitly waiting
+for the missing validated evidence; integrity audits do not establish biological
+reproduction or complete genotype agreement.
+
+### HuRef Ethernet and RAM path
+
+`Comparison.serving()` stages checksum-pinned **public** chromosome bundles on
+Latitude's NVMe and makes Latitude the signed mTLS origin. Consumers use enrolled
+LAN addresses and reuse authenticated HTTP connections for bounded range reads.
+The comparison's shared input cache lives in owner-only `/dev/shm/swarm-inputs-<uid>`
+with a maximum 512 MiB budget per node and a free-memory allowance. It never falls
+back to a disk cache. Private chromosome shards retain their existing locked
+container-RAM path; outputs and verification receipts remain durable.
+
+Single-threaded normalization and evidence recipes reserve one CPU per job;
+minimap2 alignment retains its requested thread count. The shared CPU/RAM pool
+limits how many independent shards run simultaneously. Native Vulkan QC sends
+bounded batches directly over its owner-only Unix socket (`qc-inline`), without
+batch files, and overlaps parsing with GPU requests. GPU acceleration is for
+validated QC kernels; this does not claim GPU alignment or genotype comparison.
+
+Physical connectivity still matters: a node with no Ethernet carrier remains
+eligible over Wi-Fi, and a 100 Mb/s adapter cannot supply gigabit throughput.
+Inspect the actual route and link speed before interpreting a throughput result.
+
+FASTQ workers consume `.fq.gz` and `.fastq.gz` directly. Sequential QC and
+paired-read sharding decompress bounded buffers in memory; paired shards remain
+gzip files. Venter mapping passes gzip mates directly to BWA. Watson mapping
+retains both short and long reads in gzip intermediates and passes those to
+BWA-MEM and BWA-backtrack, avoiding full plaintext FASTQ copies. The splitter
+must finish successfully before alignment starts; malformed FASTQ or a failed
+gzip CRC aborts that stage. General ZIP archives are not FASTQ gzip inputs.
+Random-access reference and alignment stages still require their indexed,
+seekable formats; gzip support does not remove those requirements.
+
+
+HuRef reported sequence-allele comparison (2026-11-01):
+`scripts.huref_projected_swarm` extends the completed SNP subset with 86 bounded
+common-reference SNP/MNV/indel comparison shards. `huref-projected.service` runs
+and resumes the owner queue under `huref-comparison-20261031/projected-20261101`.
+HuRef inputs stream from Latitude through the signed mTLS RAM-cache path; Julian
+chromosome gVCFs originate on CompAI and stay on the authenticated worker path.
+Projection requires primary MAPQ60 contiguous mappings and matching GRCh38 REF;
+both samples are left normalized without splitting their diploid genotypes.
+Julian calls require PASS and DP/GQ at least 20. Unreported HuRef calls remain
+unknown. REF mismatches, ambiguous mappings, symbolic alleles, alleles over 10kb,
+and incompatible representations are excluded. Cross-shard target collisions
+are excluded during report reconciliation. Whole-genome diploid callability,
+phase agreement and complex SV equivalence remain separate evidence limitations.
+Scoped owner reports, public operational summaries and signed provenance archives
+are generated after the runnable shards finish; these reports do not require
+unsupported whole-genome conclusions. Sequence allele comparison uses CPU tools.
+
+HuRef combined-evidence acceptance tests:
+`tests/test_huref_evidence.py` is a synthetic, swarm-safe workspace test file.
+It needs Python/pytest only and never accesses owner data, Docker sockets or the
+network. The normal published-file workspace catalog discovers it; focused runs
+select that path. It guards useful assembly comparisons without VCF records,
+local diploid haplotype evidence without chromosome-wide phase extrapolation,
+uncertainty attributed separately to HuRef/Julian/mapping, strand and tile
+coordinates, and ambiguity/gap exclusion. The projected worker now also compares
+HuRef assembled bases at explicit confident Julian SNV sites independently of
+HuRef VCF presence. Its output distinguishes assembly allele membership from
+reported diploid genotype agreement. Report reconciliation excludes cross-shard
+collisions for each evidence class separately. Docker integration tests in
+`tests/test_huref_projected.py` verify the actual combined worker with an empty
+HuRef VCF; those tests run locally in the genome-tools image. Existing running
+comparison jobs retain their signed worker recipes; source changes apply to
+subsequent recipe versions rather than silently mixing results.

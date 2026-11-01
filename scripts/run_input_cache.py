@@ -13,6 +13,15 @@ import tempfile
 
 BLOCK = 4 * 1024**2
 
+def ram_cache(budget=512*1024**2):
+    """Bounded shared tmpfs tier; never silently fall back to a disk cache."""
+    root=Path('/dev/shm')/('swarm-inputs-'+str(os.getuid()))
+    root.mkdir(mode=0o700,exist_ok=True)
+    if root.is_symlink() or root.stat().st_uid!=os.getuid():raise ValueError('Unsafe RAM cache owner')
+    root.chmod(0o700)
+    memory={line.split(':')[0]:int(line.split()[1])*1024 for line in Path('/proc/meminfo').read_text().splitlines() if line.split()[1].isdigit()}
+    return InputCache(root,budget=max(BLOCK,min(budget,memory['MemAvailable']//8)),reserve=128*1024**2)
+
 class InputCache:
     def __init__(self, root, budget=2*1024**3, reserve=1024**3):
         self.root=Path(root); self.root.mkdir(parents=True,exist_ok=True,mode=0o700)

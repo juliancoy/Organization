@@ -34,7 +34,7 @@ def controls():
 
 def execute(host,batch):
     from agent_client import AgentClient
-    name='genomics-'+uuid.uuid4().hex;lease=uuid.uuid4().hex;client=AgentClient(host)
+    lease=uuid.uuid4().hex;name='genomics-'+lease;client=AgentClient(host)
     acquired=False
     try:
         status=client.call('status',timeout=10)
@@ -43,7 +43,7 @@ def execute(host,batch):
         if limits.get('available_mb',0)<256 or limits.get('available_cpus',0)<1:raise distributed.CapacityWait('Waiting for shared CPU/RAM capacity')
         acquired=client.call('resource.acquire',{'id':lease,'group':'genomics-dat1-private','cpus':1,'memory_mb':256,'container':name})['acquired']
         if not acquired:raise distributed.CapacityWait('Capacity changed before reservation')
-        return distributed.execute_reserved(host,batch,name,256)
+        return distributed.execute_reserved(host,batch,name,256,group='genomics-dat1-private')
     finally:
         try:
             if acquired:client.call('resource.release',{'id':lease})

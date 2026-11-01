@@ -77,6 +77,7 @@ def application_test_task(run):
     grouped = {key: [] for key in run.get('task_catalog', [])}
     for host in run.get('hosts', []):
         for name, job in host.get('jobs', {}).items():
+            if name=='p2p' and run.get('selection') and 'p2p' not in run['selection'].get('suites',[]):continue
             grouped.setdefault(name, []).append((host['host'], job))
     children = []
     for name, attempts in grouped.items():
@@ -87,8 +88,14 @@ def application_test_task(run):
         children.append({'id': name, 'name': job.get('name') or name, 'group': job.get('suite') or name.split('--')[0], 'input': job.get('file'), 'worker': host, 'status': status,
                          'percent': 100 if status in ('passed', 'reused') else None,
                          'detail': job.get('reason', '')})
+    if not children and run.get('status')=='preparing':
+        hosts=run.get('hosts',[]);ready=sum(bool(h.get('session',{}).get('verified')) for h in hosts)
+        waiting=[h['host'] for h in hosts if not h.get('session',{}).get('verified')]
+        detail=f'{ready}/{len(hosts)} workers verified'+('; awaiting '+', '.join(waiting) if waiting else '')
+        children=[{'id':'worker-preparation','name':'Prepare selected test workers','status':'preparing','detail':detail,'worker':'unassigned'}]
+    detail=run.get('preparation') or ('Selected tests: '+', '.join(run['selection'].get('paths',[])+run['selection'].get('suites',[])) if run.get('selection') else '')
     return {'id': run.get('id'), 'kind':'application-tests', 'name': run.get('title') or 'Application tests — ' + str(run.get('id', 'current')),
-            'status': run.get('status'), 'progress': aggregate(children), 'children': children}
+            'status': run.get('status'), 'detail':detail,'progress': aggregate(children), 'children': children}
 
 
 def snapshot():

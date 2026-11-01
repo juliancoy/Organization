@@ -22,6 +22,9 @@ def project_host(row):
     host = {key: deepcopy(row[key]) for key in HOST_FIELDS.split() if key in row}
     host['network_interfaces']=project_interfaces(row.get('network_interfaces',[]))
     host['disks']=project_disks(row.get('disks',[]))
+    performance=row.get('performance') or {}
+    host['performance']={key:deepcopy(performance[key]) for key in ('schema_version','sampled_at','status','scope','memory') if key in performance}
+    if 'memory' in host['performance']:host['performance']['memory'].pop('counters',None)
     hardware = row.get('hardware') or {}
     host['hardware'] = {key: hardware[key] for key in ('stale','sampled_at') if key in hardware}
     host['hardware']['gpus'] = [{key: gpu[key] for key in GPU_FIELDS.split() if key in gpu}

@@ -1,8 +1,9 @@
 export function statusClass(status){
  if(['completed','passed','reused','verified'].includes(status))return 'status-completed';
- if(['failed','error','conflict','timed_out','interrupted','blocked','partial'].includes(status))return 'status-failed';
+ if(['failed','error','conflict','timed_out','interrupted','blocked'].includes(status))return 'status-failed';
+ if(status==='partial')return 'status-partial';
  if(['running','active','preparing','transferring','starting','streaming','stopping'].includes(status))return 'status-running';
- if(['queued','pending','waiting','blocked','planning','not scheduled','waiting_capacity'].includes(status))return 'status-queued';
+ if(['queued','pending','waiting','blocked','planning','not scheduled','waiting_capacity','waiting_inputs','waiting_dependency','retrying','claimed'].includes(status))return 'status-queued';
  return 'status-unknown';
 }
 const success=c=>statusClass(c.status)==='status-completed';
@@ -33,7 +34,9 @@ export function readEta(row, observedAt){
  if(success(row))return {text:'Verified complete',seconds:0};
  if(row.stale)return {text:'ETA unavailable · stale observation'};
  if(['failed','error','conflict','timed_out','interrupted'].includes(row.status)&&!row.children?.length)return {text:'ETA unavailable · failed: '+(row.detail||row.name||'worker error')};
- if(row.status==='partial')return {text:'Partial results · remaining scope not scheduled'};
+ if(row.status==='partial')return {text:row.input_blockers?.length?'Partial results · waiting for required inputs':'Partial results · full scope incomplete'};
+ if(row.status==='waiting_inputs')return {text:'Waiting for required inputs'};
+ if(row.status==='preparing')return {text:'Preparing workers · execution has not started'};
  if(Number.isFinite(row.execution_eta_seconds)&&row.execution_eta_seconds>=0&&statusClass(row.status)==='status-running')return {...etaLabel(row.execution_eta_seconds),text:etaLabel(row.execution_eta_seconds).text.replace('Read ETA',(row.eta_scope||'Execution')+' ETA')+' · rough observed rate'};
  if(row.children?.length){
   const pending=row.children.filter(c=>!success(c));
@@ -42,7 +45,7 @@ export function readEta(row, observedAt){
   if(estimates.every(e=>Number.isFinite(e.seconds))){const eta=etaLabel(Math.max(...estimates.map(e=>e.seconds)));if(pending.some(c=>Number.isFinite(c.execution_eta_seconds)))eta.text=eta.text.replace('Read ETA','Stage ETA')+' · rough observed rate';return eta;}
   const failed=pending.find(c=>['failed','error','conflict','timed_out','interrupted'].includes(c.status));
   if(failed)return {text:'ETA unavailable · failed step: '+failed.name};
-  const waiting=pending.find(c=>['queued','pending','waiting','blocked','planning','not scheduled','waiting_capacity','preparing'].includes(c.status));
+  const waiting=pending.find(c=>['queued','pending','waiting','blocked','planning','not scheduled','waiting_capacity','waiting_inputs','waiting_dependency','retrying','claimed','preparing'].includes(c.status));
   if(waiting)return {text:'ETA unavailable · '+(waiting.status==='not scheduled'?'unscheduled step: ':'waiting for ')+waiting.name};
   return {text:'ETA unavailable · '+estimates.find(e=>!Number.isFinite(e.seconds)).text.replace(/^ETA unavailable · /,'')};
  }

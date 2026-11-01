@@ -26,6 +26,12 @@ def normalize(paths=None, suites=None):
 def select(tasks, specs, selection):
     if not selection:
         return tasks
+    if 'task_ids' in selection:
+        # Internal pinned retries identify logical jobs exactly, including build
+        # checks. Public request normalization never accepts this field.
+        ids=selection['task_ids']
+        if not isinstance(ids,list) or not 1<=len(ids)<=64 or any(not isinstance(task,str) for task in ids) or set(ids)-set(tasks):raise ValueError('Pinned retry task is absent from the published catalog')
+        return [task for task in tasks if task in set(ids)]
     chosen = {task for task in tasks if specs[task].get('base', task) in selection['suites']}
     for path in selection['paths']:
         exact = []

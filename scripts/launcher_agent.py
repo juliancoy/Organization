@@ -5,6 +5,7 @@ import contextlib
 import fcntl
 import hashlib
 import json
+import math
 import io
 import os
 from pathlib import Path
@@ -46,6 +47,46 @@ def persisted_job_events(root, ident, cursor):
         maximum=db.execute('SELECT max(sequence) FROM events WHERE job=?',(ident,)).fetchone()[0]
         return None if maximum is None else [{'sequence':n,'event':json.loads(value)} for n,value in rows]
     finally:db.close()
+
+
+def launcher_lock(path):
+    """One process per shared config directory, including host/container launches."""
+    path=Path(path);path.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+    lock=path.open('a+')
+    if os.geteuid()==0:os.fchown(lock.fileno(),path.parent.stat().st_uid,path.parent.stat().st_gid)
+    try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock.close();raise RuntimeError('A launcher is already running on this machine') from None
+    return lock
+
+
+def docker_workers():
+    """Docker is authoritative for running workers and their resource limits."""
+    result=subprocess.run(['docker','ps','-q','--filter','label=org.lifetech.worker=true'],capture_output=True,text=True,timeout=10)
+    if result.returncode:raise RuntimeError('Cannot inspect worker capacity: Docker unavailable')
+    ids=result.stdout.split()
+    if not ids:return []
+    result=subprocess.run(['docker','inspect',*ids],capture_output=True,text=True,timeout=15)
+    if result.returncode:
+        # A --rm worker may finish between listing and inspection. Retry once.
+        current=subprocess.run(['docker','ps','-q','--filter','label=org.lifetech.worker=true'],capture_output=True,text=True,timeout=10)
+        if current.returncode:raise RuntimeError('Cannot inspect worker capacity')
+        ids=current.stdout.split()
+        if not ids:return []
+        result=subprocess.run(['docker','inspect',*ids],capture_output=True,text=True,timeout=15)
+        if result.returncode:raise RuntimeError('Worker state changed during capacity inspection; retry admission')
+    rows=[]
+    for item in json.loads(result.stdout):
+        if not (item['State'].get('Running') or item['State'].get('Restarting')):continue
+        limits=item['HostConfig'];labels=item['Config'].get('Labels') or {}
+        cpu=limits.get('NanoCpus',0)/1e9
+        memory=max(limits.get('Memory',0),limits.get('MemoryReservation',0))
+        if cpu<=0 or memory<=0:raise RuntimeError('Worker has no explicit CPU/RAM limits')
+        name=item['Name'].removeprefix('/')
+        rows.append({'id':item['Id'],'container':name,'job':labels.get('org.lifetech.job',name.removeprefix('genomics-')),
+                     'group':labels.get('org.lifetech.group','workers'),'cpus':cpu,'memory_mb':(memory+1024**2-1)//1024**2,
+                     'pids':limits.get('PidsLimit') or 512,'active':True,'created':0})
+    return rows
 
 
 class ResourceLease:
@@ -154,6 +195,9 @@ class ResourceLease:
                         if check.returncode==0 and check.stdout.strip()=='true':rows.append(row);continue
                     path.unlink(missing_ok=True)
             except FileNotFoundError:continue
+        if (self.directory/'docker-workers').exists():
+            tracked={r.get('container') for r in rows}
+            rows.extend(row for row in docker_workers() if row['container'] not in tracked)
         return rows
 
     def try_acquire(self):
@@ -449,12 +493,15 @@ def start_local_peer_qc(config):
     return bool(job)
 
 
-def worker_environment(home):
+def worker_environment(home,work=None):
     # The Docker CLI must use the same local engine as this agent, including
     # rootless sockets. Deployment and login credentials stay out of jobs.
     env = {key: os.environ[key] for key in ('PATH', 'LANG', 'LC_ALL', 'DOCKER_HOST') if key in os.environ}
     env.update(HOME=str(home), PYTHONDONTWRITEBYTECODE='1', PYTHONUNBUFFERED='1',
                GIT_TERMINAL_PROMPT='0', GIT_CONFIG_NOSYSTEM='1')
+    if work is not None:
+        work=Path(work)
+        env['PYTHONPATH']=os.pathsep.join(str(p) for p in (work,work/'scripts',work/'swarm-control/server'))
     return env
 
 
@@ -514,7 +561,6 @@ class ResourceSampler:
 
 # Local telemetry collectors live in the atomic launcher release. They never SSH.
 import copy
-import math
 import tempfile
 PROFILE_LOCK=threading.Lock()
 
@@ -756,6 +802,41 @@ class GpuSampler:
         return {**hardware,'gpus':[{**gpu,**rows.get(gpu.get('pci_id'),{})} for gpu in hardware.get('gpus',[])]}
 
 
+PERFORMANCE_RUNTIME_B64 = ''
+PERFORMANCE_RUNTIME_DIRECTORY = None
+PERFORMANCE_RUNTIME_LOCK = threading.Lock()
+
+
+def load_performance_runtime():
+    """Import the monitor shipped inside this atomically verified agent source."""
+    global PERFORMANCE_RUNTIME_DIRECTORY
+    with PERFORMANCE_RUNTIME_LOCK:
+        if PERFORMANCE_RUNTIME_B64:
+            if PERFORMANCE_RUNTIME_DIRECTORY is None:
+                import base64
+                PERFORMANCE_RUNTIME_DIRECTORY=tempfile.TemporaryDirectory(prefix='swarm-monitor-')
+                archive=Path(PERFORMANCE_RUNTIME_DIRECTORY.name)/'runtime.zip'
+                archive.write_bytes(base64.b64decode(PERFORMANCE_RUNTIME_B64,validate=True))
+                sys.path.insert(0,str(archive))
+        else:
+            package=Path(__file__).resolve().parents[1]/'ramtop'
+            if (package/'ramtop/telemetry.py').is_file() and str(package) not in sys.path:
+                sys.path.insert(0,str(package))
+        from ramtop.telemetry import PerformanceSampler, brief, valid_snapshot
+        return PerformanceSampler,brief,valid_snapshot
+
+
+class PerformanceCollector:
+    def __init__(self):self.sampler=None
+
+    def sample(self):
+        if self.sampler is None:self.sampler=load_performance_runtime()[0]()
+        return self.sampler.sample()
+
+    def close(self):
+        if self.sampler:self.sampler.close()
+
+
 class LauncherTelemetry:
     """Independent local collectors and bounded, acknowledged five-minute replay."""
     def __init__(self, agent):
@@ -773,6 +854,13 @@ class LauncherTelemetry:
     def record(self, kind, value, sampled_at=None):
         sampled_at=time.time() if sampled_at is None else sampled_at
         with self.lock:
+            if kind=='performance':
+                # Extended data rides the existing CPU envelope, so older enrolled
+                # masters can relay it without a wire-protocol flag day.
+                self.latest[kind]={'sampled_at':sampled_at,'value':copy.deepcopy(value)}
+                return
+            if kind=='cpu' and 'performance' in self.latest:
+                value={**value,'performance':copy.deepcopy(self.latest['performance']['value'])}
             self.sequence+=1
             self.samples.append({'sequence':self.sequence,'kind':kind,'sampled_at':sampled_at,'value':copy.deepcopy(value)})
             self.latest[kind]={'sampled_at':sampled_at,'value':copy.deepcopy(value)}
@@ -780,10 +868,15 @@ class LauncherTelemetry:
     def pending(self, acknowledged):
         with self.lock:
             rows=[row for row in self.samples if row['sequence'] not in acknowledged and row['sampled_at']>=time.time()-295]
-            # Prioritize the newest measurement of each kind after reconnecting.
+            # Prioritize each newest kind, then replay within both protocol limits.
             newest={row['kind']:row for row in rows}
-            selected={row['sequence']:row for row in list(newest.values())+rows[:12]}
-            return {'session':self.session,'samples':copy.deepcopy(list(selected.values()))}
+            selected=[];seen=set()
+            for row in list(newest.values())+rows:
+                if row['sequence'] in seen:continue
+                candidate={'session':self.session,'samples':selected+[row]}
+                if len(selected)>=16 or len(json.dumps(candidate,allow_nan=False))>250000:continue
+                selected.append(row);seen.add(row['sequence'])
+            return {'session':self.session,'samples':copy.deepcopy(selected)}
 
     def accept(self, sender, args):
         session=args.get('session');rows=args.get('samples')
@@ -792,16 +885,21 @@ class LauncherTelemetry:
         now=time.time()
         for row in rows:
             if (not isinstance(row,dict) or type(row.get('sequence')) is not int or row['sequence']<1
-                    or row.get('kind') not in ('cpu','hardware','disks','network_interfaces')
+                    or row.get('kind') not in ('cpu','hardware','disks','network_interfaces','performance')
                     or type(row.get('sampled_at')) not in (int,float) or not math.isfinite(row['sampled_at'])
                     or not now-300<=row['sampled_at']<=now+5):raise ValueError('Invalid telemetry sample')
             value=row.get('value')
-            if row['kind'] in ('disks','network_interfaces'):
+            if row['kind']=='performance':
+                if not load_performance_runtime()[2](value) or value['sampled_at']!=row['sampled_at']:
+                    raise ValueError('Invalid performance telemetry')
+            elif row['kind'] in ('disks','network_interfaces'):
                 if not isinstance(value,list) or len(value)>32 or any(not isinstance(item,dict) for item in value):raise ValueError('Invalid telemetry rows')
             elif not isinstance(value,dict):raise ValueError('Invalid telemetry value')
             elif row['kind']=='hardware' and (not isinstance(value.get('gpus',[]),list) or len(value.get('gpus',[]))>16 or any(not isinstance(gpu,dict) for gpu in value.get('gpus',[]))):raise ValueError('Invalid GPU telemetry')
             elif row['kind']=='cpu' and (value.get('status') not in ('live','warming','permission_denied','unavailable')
                     or type(value.get('sampled_at')) not in (int,float) or value['sampled_at']!=row['sampled_at']):raise ValueError('Invalid CPU telemetry')
+            if row['kind']=='cpu' and 'performance' in value and not load_performance_runtime()[2](value['performance']):
+                raise ValueError('Invalid extended CPU telemetry')
             if row['kind']=='cpu' and value['status']=='live':
                 if (type(value.get('cpus')) is not int or not 1<=value['cpus']<=65536
                         or type(value.get('percent')) not in (int,float) or not math.isfinite(value['percent'])
@@ -825,7 +923,7 @@ class LauncherTelemetry:
     def host(name, latest):
         cpu=latest.get('cpu',{})
         value={'status':'warming',**cpu.get('value',{}),'host':name,'sampled_at':cpu.get('sampled_at',0)}
-        for kind in ('hardware','disks','network_interfaces'):
+        for kind in ('hardware','disks','network_interfaces','performance'):
             if kind in latest:
                 value[kind]=copy.deepcopy(latest[kind]['value'])
                 if kind=='hardware':value[kind]['sampled_at']=latest[kind]['sampled_at']
@@ -848,6 +946,7 @@ class LauncherTelemetry:
                         # every logical CPU in every peripheral event.
                         snapshot=self.host(name,latest)
                         snapshot.pop('logical_cpus',None)
+                        if 'performance' in snapshot:snapshot['performance']=load_performance_runtime()[1](snapshot['performance'])
                         if 'hardware' in snapshot:
                             snapshot['hardware']={key:value for key,value in snapshot['hardware'].items() if key in ('gpus','sampled_at','stale')}
                         events.append({'revision':row['revision'],'sampled_at':row['sampled_at'],'hosts':[snapshot]})
@@ -859,13 +958,14 @@ class LauncherTelemetry:
         try:config=json.loads(self.agent.config.read_text())
         except (OSError,ValueError):config={}
         target={'local':True,'host':config.get('name','local')}
-        interfaces=InterfaceSampler();disks=DiskSampler();gpu=GpuSampler()
+        interfaces=InterfaceSampler();disks=DiskSampler();gpu=GpuSampler();performance=PerformanceCollector()
         def hardware():
             value=gpu.sample(target,hardware_sample(disk=self.agent.root))
             value['sampled_at']=time.time()
             return value
         collectors={'cpu':self.agent.metrics_sampler.sample,'hardware':hardware,
-                    'network_interfaces':lambda:interfaces.sample(target),'disks':lambda:disks.sample(target)}
+                    'network_interfaces':lambda:interfaces.sample(target),'disks':lambda:disks.sample(target),
+                    'performance':performance.sample}
         def run(kind, collect):
             import logging
             while not self.stopped.is_set():
@@ -876,6 +976,7 @@ class LauncherTelemetry:
                     if value!=[]:self.record(kind,value,value.get('sampled_at') if isinstance(value,dict) else None)
                 except Exception as error:logging.debug('Telemetry %s failed: %s',kind,type(error).__name__)
                 self.stopped.wait(max(.1,5-(time.monotonic()-started)))
+            if kind=='performance':performance.close()
         for kind,collect in collectors.items():
             thread=threading.Thread(target=run,args=(kind,collect),name='telemetry-'+kind,daemon=True)
             thread.start();self.threads.append(thread)
@@ -887,6 +988,7 @@ class LauncherTelemetry:
 class Agent:
     def __init__(self, config, root):
         self.config = config
+        self.instance_lock=launcher_lock(Path(config).parent/'launcher-agent.lock')
         folder=Path(__file__).resolve().parent
         self.source_revision=hashlib.sha256(b''.join((folder/name).read_bytes() for name in ('launcher_peers.py','launcher_discovery.py','launcher_registration.py','launcher_agent.py','launcher_registry.py'))).hexdigest()
         self.root = Path(root).resolve()
@@ -910,6 +1012,9 @@ class Agent:
         self.image_progress={}
         self.browsers=set()
         self.browser_timers={}
+        self.pending_resources={}
+        directory=Path(os.getenv('SWARM_RESOURCE_DIR',str(self.root/'.resources')))
+        directory.mkdir(parents=True,exist_ok=True,mode=0o700);(directory/'docker-workers').touch()
         self.busy()
         for path in self.root.glob('*.upload'):path.unlink()
         for path in self.root.glob('*-p2p/browser.json'):
@@ -964,7 +1069,7 @@ class Agent:
         path=Path('/tmp/launcher-agent-busy.json');temporary=path.with_suffix('.tmp')
         with self.lock:
             temporary.write_text(json.dumps({'jobs':[key for key,job in self.jobs.items() if job['status']=='running'],
-                                             'browsers':sorted(self.browsers),'transfers':self.registry_transfers+len(self.uploads)+len(getattr(self,'resource_leases',{})),'time':time.time()}));temporary.replace(path)
+                                             'browsers':sorted(self.browsers),'transfers':self.registry_transfers+len(self.uploads)+len(getattr(self,'pending_resources',{})),'workers_survive_restart':True,'time':time.time()}));temporary.replace(path)
 
     @staticmethod
     def image_fingerprint(image):
@@ -1036,20 +1141,26 @@ class Agent:
             raise ValueError('Invalid run ID')
         return self.root/ident
 
+    def reconcile_resources(self):
+        workers=docker_workers()
+        running={r['container'] for r in workers}
+        changed=False
+        for ident,entry in list(self.pending_resources.items()):
+            if entry['lease'].row['container'] in running or time.monotonic()>=entry['deadline']:
+                entry['lease'].close();del self.pending_resources[ident];changed=True
+        if changed:self.busy()
+        return workers
+
     def expire_resource(self,ident,token=None):
+        # Explicit owner cancellation only; workers never expire on agent exit.
         with self.lock:
-            entry=getattr(self,'resource_leases',{}).get(ident)
-            if not entry or token is not None and entry.get('token')!=token:return
-            name=entry['lease'].row.get('container')
-            if entry['lease'].row['active'] and name:
-                # Remove the bounded, owned batch before returning its capacity.
-                result=subprocess.run(['docker','rm','-f',name],capture_output=True,timeout=20)
-                if result.returncode:
-                    check=subprocess.run(['docker','inspect',name],capture_output=True,timeout=5)
-                    if check.returncode==0:
-                        timer=threading.Timer(20,lambda expiry_token=token:self.expire_resource(ident,expiry_token));timer.daemon=True
-                        entry['timer']=timer;timer.start();return
-            self.dispatch('resource.release',{'id':ident})
+            workers=self.reconcile_resources()
+            for row in workers:
+                if row['job']==ident:
+                    subprocess.run(['docker','rm','-f',row['id']],check=True,capture_output=True,timeout=20)
+            entry=self.pending_resources.pop(ident,None)
+            if entry:entry['lease'].close()
+            self.busy()
 
     def local_jobs(self):
         """Only work owned by this worker; deployment containers are excluded."""
@@ -1057,9 +1168,8 @@ class Agent:
             rows=[{'id':ident,'kind':'test','status':'stopping' if (self.folder(ident)/'STOP').exists() else 'running',
                    'label':'Source preparation' if job.get('prepare_only') else 'Test job'}
                   for ident,job in self.jobs.items() if job['status'] in ('running','starting')]
-            rows.extend({'id':ident,'kind':'resource','status':'running' if entry['lease'].row['active'] else 'waiting',
-                         'label':entry['lease'].row['group']}
-                        for ident,entry in getattr(self,'resource_leases',{}).items())
+            rows.extend({'id':r['job'],'kind':'resource','status':'running','label':r['group']} for r in self.reconcile_resources())
+            rows.extend({'id':ident,'kind':'resource','status':'waiting','label':entry['lease'].row['group']} for ident,entry in self.pending_resources.items())
             rows.extend({'id':ident,'kind':'browser','status':'running','label':'Swarm browser'} for ident in self.browsers)
             external = local_peer_qc(self.config)
             if external:
@@ -1102,51 +1212,45 @@ class Agent:
             return self.save_telemetry_policy({'transport':args['transport'],'updated_at':time.time()})
         if op=='resource.capacity':
             if set(args)-{'group'}:raise ValueError('Invalid capacity request')
-            return ResourceLease.pool_capacity(directory=os.getenv('SWARM_RESOURCE_DIR',str(self.root/'.resources')),group=args.get('group'))
+            with self.lock:
+                self.reconcile_resources()
+                return ResourceLease.pool_capacity(directory=os.getenv('SWARM_RESOURCE_DIR',str(self.root/'.resources')),group=args.get('group'))
         if op in ('resource.acquire','resource.release','resource.renew'):
             with self.lock:
-                leases=getattr(self,'resource_leases',None)
-                if leases is None:self.resource_leases={};leases=self.resource_leases
                 ident=args.get('id')
-                if not isinstance(ident,str) or not re.fullmatch(r'[a-f0-9]{32}',ident):raise ValueError('Invalid resource lease')
+                if not isinstance(ident,str) or not re.fullmatch(r'[a-f0-9]{32}',ident):raise ValueError('Invalid job ID')
+                if not hasattr(self,'pending_resources'):self.pending_resources={}
+                workers=self.reconcile_resources()
                 if op=='resource.release':
-                    previous=leases.pop(ident,None)
-                    if previous:previous['timer'].cancel();previous['lease'].close()
-                    self.busy()
-                    return {'released':True}
+                    entry=self.pending_resources.pop(ident,None)
+                    if entry:entry['lease'].close()
+                    self.busy();return {'released':True}
                 if op=='resource.renew':
-                    if set(args)!={'id'}:raise ValueError('Invalid resource renewal')
-                    previous=leases.get(ident)
-                    if not previous or not previous['lease'].row['active']:raise ValueError('Resource lease is not active')
-                    previous['timer'].cancel();token=secrets.token_hex(16)
-                    timer=threading.Timer(240,lambda expiry_token=token:self.expire_resource(ident,expiry_token));timer.daemon=True
-                    previous.update(timer=timer,token=token);timer.start()
-                    return {'renewed':True,'expires_in_seconds':240}
-                if set(args)!={'id','group','cpus','memory_mb','container'} or type(args['cpus']) is not int or args['cpus']<1 or type(args['memory_mb']) is not int or args['memory_mb']<1 or not re.fullmatch(r'genomics-[a-f0-9]{32}',args['container']):
-                    raise ValueError('Expected a bounded private batch resource request')
-                if Path('/tmp/launcher-agent-draining').exists():raise RuntimeError('Agent is applying an explicit update; lease renewals remain available')
+                    # Compatibility for existing controllers; no timer or lease owner.
+                    if set(args)!={'id'}:raise ValueError('Invalid worker check')
+                    if not any(r['job']==ident for r in workers) and ident not in self.pending_resources:
+                        raise ValueError('Worker is not active')
+                    return {'renewed':True,'expires_in_seconds':None,'managed_by':'docker'}
+                if set(args)!={'id','group','cpus','memory_mb','container'} or type(args['cpus']) is not int or args['cpus']<1 or type(args['memory_mb']) is not int or args['memory_mb']<1 or args['container']!='genomics-'+ident:
+                    raise ValueError('Expected worker name genomics-<job ID> and CPU/RAM limits')
+                existing=next((r for r in workers if r['job']==ident),None)
+                if existing:
+                    if any(existing[k]!=args[k] for k in ('group','cpus','memory_mb','container')):raise ValueError('Job ID already used')
+                    return {'acquired':True,'managed_by':'docker'}
+                if Path('/tmp/launcher-agent-draining').exists():raise RuntimeError('Agent is applying an explicit update')
                 policy=worker_policy(self.config)
                 if not policy['accepting_jobs']:raise RuntimeError(policy['reason'])
-                previous=leases.get(ident)
-                if not previous:
-                    if len(leases)>=128:raise RuntimeError('Resource request queue full')
-                    lease=ResourceLease(args.get('group'),args.get('cpus'),args.get('memory_mb'),args.get('container',''),
-                                        directory=os.getenv('SWARM_RESOURCE_DIR',str(self.root/'.resources')),pids=32)
-                    token=secrets.token_hex(16)
-                    timer=threading.Timer(300,lambda expiry_token=token:self.expire_resource(ident,expiry_token));timer.daemon=True
-                    leases[ident]={'lease':lease,'timer':timer,'token':token};timer.start();self.busy()
-                else:
-                    lease=previous['lease']
-                    if any(lease.row[k]!=args[k] for k in ('group','cpus','memory_mb','container')):raise ValueError('Resource request ID already used')
+                entry=self.pending_resources.get(ident)
+                if entry is None:
+                    if len(self.pending_resources)>=128:raise RuntimeError('Worker launch queue full')
+                    lease=ResourceLease(args['group'],args['cpus'],args['memory_mb'],args['container'],directory=os.getenv('SWARM_RESOURCE_DIR',str(self.root/'.resources')),pids=32)
+                    entry={'lease':lease,'deadline':time.monotonic()+300};self.pending_resources[ident]=entry
+                lease=entry['lease']
+                if any(lease.row[k]!=args[k] for k in ('group','cpus','memory_mb','container')):raise ValueError('Job ID already used')
                 try:acquired=lease.try_acquire()
                 except ValueError:
-                    leases.pop(ident)['timer'].cancel();lease.close();self.busy();raise
-                if acquired and not leases[ident].get('started'):
-                    leases[ident]['timer'].cancel()
-                    token=secrets.token_hex(16)
-                    timer=threading.Timer(240,lambda expiry_token=token:self.expire_resource(ident,expiry_token));timer.daemon=True
-                    leases[ident].update(timer=timer,token=token,started=True);timer.start()
-                return {'acquired':acquired}
+                    self.pending_resources.pop(ident)['lease'].close();raise
+                self.busy();return {'acquired':acquired}
         if op=='worker.policy':return worker_policy(self.config)
         if op in ('job.start','source.stage','p2p.start','image.pull','resource.acquire') or (op=='job.feed' and args.get('tasks')):
             policy=worker_policy(self.config)
@@ -1223,15 +1327,15 @@ class Agent:
             addresses = [a['local'].split('%')[0] for row in rows if row['ifname'].startswith(('en','eth','wl')) for a in row.get('addr_info',[]) if a.get('scope')!='host']
             try:update_state=json.loads(Path('/tmp/launcher-agent-update.json').read_text())
             except (OSError,ValueError):update_state={}
-            return {'update':update_state,'protocol':VERSION,'source_revision':self.source_revision,'node':config['name'],'ready':bool(shutil.which('docker')) and not Path('/tmp/launcher-agent-draining').exists(),'time':time.time(),
+            return {'service':'swarm-node','update':update_state,'protocol':VERSION,'source_revision':self.source_revision,'node':config['name'],'ready':bool(shutil.which('docker')) and not Path('/tmp/launcher-agent-draining').exists(),'time':time.time(),
                     'machine':hashlib.sha256(machine.read_bytes()).hexdigest(),'hostname':socket.gethostname(),
                     'addresses':addresses,'platform':info['OSType']+'/'+info['Architecture'],
                     'routing':getattr(self,'routing_status',{'status':'pending'}),
-                    'worker_policy':policy,'capabilities':['controller-signature','github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','peer-layer-cache','mptcp-transport','file-queue','snapshot-stage','event-wait','shared-resources','renewable-resources','encrypted-backup','gpu-kernel','telemetry-push'],
+                    'worker_policy':policy,'capabilities':['controller-signature','github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','peer-layer-cache','mptcp-transport','file-queue','snapshot-stage','event-wait','shared-resources','renewable-resources','docker-workers','encrypted-backup','gpu-kernel','telemetry-push','performance-v1','builtin-monitor'],
                     'enrolled_peers':sorted(config['peers']),'storage':self.storage_status,
                     'hardware':self.hardware(info),
                     'preparations':[key for key,j in self.jobs.items() if j['status']=='running' and j.get('prepare_only')],
-                    'active_jobs':[key for key,j in self.jobs.items() if j['status']=='running' and not j.get('prepare_only')],'active_image_transfers':self.registry_transfers,'active_uploads':len(self.uploads),'active_resource_leases':len(getattr(self,'resource_leases',{}))}
+                    'active_jobs':[key for key,j in self.jobs.items() if j['status']=='running' and not j.get('prepare_only')],'active_image_transfers':self.registry_transfers,'active_uploads':len(self.uploads),'active_resource_leases':len(self.pending_resources),'workers':self.reconcile_resources()}
         if op.startswith('backup.'):
             return self.backup(op,args)
         if op.startswith('upload.'):
@@ -1611,7 +1715,7 @@ class Agent:
         folder=work.parent
         try:
             home=self.root/'home';home.mkdir(exist_ok=True,mode=0o700)
-            env=worker_environment(home)
+            env=worker_environment(home,work)
             env['SWARM_RESOURCE_DIR']=str(Path(os.getenv('SWARM_RESOURCE_DIR',str(self.root/'.resources'))))
             manifest=json.loads((folder/'manifest.json').read_text())
             self.checkout(work,manifest,env,job)
@@ -1712,7 +1816,8 @@ class Agent:
     def close(self):
         self.telemetry.stopped.set()
         self.storage_stop.set()
-        for ident in list(getattr(self,'resource_leases',{})):self.expire_resource(ident)
+        for entry in getattr(self,'pending_resources',{}).values():entry['lease'].close()
+        self.pending_resources={}
         for timer in self.browser_timers.values():timer.cancel()
         for ident in list(self.browsers):self.remove_containers(ident)
         for lease in getattr(self,'p2p_leases',{}).values():lease.close()
@@ -1720,3 +1825,4 @@ class Agent:
             if job['status']=='running':
                 (self.folder(ident)/'STOP').touch()
                 self.remove_containers(ident)
+        if hasattr(self,'instance_lock'):self.instance_lock.close()

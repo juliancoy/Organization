@@ -65,7 +65,17 @@ def execute(service, hosts, images):
         started = time.monotonic()
         cache = SuiteCache(service.root, service.folder, SUITES)
         baselines = cache.baselines(run)
+        def finish_unused(stop=False):
+            with service.lock:
+                unused=not include_p2p and not run.get('stop_requested') and not run['pending_tasks'] and not active and not host['jobs']
+            if not unused:return False
+            if stop:client.call('job.stop',{'id':ident},timeout=40)
+            with service.lock:
+                host.update(status='passed',not_executed=True,preparation='All selected tests were claimed by other workers')
+                service.save()
+            return True
         try:
+            if finish_unused():return
             with service.lock:
                 host.update(status='preparing', preparation='Preparing persistent file worker')
                 service.save()
@@ -73,7 +83,9 @@ def execute(service, hosts, images):
             bases = preparation_bases
             for image in dict.fromkeys([PYTHON] + [SUITES[b]['image'] for b in bases]):
                 if run.get('stop_requested'):return
+                if finish_unused():return
                 images.ensure(image, [host])
+            if finish_unused():return
             status=client.call('status')
             if not status.get('ready') or status.get('machine')!=host['session']['machine'] or status.get('source_revision')!=host['agent_status']['source_revision']:
                 raise RuntimeError('Worker readiness or identity changed during preparation')
@@ -127,6 +139,7 @@ def execute(service, hosts, images):
                     if result['status'] != 'completed' or active:
                         raise RuntimeError(result.get('error') or ('Worker ended before its tasks completed: '+''.join(host.get('logs',[])[-3:])))
                     break
+                if finish_unused(stop=True):return
                 outgoing = []
                 policy=client.call('worker.policy')
                 host['worker_policy']=policy

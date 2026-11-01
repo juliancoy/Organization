@@ -6,6 +6,11 @@ from unittest.mock import patch
 from distributed import DistributedTests, plan, targets, no_remote_shell
 
 class DistributedTestsTests(unittest.TestCase):
+    def test_focused_plan_contains_no_placeholder_p2p_job(self):
+        hosts=plan([{'host':'node'}],{'paths':['tests/one.py'],'suites':[]})
+        self.assertEqual(hosts[0]['jobs'],{})
+        self.assertEqual(hosts[0]['suites'],[])
+
     def test_stop_is_idempotent_and_targets_only_current_run(self):
         with tempfile.TemporaryDirectory() as folder:
             service = DistributedTests(state=folder)
@@ -57,6 +62,19 @@ class DistributedTestsTests(unittest.TestCase):
             self.assertEqual(offline['host'],'offline.local')
             self.assertEqual(offline['jobs'],{})
             self.assertEqual(offline['exclusion_stage'],'launcher_verification')
+
+    def test_retry_keeps_previous_worker_eligible(self):
+        with tempfile.TemporaryDirectory() as folder:
+            service=DistributedTests(state=folder)
+            original=plan([{'host':name+'.local'} for name in ('a','b')])
+            service.start(selected_hosts=original,launch=False)
+            service.run['avoid_workers']=['a.local']
+            with patch('agent_client.AgentSessions') as sessions, patch('distributed.ImageDistributor'), patch('github_sources.publish',side_effect=RuntimeError('stop after planning')):
+                sessions.return_value.accessible.return_value=original
+                sessions.return_value.verify.return_value=original
+                service.execute()
+            sessions.return_value.verify.assert_called_once_with(original)
+            self.assertEqual(service.run['excluded_hosts'],[])
 
     def test_github_urls_and_pinned_source_manifest(self):
         from github_sources import github_url,source_digest

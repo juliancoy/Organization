@@ -28,3 +28,8 @@ test('execution estimates are labelled separately from read estimates',()=>{
  assert.match(readEta(stage,100).text,/Mapping ETA ~2 min/);
  assert.match(readEta({children:[stage,{name:'Report',status:'not scheduled'}]},100).text,/unscheduled step: Report/);
 });
+test('missing evidence and preparation are explicit rather than generic queue ETAs',()=>{
+ assert.equal(readEta({status:'waiting_inputs'},100).text,'Waiting for required inputs');
+ assert.equal(readEta({status:'partial',input_blockers:['confidence evidence']},100).text,'Partial results · waiting for required inputs');
+ assert.match(readEta({status:'preparing',children:[{name:'old placeholder',status:'queued'}]},100).text,/Preparing workers/);
+});

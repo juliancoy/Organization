@@ -233,7 +233,7 @@ def _run(work, suite_id, phase, spec, run_id, env, cancel=None):
     native = spec.get('native')
     if not native:
         cache=download_cache()
-        command = ['docker', 'run', '--pull=never', '--rm', '--name', name, '--user', env.get('ORGANIZATION_CONTAINER_USER', str(os.getuid()) + ':' + str(os.getgid())), '-e', 'HOME=/tmp', '--cpus', str(spec.get('cpus',2)), '--memory', str(spec.get('memory_mb',3072))+'m',
+        command = ['docker', 'run', '--pull=never', '--rm', '--name', name, '--label','org.lifetech.worker=true','--label','org.lifetech.job='+name,'--label','org.lifetech.group='+run_id, '--user', env.get('ORGANIZATION_CONTAINER_USER', str(os.getuid()) + ':' + str(os.getgid())), '-e', 'HOME=/tmp', '--cpus', str(spec.get('cpus',2)), '--memory', str(spec.get('memory_mb',3072))+'m',
                    '--pids-limit', str(spec.get('pids_limit',512)), '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
                    '--shm-size', '256m', '--network', 'host' if phase == 'prepare' else 'none',
                    '--mount', 'type=bind,src=' + str(work) + ',dst=/work',

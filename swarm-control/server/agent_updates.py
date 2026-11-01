@@ -1,5 +1,6 @@
 """Stage the Start request's launcher sources through existing authenticated SSH."""
 import hashlib
+import runpy
 import json
 from pathlib import Path
 import shlex
@@ -34,13 +35,14 @@ settings['controller_public_key']=public_key
 pending=config.with_suffix('.controller.tmp');pending.write_text(json.dumps(settings,indent=2)+'\\n');pending.chmod(0o600);pending.replace(config)
 # The launcher hosts coordinator threads and Docker clients for multiple runs.
 # Raise undersized provisioned limits without restarting active containers.
-for container_name in ('lifetech-launcher','lifetech-launcher-session'):
+for container_name in ('swarm-node','lifetech-launcher','lifetech-launcher-session','organization-test-agent'):
  result=subprocess.run(['docker','inspect',container_name],capture_output=True,text=True,timeout=15)
  if result.returncode:continue
  container=json.loads(result.stdout)[0]
- owned=any(m['Destination']=='/run/launcher-config' and pathlib.Path(m['Source']).resolve()==config.parent.resolve() for m in container.get('Mounts',[]))
+ owned=any(m['Destination'] in ('/run/launcher-config',str(config.parent)) and pathlib.Path(m['Source']).resolve()==config.parent.resolve() for m in container.get('Mounts',[]))
  for mount in container.get('Mounts',[]):
   if owned and mount['Destination']=='/session':targets.append(pathlib.Path(mount['Source'])/'launcher_peer_supervisor.py')
+  if owned and mount['Destination'].endswith('/scripts') and (pathlib.Path(mount['Source'])/'launcher_peer_supervisor.py').exists():targets.append(pathlib.Path(mount['Source'])/'launcher_peer_supervisor.py')
  current_limit=container['HostConfig'].get('PidsLimit') or 0
  target_limit=min(32768,max(1024,len(os.sched_getaffinity(0))*256+512))
  if owned and 0<current_limit<target_limit:
@@ -68,6 +70,9 @@ class LauncherUpdates:
         folder=Path(root)/'scripts'
         self.supervisor_source=(folder/'launcher_peer_supervisor.py').read_text()
         self.files={name:(folder/name).read_text() for name in (*FILES,'launcher_update.py')}
+        runtime=Path(root)/'ramtop/ramtop'
+        bundle=runpy.run_path(str(runtime/'bundle.py'))['encoded_runtime'](runtime)
+        self.files['launcher_agent.py'] += '\n# Built-in monitor source is covered by the existing atomic release checksum.\nPERFORMANCE_RUNTIME_B64 = '+repr(bundle)+'\n'
         self.revision=hashlib.sha256(b''.join(self.files[name].encode() for name in FILES)).hexdigest()
 
     def stage(self,host,status):
@@ -99,8 +104,12 @@ class LauncherUpdates:
             command += [alias,'python3 -c '+shlex.quote(code)]
         return command
 
-    def ensure(self,host,client,status):
+    def ensure(self,host,client,status,allow_compatible=False):
         if status.get('source_revision')==self.revision and status.get('ready'):return status
+        if allow_compatible and status.get('ready'):
+            host['launcher_update']={'status':'deferred','from_revision':status.get('source_revision'),
+                                     'to_revision':self.revision,'reason':'Compatible running agent; updates are managed separately from task readiness'}
+            return status
         if status.get('active_jobs') or status.get('active_image_transfers') or status.get('active_uploads') or status.get('active_resource_leases'):
             raise RuntimeError('Launcher is busy; update deferred without interrupting its work')
         for ident in status.get('preparations',[]):

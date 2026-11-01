@@ -1,5 +1,6 @@
 """Apply explicit atomic agent releases when idle, with startup rollback."""
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -26,6 +27,10 @@ def main():
     args=parser.parse_args()
     base=Path(__file__).resolve().parent
     config=Path(os.environ.get('LIFETECH_PEER_CONFIG',str(Path.home()/'.config/lifetech-launcher/peers.json')))
+    singleton=(config.parent/'launcher-supervisor.lock').open('a+')
+    if os.geteuid()==0:os.fchown(singleton.fileno(),config.parent.stat().st_uid,config.parent.stat().st_gid)
+    try:fcntl.flock(singleton,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    except BlockingIOError:raise SystemExit('A launcher supervisor is already running on this machine')
     releases=config.parent/'agent-releases'
     stopped=threading.Event()
     signal.signal(signal.SIGTERM,lambda *_:stopped.set())
@@ -102,7 +107,7 @@ def main():
                 temporary.write_text(json.dumps({'active':str(active),'desired':str(wanted),
                                                 'phase':'applying' if pending else 'deferred' if wanted!=active else 'current',
                                                 'reason':'Waiting for active work to finish' if wanted!=active and not pending else '',
-                                                'sampled_at':time.time(),'lease_handoff_supported':False}))
+                                                'sampled_at':time.time(),'workers_survive_restart':bool(json.loads(busy.read_text()).get('workers_survive_restart')) if busy.exists() else False}))
                 temporary.replace(status)
             except (OSError,ValueError,KeyError,TypeError) as error:
                 print('Agent update deferred: '+type(error).__name__,flush=True)

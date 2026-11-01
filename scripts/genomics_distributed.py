@@ -120,8 +120,8 @@ def memory_allocation(capacity, concurrency):
 def execute(host,batch):
     sys.path.insert(0,str(ROOT/'swarm-control/server'))
     from agent_client import AgentClient
-    name='genomics-'+uuid.uuid4().hex
-    client=AgentClient(host);lease_id=uuid.uuid4().hex
+    lease_id=uuid.uuid4().hex;name='genomics-'+lease_id
+    client=AgentClient(host)
     deadline=time.monotonic()+120
     try:
         capacity=client.call('resource.capacity',{'group':GROUP})
@@ -136,9 +136,9 @@ def execute(host,batch):
         finally:client.close()
 
 
-def execute_reserved(host,batch,name,memory_mb):
+def execute_reserved(host,batch,name,memory_mb,group=GROUP):
     if type(memory_mb) is not int or memory_mb<1:raise ValueError('Expected leased worker memory')
-    command=shell_command(host,['docker','run','--name',name,'--label','org.lifetech.genomics=true','--rm','--pull=never','-i','--network','none','--read-only',
+    command=shell_command(host,['docker','run','--name',name,'--label','org.lifetech.genomics=true','--label','org.lifetech.worker=true','--label','org.lifetech.job='+name.removeprefix('genomics-'),'--label','org.lifetech.group='+group,'--rm','--pull=never','-i','--network','none','--read-only',
         '--log-driver','none','--memory',str(memory_mb)+'m','--memory-swap',str(memory_mb)+'m','--cpus','1','--pids-limit','32',
         '--cap-drop','ALL','--security-opt','no-new-privileges','--ulimit','core=0:0',
         host['image'],'python','-c',WORKER,batch['kind']])
