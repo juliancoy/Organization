@@ -187,3 +187,9 @@
 
 !/scripts/worker_maintenance.py
 !/tests/test_worker_maintenance.py
+
+# Containerized enrolled-agent runtime.
+!/scripts/agent_container.py
+!/docs/
+/docs/*
+!/docs/container-agent.md
