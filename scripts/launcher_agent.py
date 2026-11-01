@@ -4,6 +4,7 @@ import collections
 import contextlib
 import fcntl
 import hashlib
+from launcher_registry import sha256_stream
 import json
 import io
 import os
@@ -1341,7 +1342,7 @@ class Agent:
             temporary.replace(path)
         def good(path,part):
             if not path.is_file() or path.stat().st_size!=part['size']:return False
-            with path.open('rb') as stream:return hashlib.file_digest(stream,'sha256').hexdigest()==part['sha256']
+            with path.open('rb') as stream:return sha256_stream(stream)==part['sha256']
         with self.lock:
             if op=='backup.status':
                 copies=[]
@@ -1406,7 +1407,7 @@ class Agent:
                 row.update(offset=offset+len(data),updated=time.time())
                 return {'offset':row['offset']}
             if op == 'upload.finish':
-                with row['path'].open('rb') as stream:digest=hashlib.file_digest(stream,'sha256').hexdigest()
+                with row['path'].open('rb') as stream:digest=sha256_stream(stream)
                 if row['offset']!=row['size'] or digest!=row['sha256']:raise ValueError('Upload checksum mismatch')
                 row['complete']=True
                 return {'verified':True}
