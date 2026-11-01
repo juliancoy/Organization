@@ -22,6 +22,14 @@ class InputReleaseTests(unittest.TestCase):
             result=deploy(release.files);self.assertEqual(result.returncode,0,result.stderr)
             current=config.parent/'input-releases/current';old=current.resolve()
             self.assertEqual(json.loads(result.stdout)['revision'],release.revision)
+            # A regular third-party scripts package must not shadow this release.
+            other=Path(directory)/'other/scripts';other.mkdir(parents=True)
+            (other/'__init__.py').write_text('')
+            probe=subprocess.run([sys.executable,'-c','import scripts.run_input_cache as m; print(m.__file__)'],
+                                 cwd=directory,env={**env,'PYTHONPATH':os.pathsep.join([str(current),str(other.parent)])},
+                                 capture_output=True,text=True)
+            self.assertEqual(probe.returncode,0,probe.stderr)
+            self.assertEqual(Path(probe.stdout.strip()).resolve(),(current/'scripts/run_input_cache.py').resolve())
             changed={**release.files,'run_inputs.py':release.files['run_inputs.py']+'\n# release fixture\n'}
             self.assertEqual(deploy(changed).returncode,0)
             self.assertEqual((current.parent/'previous').resolve(),old)

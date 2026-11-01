@@ -11,6 +11,15 @@ import threading
 import time
 
 
+def prepare_update(idle, drain):
+    """Defer updates while busy without making a healthy worker unavailable."""
+    if not idle():
+        drain.unlink(missing_ok=True)
+        return False
+    drain.touch()
+    return True
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--prefix',default='lifetech-')
@@ -82,13 +91,10 @@ def main():
                 elif wanted!=active:
                     # Persistent leased services may stay busy indefinitely.
                     # Keep accepting jobs until an update can actually apply.
-                    if idle():
-                        drain.touch()
+                    if prepare_update(idle, drain):
                         prior=active;stop_child();active=wanted;pending=True
                         child=launch(active);started=time.monotonic()
                         print('Applying explicit agent release',flush=True)
-                    else:
-                        drain.unlink(missing_ok=True)
                 elif child.poll() is not None:
                     stopped.wait(5);child=launch(active);started=time.monotonic()
             except (OSError,ValueError,KeyError,TypeError) as error:
