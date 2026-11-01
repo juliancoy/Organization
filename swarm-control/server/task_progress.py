@@ -73,7 +73,7 @@ def peer_task(manifest, state, receipts, now=None, measurements=None, failures=N
             'detail': 'Signed peer receipts; raw BAMs stay on their source node. This run does not align reads or call new variants.'}
 
 
-def test_task(run):
+def application_test_task(run):
     grouped = {key: [] for key in run.get('task_catalog', [])}
     for host in run.get('hosts', []):
         for name, job in host.get('jobs', {}).items():
@@ -125,7 +125,7 @@ def snapshot():
         from urllib.request import urlopen
         with urlopen('http://127.0.0.1:8089/api/distributed-tests', timeout=3) as response:
             data = json.load(response)
-        if data.get('run'): tasks.append(test_task(data['run']))
+        if data.get('run'): tasks.append(application_test_task(data['run']))
     except Exception:
         errors.append('Application test status unavailable')
     from task_registry import registry_snapshot

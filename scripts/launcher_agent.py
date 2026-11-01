@@ -1503,7 +1503,7 @@ class Agent:
                         source.rename(work)
                         (work/'distributed-plan.json').write_text(json.dumps(manifest))
                         previous['status']='consumed'
-                        persist_job_event(self.root,ident,job,{'kind':'source','repository':'.','commit':manifest['repositories']['.']['commit'],'status':'prepared_snapshot','cache_hit':True})
+                        persist_job_event(self.root,manifest['id'],job,{'kind':'source','repository':'.','commit':manifest['repositories']['.']['commit'],'status':'prepared_snapshot','cache_hit':True})
                         self.changed.notify_all()
                         return
 

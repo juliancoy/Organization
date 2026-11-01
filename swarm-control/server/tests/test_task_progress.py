@@ -1,5 +1,5 @@
 import unittest
-from task_progress import peer_task, test_task
+from task_progress import peer_task, application_test_task
 
 class TaskProgressTests(unittest.TestCase):
     def test_stale_worker_cannot_claim_running_or_completion(self):
@@ -12,7 +12,7 @@ class TaskProgressTests(unittest.TestCase):
         task=peer_task(manifest,state,{'a':{'node':'peer'}},now=100)
         self.assertEqual(task['progress']['percent'],100)
     def test_duplicate_test_attempts_count_once(self):
-        task=test_task({'id':'run','task_catalog':['unit','browser'],'hosts':[
+        task=application_test_task({'id':'run','task_catalog':['unit','browser'],'hosts':[
             {'host':'a','jobs':{'unit':{'status':'failed'}}},
             {'host':'b','jobs':{'unit':{'status':'passed'},'browser':{'status':'running'}}}]})
         self.assertEqual(task['progress']['total'],2)
