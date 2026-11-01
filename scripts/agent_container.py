@@ -6,7 +6,7 @@ import re
 import shlex
 
 
-def service(*, source, config, jobs, socket, image, uid, gid, socket_gid, hostname, gpus=False, worker_socket=None):
+def service(*, source, config, jobs, socket, image, uid, gid, socket_gid, hostname, gpus=False, worker_socket=None, fixed_release=False):
     paths=[Path(value) for value in (source,config,jobs,socket)]
     if any(not path.is_absolute() or '..' in path.parts for path in paths):
         raise ValueError('Agent paths must be absolute and normalized')
@@ -34,7 +34,8 @@ def service(*, source, config, jobs, socket, image, uid, gid, socket_gid, hostna
                   'LIFETECH_JOB_ROOT='+jobs,'PYTHONUNBUFFERED=1','PYTHONDONTWRITEBYTECODE=1'):
         args+=['--env',value]
     if gpus:args+=['--gpus','all']
-    args+=['--entrypoint','python',image,str(Path(source)/'launcher_peer_supervisor.py')]
+    entry='launcher_peers.py' if fixed_release else 'launcher_peer_supervisor.py'
+    args+=['--entrypoint','python',image,str(Path(source)/entry)]
     quote=lambda arg:json.dumps(str(arg).replace('%','%%'))
     return ('[Unit]\nDescription=Containerized enrolled swarm agent (Python 3.12)\nAfter=network-online.target\n\n'
             '[Service]\nType=simple\nExecStart='+' '.join(map(quote,args))+'\n'
@@ -51,6 +52,7 @@ def main():
         parser.add_argument('--'+name,type=int,required=True)
     parser.add_argument('--worker-socket',help='Keep worker jobs on their existing Docker daemon')
     parser.add_argument('--gpus',action='store_true')
+    parser.add_argument('--fixed-release',action='store_true',help='Run the mounted source release directly; change it by replacing this service')
     print(service(**vars(parser.parse_args())),end='')
 
 

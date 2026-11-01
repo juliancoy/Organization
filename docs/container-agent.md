@@ -32,3 +32,9 @@ After starting, verify authenticated readiness, enrolled machine identity and
 addresses, the pinned source revision, the container's Python version, and the
 identity and continuity of existing user containers. Restore the previous unit
 on failure. Resume the saved worker preference only after readiness succeeds.
+
+Use `--fixed-release` when concurrent controllers are staging different source
+versions. This runs the read-only mounted agent source directly, so changing the
+shared update pointer cannot restart it. Upgrade by draining transient work and
+replacing the service with another reviewed source directory. Other controllers
+will reject a revision mismatch rather than interrupt this agent's jobs.
