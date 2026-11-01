@@ -102,6 +102,8 @@ class DistributedTests:
             self._activity_run = self.run['id']
             self._activity_snapshot = {}
         self._activity_snapshot = capture(self.run, self._activity_snapshot, now())
+        from task_events import EventStore
+        EventStore((self.folder.parent if self.folder.name=='distributed' else self.folder)/'compute-events.sqlite3').observe(self.run, 'application-tests', 'coordinator')
         path = self.folder / (self.run['id'] + '.json')
         temporary = path.with_suffix('.tmp')
         temporary.write_text(json.dumps(self.run))
@@ -182,6 +184,9 @@ class DistributedTests:
 
     def update(self, host, event):
         with self.lock:
+            from task_events import EventStore
+            EventStore((self.folder.parent if self.folder.name=='distributed' else self.folder)/'compute-events.sqlite3').append(
+                self.run['id'], host['host'], event.get('kind', 'event'), event)
             kind = event.get('kind')
             if kind == 'host':
                 host.update(observed_hostname=event.get('hostname'), cpus=event.get('cpus'), python=event.get('python'))
@@ -259,7 +264,8 @@ class DistributedTests:
                     client.call('job.stop',{'id':ident},timeout=40)
                 result=client.call('job.poll',{'id':ident,'cursor':cursor})
                 if result.get('events_lost'):raise RuntimeError('Agent event history has a gap; result cannot be verified')
-                for item in result['events']:self.update(host,item['event'])
+                for item in result['events']:
+                    self.update(host, {**item['event'], '_worker_sequence':item['sequence'], '_worker_job':ident})
                 previous=cursor;cursor=result['cursor']
                 if result['status'] not in ('running','starting') and cursor==previous:
                     jobs=[j for suite,j in host['jobs'].items() if suite in selected and not SUITES[suite].get('coordinated')]
@@ -336,6 +342,8 @@ class DistributedTests:
                     run['excluded_hosts'] = [{'host':h['host'],'stage':h['exclusion_stage'],'reason':h['error']} for h in excluded.values()]
                     self.save()
             reachable = sessions.accessible()
+            alternatives=[h for h in reachable if h['host'] not in run.get('avoid_workers',[])]
+            if alternatives:reachable=alternatives
             exclude(hosts,reachable,'preflight')
             hosts = reachable
             images.hosts = hosts
@@ -355,8 +363,11 @@ class DistributedTests:
                     run['repositories'][name]=record
                     run['preparation']='GitHub: '+name+' · '+record['stage']
                     self.save()
-            with self.publication_lock:
-                repositories=publish_github(self.root,run['id'],lambda:bool(run.get('stop_requested')),publication_progress)
+            if run.get('pinned_repositories'):
+                repositories=copy.deepcopy(run['pinned_repositories'])
+            else:
+                with self.publication_lock:
+                    repositories=publish_github(self.root,run['id'],lambda:bool(run.get('stop_requested')),publication_progress)
             with self.lock:
                 run['repositories']=repositories
                 run['source_sha256']=source_digest(repositories)

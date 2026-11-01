@@ -29,7 +29,7 @@ class CheckoutTests(unittest.TestCase):
             config=root/'peers.json';config.write_text(json.dumps({'name':'fixture.local'}))
             agent=Agent.__new__(Agent);agent.root=jobs;agent.config=config;agent.storage_lock=threading.RLock();agent.lock=threading.RLock();agent.jobs={};agent.changed=threading.Condition(agent.lock)
             work=jobs/'run'/'source';work.mkdir(parents=True)
-            manifest={'repositories':{'.':{'url':url,'commit':commit}},'hosts':[{'host':'fixture.local','suites':['monitor','swarm-web'],'jobs':{}}]}
+            manifest={'id':'run','repositories':{'.':{'url':url,'commit':commit}},'hosts':[{'host':'fixture.local','suites':['monitor','swarm-web'],'jobs':{}}]}
             job={'sequence':0,'events':[]}
             agent.checkout(work,manifest,{},job)
             self.assertEqual((work/'fixture.txt').read_text(),'pinned content\n')
@@ -41,7 +41,7 @@ class CheckoutTests(unittest.TestCase):
             # Interrupted fetches must not permanently poison the disposable cache.
             (cache/'shallow.lock').write_text('abandoned')
             recovered=jobs/'recovered'/'source';recovered.mkdir(parents=True)
-            agent.checkout(recovered,manifest,{},dict(sequence=0,events=[]))
+            agent.checkout(recovered,{**manifest,'id':'recovered'}, {},dict(sequence=0,events=[]))
             self.assertFalse((cache/'shallow.lock').exists())
             self.assertEqual((recovered/'fixture.txt').read_text(),'pinned content\n')
 
@@ -49,7 +49,7 @@ class CheckoutTests(unittest.TestCase):
             mobile=jobs/'mobile'/'source';mobile.mkdir(parents=True)
             manifest['repositories']['CodeCollective']={'url':url,'commit':commit}
             manifest['hosts'][0]['suites']=['usajobs']
-            agent.checkout(mobile,manifest,{},dict(sequence=0,events=[]))
+            agent.checkout(mobile,{**manifest,'id':'mobile'}, {},dict(sequence=0,events=[]))
             site=mobile/'CodeCollective'
             self.assertEqual((site/'usa/index.html').read_text(),'fixture')
             self.assertTrue((site/'tests/usajobs-mobile.test.cjs').is_file())

@@ -66,8 +66,16 @@ class LauncherUpdates:
         public_key=json.loads(CONFIG.read_text())['controller_public_key']
         if len(bytes.fromhex(public_key))!=32:raise ValueError('Invalid pinned controller key')
         payload={'machine':status['machine'],'node':status['node'],'revision':self.revision,'files':self.files,'controller_public_key':public_key,'peers':json.loads(CONFIG.read_text())['peers']}
+        command=self.command(host,INSTALL)
+        result=subprocess.run(command,input=json.dumps(payload),capture_output=True,text=True,timeout=40)
+        if result.returncode:
+            # No source payload, fleet keys or account configuration enter run logs.
+            raise RuntimeError('Launcher staging failed over '+('local access' if host.get('local') else 'SSH')+
+                               '; check saved access, host keys and enrolled account. '+result.stderr[-400:])
+
+    def command(self,host,code):
         if host.get('local'):
-            command=[sys.executable,'-c',INSTALL]
+            command=[sys.executable,'-c',code]
         else:
             inventory=Path.home()/'.local/state/orgportal/lan-ssh-devices.json'
             accounts=json.loads(inventory.read_text()).get('accounts',{}) if inventory.exists() else {}
@@ -78,12 +86,8 @@ class LauncherUpdates:
             if key.exists():command+=['-i',str(key)]
             user=accounts.get(alias)
             if user:command+=['-l',user]
-            command += [alias,'python3 -c '+shlex.quote(INSTALL)]
-        result=subprocess.run(command,input=json.dumps(payload),capture_output=True,text=True,timeout=40)
-        if result.returncode:
-            # No source payload, fleet keys or account configuration enter run logs.
-            raise RuntimeError('Launcher staging failed over '+('local access' if host.get('local') else 'SSH')+
-                               '; check saved access, host keys and enrolled account. '+result.stderr[-400:])
+            command += [alias,'python3 -c '+shlex.quote(code)]
+        return command
 
     def ensure(self,host,client,status):
         if status.get('source_revision')==self.revision and status.get('ready'):return status

@@ -80,11 +80,15 @@ def main():
                         child=launch(active);started=time.monotonic()
                         print('Agent startup failed; restored previous process release',flush=True)
                 elif wanted!=active:
-                    drain.touch()
+                    # Persistent leased services may stay busy indefinitely.
+                    # Keep accepting jobs until an update can actually apply.
                     if idle():
+                        drain.touch()
                         prior=active;stop_child();active=wanted;pending=True
                         child=launch(active);started=time.monotonic()
                         print('Applying explicit agent release',flush=True)
+                    else:
+                        drain.unlink(missing_ok=True)
                 elif child.poll() is not None:
                     stopped.wait(5);child=launch(active);started=time.monotonic()
             except (OSError,ValueError,KeyError,TypeError) as error:

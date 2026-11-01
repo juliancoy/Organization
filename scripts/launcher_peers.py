@@ -1,5 +1,9 @@
 """Direct launcher WebRTC status mesh; encrypted LAN signaling, no cloud relay."""
 import asyncio
+try:
+    from asyncio import timeout as operation_timeout
+except ImportError:  # Python 3.10 native workers
+    from async_timeout import timeout as operation_timeout
 import json
 import logging
 import os
@@ -27,15 +31,19 @@ def owner_launcher_url(path=CONFIG):
 
 
 def telemetry_tcp_socket(address_info):
-    """Plain TCP with bounded failure detection; independent of ICE and signaling."""
+    """MPTCP with bounded failure detection; independent of ICE and signaling."""
     import socket
-    family,kind,_,*_=address_info
-    sock=socket.socket(family,kind,socket.IPPROTO_TCP)
+    import errno
+    from launcher_registry import transport_socket
+    sock=transport_socket(address_info)
     try:
         sock.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,1)
         sock.setsockopt(socket.SOL_SOCKET,socket.SO_KEEPALIVE,1)
         for option,value in (('TCP_KEEPIDLE',15),('TCP_KEEPINTVL',5),('TCP_KEEPCNT',3),('TCP_USER_TIMEOUT',10000)):
-            if hasattr(socket,option):sock.setsockopt(socket.IPPROTO_TCP,getattr(socket,option),value)
+            if hasattr(socket,option):
+                try:sock.setsockopt(socket.IPPROTO_TCP,getattr(socket,option),value)
+                except OSError as error:
+                    if error.errno!=errno.ENOPROTOOPT:raise
         return sock
     except Exception:
         sock.close();raise
@@ -46,6 +54,7 @@ class Mesh:
         self.agent = agent
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         self.name, self.peers = config['name'], config['peers']
+        self.addresses=config.get('addresses',[self.peers[self.name]])
         import hashlib
         folder = Path(__file__).resolve().parent
         self.config_revision = hashlib.sha256(json.dumps(self.peers,sort_keys=True).encode()).hexdigest()
@@ -145,7 +154,7 @@ class Mesh:
             await self.drop(peer)
             pc = self.connection(peer)
             try:
-                async with asyncio.timeout(20):
+                async with operation_timeout(20):
                     await pc.setRemoteDescription(RTCSessionDescription(value['sdp'], 'offer'))
                     await pc.setLocalDescription(await pc.createAnswer())
             except Exception:
@@ -162,7 +171,7 @@ class Mesh:
         self.attach(peer, pc.createDataChannel(PROTOCOL))
         nonce = secrets.token_hex(16)
         try:
-            async with asyncio.timeout(20):
+            async with operation_timeout(20):
                 await pc.setLocalDescription(await pc.createOffer())
                 endpoint = self.discovery.endpoint(peer)
                 if endpoint is None:
@@ -197,19 +206,27 @@ class Mesh:
                 'services': services[:100]}
 
     async def run(self, stopped):
-        from aiohttp import web, ClientSession, ClientTimeout
+        from aiohttp import web, ClientSession, ClientTimeout, TCPConnector
         app = web.Application(client_max_size=2*1024**2)
         app.router.add_post('/offer', self.offer)
         if self.agent:app.router.add_post('/agent/v1',self.agent.handle)
         self.runner = web.AppRunner(app, access_log=None)
         await self.runner.setup()
         from launcher_discovery import Discovery
-        self.discovery = Discovery(self.name, self.peers, PORT)
+        self.discovery = Discovery(self.name, self.peers, PORT, self.addresses)
         from launcher_registry import transport_socket
         import socket
-        listener=transport_socket((socket.AF_INET,socket.SOCK_STREAM,0))
-        listener.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);listener.bind((self.peers[self.name],PORT));listener.listen(128);listener.setblocking(False)
-        await web.SockSite(self.runner,listener).start()
+        for address in self.addresses:
+            listener=transport_socket((socket.AF_INET,socket.SOCK_STREAM,0))
+            try:
+                listener.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+                listener.bind((address,PORT));listener.listen(128);listener.setblocking(False)
+                await web.SockSite(self.runner,listener).start()
+            except BaseException:
+                listener.close()
+                await self.runner.cleanup()
+                self.discovery.close()
+                raise
         print(f'Launcher WebRTC listening on LAN port {PORT}; {len(self.peers)-1} enrolled peers', flush=True)
         initial = {'name':self.name,'source_revision':self.source_revision,'config_revision':self.config_revision,'peers':{peer:{'connection':'disconnected'} for peer in self.peers if peer!=self.name}}
         path = Path('/tmp/launcher-peers.json')
@@ -222,7 +239,8 @@ class Mesh:
                 marker=Path('/tmp/launcher-agent-ready.json')
                 temporary=marker.with_suffix('.tmp')
                 temporary.write_text(json.dumps({'folder':str(Path(__file__).resolve().parent),'time':time.time()}));temporary.replace(marker)
-            async with ClientSession(timeout=ClientTimeout(total=20), trust_env=False) as session:
+            async with ClientSession(timeout=ClientTimeout(total=20), trust_env=False,
+                                     connector=TCPConnector(socket_factory=transport_socket)) as session:
                 while not stopped.is_set():
                     for peer, pc in list(self.links.items()):
                         observation = self.observations.get(peer)
@@ -288,7 +306,7 @@ class InternetMesh(Mesh):
         pc = self.connection(peer)
         self.attach(peer, pc.createDataChannel(PROTOCOL))
         try:
-            async with asyncio.timeout(20):
+            async with operation_timeout(20):
                 await pc.setLocalDescription(await pc.createOffer())
                 await self.socket.send_json({'type':'offer','to':peer,'description':{
                     'type':'offer','sdp':pc.localDescription.sdp}})
@@ -318,7 +336,7 @@ class InternetMesh(Mesh):
                 raise ValueError('Unexpected offer')
             await self.drop(peer)
             pc = self.connection(peer)
-            async with asyncio.timeout(20):
+            async with operation_timeout(20):
                 await pc.setRemoteDescription(RTCSessionDescription(value['description']['sdp'],'offer'))
                 await pc.setLocalDescription(await pc.createAnswer())
                 await self.socket.send_json({'type':'answer','to':peer,'description':{
@@ -433,9 +451,9 @@ LAUNCHER_PAGE = '''<!doctype html><html lang="en"><meta charset="utf-8"><meta na
 <main><span class="muted">LIFETECH LAUNCHER</span><h1>Your place in the swarm</h1><p id="identity">Connecting to your launcher…</p>
 <section><h2>Connect from anywhere</h2><p class="muted">Connect this computer to Wi-Fi or Ethernet, then keep the launcher running. Your internet connection joins the swarm automatically.</p><div class="connection-grid"><div>Enrollment<strong id="enrollment">Checking…</strong></div><div>Internet signaling<strong id="signaling">Checking…</strong></div><div>Master WebRTC channel<strong id="master-channel">Checking…</strong></div></div><p id="connections"></p><p id="wan-service" class="muted"></p><p id="relay" class="muted"></p><details><summary>Network interfaces</summary><p id="interfaces" class="muted"></p></details><p><button id="remote">Test remote WebRTC</button> <button id="reconnect">Reconnect internet</button> <button id="check">Check LAN or internet</button></p><p id="connection-result" role="status"></p><details id="enrollment-form"><summary>Join or renew with a device invitation</summary><p>Use the invitation issued for this device by your swarm administrator. Credentials stay on this computer.</p><form id="enroll"><label>Import invitation JSON<input id="invitation-file" type="file" accept="application/json,.json"></label><label>Or paste invitation JSON<textarea id="invitation" autocomplete="off" spellcheck="false" placeholder='{"url":"https://your-signaling-service","token":"…"}'></textarea></label><button>Save invitation &amp; connect</button></form><p id="enrollment-result" role="status"></p></details></section>
 <section id="phone-pairing"><h2>Pair a phone with CompAI</h2><p>Scan a one-time code to control CompAI’s Codex threads from your phone. Your browser stays paired for 30 days.</p><button id="phone-generate" disabled>Generate phone setup code</button><p id="phone-message" role="status">Checking owner launcher…</p><div id="phone-code" hidden><img id="phone-qr" alt="Scan to pair your phone with CompAI" width="280" height="280"><p><a id="phone-link" rel="noreferrer">Open setup link on your phone</a> <button id="phone-copy">Copy setup link</button></p><p id="phone-expiry" role="status"></p><small>Use this only for your own phone. Generating a new code replaces the previous unused code. Bookmark https://compai.lifetech.fyi/ after pairing.</small></div></section>
-<section><h2>Contribute computing power</h2><label>Worker mode <select id="mode"><option value="auto">Automatic · AC power only</option><option value="always">Always accept jobs</option><option value="paused">Submit only · save battery</option></select></label><p id="power"></p><small class="muted">Already accepted jobs finish. You can submit work in every mode.</small></section>
-<section><h2>Request tests</h2><form id="request"><label>Suite names, separated by commas<input id="suites" placeholder="monitor"></label><label>Or repository paths, separated by commas<input id="paths" placeholder="OrgPortal/web/src"></label><small class="muted">Requests publish the master's current code and run tests on available workers. They do not deploy.</small><p><button>Submit authenticated request</button></p></form><p id="message" role="status"></p><details><summary>Master results</summary><pre id="result"></pre></details></section></main>
-<script>const $=id=>document.getElementById(id);let phoneOwner=false,phoneGenerating=false,ownerSession='';async function api(path,body){const r=await fetch('/launcher/'+path,{headers:{...(ownerSession?{'X-Launcher-Owner':ownerSession}:{}),...(body===undefined?{}:{'Content-Type':'application/json'})},...(body===undefined?{}:{method:'POST',body:JSON.stringify(body)})});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);return d}async function refresh(){try{const d=await api('status');$('identity').textContent=d.node+' · master '+d.master;$('mode').value=d.worker.mode;$('power').textContent=d.worker.reason+(d.worker.batteries?.length?' · '+d.worker.batteries.map(b=>b.percent+'%').join(', '):'');$('interfaces').textContent=(d.interfaces||[]).map(i=>i.name+' · '+i.state+' · '+i.addresses.join(', ')).join(' | ');phoneOwner=!!d.phone_pairing;$('phone-generate').disabled=!phoneOwner||phoneGenerating;if(!$('phone-generate').dataset.used)$('phone-message').textContent=d.phone_pairing?'Ready to generate a private, one-time setup code.':d.phone_pairing_available?'Open ./run.py --swarm on CompAI to unlock phone setup codes.':'Generate setup codes on CompAI’s local owner launcher.';const w=d.wan||{};$('enrollment').textContent=w.enrollment||'Checking';$('signaling').textContent=w.signaling+(w.error?' · '+w.error:'');$('master-channel').textContent=w.master_channel||'disconnected';$('wan-service').textContent=w.service?'Signaling service: '+w.service:'Import your device invitation to connect over the internet.';$('relay').textContent=w.turn_available===false?'Direct WebRTC only. This service has no TURN relay; restrictive networks may prevent a connection.':w.turn_available?'TURN relay available for networks that block direct connections.':'Relay availability will appear after signaling connects.';const open=Object.values(d.webrtc_channels).filter(x=>x==='open').length;$('connections').textContent='LAN configured · '+(d.internet_enrolled?'Internet enrolled · '+open+' open WebRTC connection(s)':'Internet not enrolled');}catch(e){$('identity').textContent=e.message}}$('mode').onchange=async()=>{try{await api('policy',{mode:$('mode').value});await refresh()}catch(e){$('power').textContent=e.message}};async function check(transport){$('connection-result').textContent='Checking…';try{const d=await api('master',{transport});$('connection-result').textContent='Authenticated master responded via '+(transport==='webrtc'?'WebRTC':'LAN-first routing');$('result').textContent=JSON.stringify(d,null,2)}catch(e){$('connection-result').textContent=e.message}}$('check').onclick=()=>check('auto');$('remote').onclick=()=>check('webrtc');$('reconnect').onclick=async()=>{try{const d=await api('reconnect',{});$('connection-result').textContent=d.status;await refresh()}catch(e){$('connection-result').textContent=e.message}};$('invitation-file').onchange=async e=>{const file=e.target.files[0];if(!file)return;if(file.size>16384){$('enrollment-result').textContent='Use an invitation under 16 KiB.';return}$('invitation').value=await file.text()};$('enroll').onsubmit=async e=>{e.preventDefault();const button=e.target.querySelector('button');button.disabled=true;try{const d=await api('enroll',JSON.parse($('invitation').value));$('invitation').value='';$('invitation-file').value='';$('enrollment-result').textContent=d.status;await refresh()}catch(e){$('enrollment-result').textContent=e.message}finally{button.disabled=false}};$('request').onsubmit=async e=>{e.preventDefault();const split=id=>$(id).value.split(',').map(s=>s.trim()).filter(Boolean);const body={suites:split('suites'),paths:split('paths')};if(!body.suites.length&&!body.paths.length){$('message').textContent='Choose suites or paths to test.';return}const button=e.target.querySelector('button');button.disabled=true;try{const d=await api('request',body);$('message').textContent='Request accepted: '+d.id;$('result').textContent=JSON.stringify(d,null,2)}catch(e){$('message').textContent=e.message}finally{button.disabled=false}};let phoneExpires=0;let phoneURL='';function phoneCountdown(){if(!phoneExpires)return;const seconds=Math.max(0,Math.ceil((phoneExpires-Date.now())/1000));$('phone-expiry').textContent=seconds?'Single use · expires in '+Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0'):'Expired. Generate a new setup code.';if(!seconds){$('phone-code').hidden=true;phoneURL='';$('phone-qr').removeAttribute('src');$('phone-link').removeAttribute('href');}}$('phone-generate').onclick=async()=>{const button=$('phone-generate');phoneGenerating=true;button.disabled=true;button.dataset.used='true';$('phone-code').hidden=true;$('phone-message').textContent='Generating…';try{const d=await api('phone-pair',{});phoneURL=d.url;phoneExpires=d.expires_at*1000;$('phone-qr').src=d.qr;$('phone-link').href=phoneURL;$('phone-code').hidden=false;$('phone-message').textContent='Scan this code with your phone camera, or open the setup link on your phone.';phoneCountdown();}catch(e){$('phone-message').textContent=e.message}finally{phoneGenerating=false;button.disabled=!phoneOwner}};$('phone-copy').onclick=async()=>{try{await navigator.clipboard.writeText(phoneURL);$('phone-message').textContent='Setup link copied. Open it on your phone.'}catch{$('phone-message').textContent='Use the setup link or scan the QR code.'}};setInterval(phoneCountdown,1000);async function ownerStart(){const token=new URLSearchParams(location.hash.slice(1)).get('owner');if(token){history.replaceState(null,'',location.pathname);try{ownerSession=(await api('owner-unlock',{token})).session}catch(e){$('phone-message').textContent=e.message;}}await refresh();}void ownerStart();setInterval(refresh,10000);</script></html>'''
+<section><h2>Contribute computing power</h2><p><button id="join-worker">Join swarm</button> <button id="pause-worker">Pause new jobs</button></p><label>Worker mode <select id="mode"><option value="auto">Automatic · AC power only</option><option value="always">Always accept jobs</option><option value="paused">Submit only · save battery</option></select></label><p id="power"></p><small class="muted">Already accepted jobs finish. You can submit work in every mode.</small></section>
+<section><h2>Jobs on this computer</h2><p>Stop individual jobs, or pause new work and stop all accepted jobs. Core services keep running.</p><div id="local-jobs">Checking…</div><button id="stop-all-jobs">Pause &amp; stop all</button><p id="jobs-message" role="status"></p></section><section><h2>Request tests</h2><form id="request"><label>Suite names, separated by commas<input id="suites" placeholder="monitor"></label><label>Or repository paths, separated by commas<input id="paths" placeholder="OrgPortal/web/src"></label><small class="muted">Requests publish the master's current code and run tests on available workers. They do not deploy.</small><p><button>Submit authenticated request</button></p></form><p id="message" role="status"></p><details><summary>Master results</summary><pre id="result"></pre></details></section></main>
+<script>const $=id=>document.getElementById(id);let phoneOwner=false,phoneGenerating=false,ownerSession='';async function api(path,body){const r=await fetch('/launcher/'+path,{headers:{...(ownerSession?{'X-Launcher-Owner':ownerSession}:{}),...(body===undefined?{}:{'Content-Type':'application/json'})},...(body===undefined?{}:{method:'POST',body:JSON.stringify(body)})});const d=await r.json();if(!r.ok)throw Error(d.error||r.status);return d}async function refresh(){try{const d=await api('status');$('identity').textContent=d.node+' · master '+d.master;$('mode').value=d.worker.mode;$('join-worker').disabled=!!d.worker.accepting_jobs;$('pause-worker').disabled=d.worker.mode==='paused';renderJobs(d.jobs||[]);$('power').textContent=d.worker.reason+(d.worker.batteries?.length?' · '+d.worker.batteries.map(b=>b.percent+'%').join(', '):'');$('interfaces').textContent=(d.interfaces||[]).map(i=>i.name+' · '+i.state+' · '+i.addresses.join(', ')).join(' | ');phoneOwner=!!d.phone_pairing;$('phone-generate').disabled=!phoneOwner||phoneGenerating;if(!$('phone-generate').dataset.used)$('phone-message').textContent=d.phone_pairing?'Ready to generate a private, one-time setup code.':d.phone_pairing_available?'Open ./run.py --swarm on CompAI to unlock phone setup codes.':'Generate setup codes on CompAI’s local owner launcher.';const w=d.wan||{};$('enrollment').textContent=w.enrollment||'Checking';$('signaling').textContent=w.signaling+(w.error?' · '+w.error:'');$('master-channel').textContent=w.master_channel||'disconnected';$('wan-service').textContent=w.service?'Signaling service: '+w.service:'Import your device invitation to connect over the internet.';$('relay').textContent=w.turn_available===false?'Direct WebRTC only. This service has no TURN relay; restrictive networks may prevent a connection.':w.turn_available?'TURN relay available for networks that block direct connections.':'Relay availability will appear after signaling connects.';const open=Object.values(d.webrtc_channels).filter(x=>x==='open').length;$('connections').textContent='LAN configured · '+(d.internet_enrolled?'Internet enrolled · '+open+' open WebRTC connection(s)':'Internet not enrolled');}catch(e){$('identity').textContent=e.message}}function renderJobs(jobs){const list=$('local-jobs');list.replaceChildren();if(!jobs.length){list.textContent='No active jobs.';return}for(const job of jobs){const row=document.createElement('p');const label=document.createElement('span');label.textContent=job.label+' · '+job.id+' · '+job.status+' ';row.append(label);const button=document.createElement('button');button.textContent=job.status==='stopping'?'Stopping…':'Stop';button.disabled=job.status==='stopping';button.onclick=()=>stopJobs({id:job.id,kind:job.kind},button);row.append(button);list.append(row)}}async function stopJobs(body,button){button.disabled=true;$('jobs-message').textContent='Requesting stop…';try{const result=await api('jobs-stop',body);const errors=(result.results||[]).filter(r=>r.error);$('jobs-message').textContent=errors.length?'Some jobs could not stop: '+errors.map(r=>r.id+': '+r.error).join('; '):body.all?'New jobs paused. Stop requested for all accepted jobs.':'Stop requested. Cleanup may take a moment.';await refresh()}catch(e){$('jobs-message').textContent=e.message}finally{button.disabled=false}}$('stop-all-jobs').onclick=()=>stopJobs({all:true},$('stop-all-jobs'));async function setWorkerMode(mode){try{await api('policy',{mode});await refresh()}catch(e){$('power').textContent=e.message}}$('mode').onchange=()=>setWorkerMode($('mode').value);$('join-worker').onclick=()=>setWorkerMode('auto');$('pause-worker').onclick=()=>setWorkerMode('paused');async function check(transport){$('connection-result').textContent='Checking…';try{const d=await api('master',{transport});$('connection-result').textContent='Authenticated master responded via '+(transport==='webrtc'?'WebRTC':'LAN-first routing');$('result').textContent=JSON.stringify(d,null,2)}catch(e){$('connection-result').textContent=e.message}}$('check').onclick=()=>check('auto');$('remote').onclick=()=>check('webrtc');$('reconnect').onclick=async()=>{try{const d=await api('reconnect',{});$('connection-result').textContent=d.status;await refresh()}catch(e){$('connection-result').textContent=e.message}};$('invitation-file').onchange=async e=>{const file=e.target.files[0];if(!file)return;if(file.size>16384){$('enrollment-result').textContent='Use an invitation under 16 KiB.';return}$('invitation').value=await file.text()};$('enroll').onsubmit=async e=>{e.preventDefault();const button=e.target.querySelector('button');button.disabled=true;try{const d=await api('enroll',JSON.parse($('invitation').value));$('invitation').value='';$('invitation-file').value='';$('enrollment-result').textContent=d.status;await refresh()}catch(e){$('enrollment-result').textContent=e.message}finally{button.disabled=false}};$('request').onsubmit=async e=>{e.preventDefault();const split=id=>$(id).value.split(',').map(s=>s.trim()).filter(Boolean);const body={suites:split('suites'),paths:split('paths')};if(!body.suites.length&&!body.paths.length){$('message').textContent='Choose suites or paths to test.';return}const button=e.target.querySelector('button');button.disabled=true;try{const d=await api('request',body);$('message').textContent='Request accepted: '+d.id;$('result').textContent=JSON.stringify(d,null,2)}catch(e){$('message').textContent=e.message}finally{button.disabled=false}};let phoneExpires=0;let phoneURL='';function phoneCountdown(){if(!phoneExpires)return;const seconds=Math.max(0,Math.ceil((phoneExpires-Date.now())/1000));$('phone-expiry').textContent=seconds?'Single use · expires in '+Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0'):'Expired. Generate a new setup code.';if(!seconds){$('phone-code').hidden=true;phoneURL='';$('phone-qr').removeAttribute('src');$('phone-link').removeAttribute('href');}}$('phone-generate').onclick=async()=>{const button=$('phone-generate');phoneGenerating=true;button.disabled=true;button.dataset.used='true';$('phone-code').hidden=true;$('phone-message').textContent='Generating…';try{const d=await api('phone-pair',{});phoneURL=d.url;phoneExpires=d.expires_at*1000;$('phone-qr').src=d.qr;$('phone-link').href=phoneURL;$('phone-code').hidden=false;$('phone-message').textContent='Scan this code with your phone camera, or open the setup link on your phone.';phoneCountdown();}catch(e){$('phone-message').textContent=e.message}finally{phoneGenerating=false;button.disabled=!phoneOwner}};$('phone-copy').onclick=async()=>{try{await navigator.clipboard.writeText(phoneURL);$('phone-message').textContent='Setup link copied. Open it on your phone.'}catch{$('phone-message').textContent='Use the setup link or scan the QR code.'}};setInterval(phoneCountdown,1000);async function ownerStart(){const token=new URLSearchParams(location.hash.slice(1)).get('owner');if(token){history.replaceState(null,'',location.pathname);try{ownerSession=(await api('owner-unlock',{token})).session}catch(e){$('phone-message').textContent=e.message;}}await refresh();}void ownerStart();setInterval(refresh,10000);</script></html>'''
 
 
 class JobGateway:
@@ -467,7 +485,7 @@ class JobGateway:
         channel=next((mesh.channels[peer] for mesh in (self.lan_mesh,self.mesh) if mesh and peer in mesh.channels and mesh.channels[peer].readyState=='open'),None)
         if not channel or channel.readyState!='open':raise RuntimeError('Remote launcher is not connected')
         if len(data)>8*1024*1024:raise ValueError('RPC exceeds transport limit')
-        async with asyncio.timeout(120):
+        async with operation_timeout(120):
             for index,offset in enumerate(range(0,len(data),12000)):
                 while channel.bufferedAmount>262144:
                     if channel.readyState!='open':raise RuntimeError('Remote launcher disconnected')
@@ -648,11 +666,24 @@ class JobGateway:
                      'error':getattr(self.mesh,'last_error',None),'turn_available':getattr(self.mesh,'turn_available',None),
                      'master_channel':peers.get(config.get('internet_nodes',{}).get(config.get('master','compai.local')),'disconnected')}
                 return web.json_response({'node':config['name'],'worker':worker_policy(self.agent.config),
+                    'jobs':self.agent.local_jobs(),
+                    'routing':getattr(self.agent,'routing_status',{'status':'pending'}),
                     'lan':config.get('peers',{}),'internet_enrolled':bool(config.get('internet')),'webrtc_channels':peers,
                     'master':config.get('master','compai.local'),'interfaces':interfaces,'wan':wan,
                     'phone_pairing_available':config.get('master_api') is True and config['name']==config.get('master','compai.local') and (self.agent.config.parent/'owner-pairing-token').is_file(),
                     'phone_pairing':self.owner_session_valid(request.headers) and config.get('master_api') is True and config['name']==config.get('master','compai.local') and (self.agent.config.parent/'owner-pairing-token').is_file()},headers={'Cache-Control':'no-store'})
             body=await request.json()
+            if request.path=='/launcher/jobs-stop':
+                if body.get('all') is True and set(body)=={'all'}:
+                    path=self.agent.config.parent/'worker-policy.json';temp=path.with_suffix('.tmp')
+                    temp.write_text(json.dumps({'mode':'paused'}));temp.chmod(0o600);temp.replace(path)
+                    jobs=self.agent.local_jobs();results=[]
+                    for job in jobs:
+                        try:results.append(await asyncio.to_thread(self.agent.stop_local_job,job['kind'],job['id']))
+                        except Exception as error:results.append({'id':job['id'],'error':str(error)[:300]})
+                    return web.json_response({'results':results,'paused':True})
+                if set(body)!={'id','kind'}:raise ValueError('Choose a job or pause and stop all jobs')
+                return web.json_response(await asyncio.to_thread(self.agent.stop_local_job,body['kind'],body['id']))
             if request.path=='/launcher/owner-unlock':
                 return web.json_response({'session':self.unlock_owner(body)},headers={'Cache-Control':'no-store'})
             if request.path=='/launcher/phone-pair':
@@ -679,6 +710,9 @@ class JobGateway:
                 if body.get('mode') not in ('auto','always','paused'):raise ValueError('Invalid worker mode')
                 path=self.agent.config.parent/'worker-policy.json';temp=path.with_suffix('.tmp')
                 temp.write_text(json.dumps({'mode':body['mode']}));temp.chmod(0o600);temp.replace(path)
+                if body['mode'] != 'paused':
+                    from launcher_agent import start_local_peer_qc
+                    await asyncio.to_thread(start_local_peer_qc, self.agent.config)
                 return web.json_response(worker_policy(self.agent.config))
             if request.path=='/launcher/request':
                 result=await self.master_call('tests.request',body)
@@ -693,7 +727,7 @@ class JobGateway:
         app.router.add_post('/agent/v1',self.request)
         app.router.add_get('/launcher',self.browser)
         app.router.add_get('/launcher/status',self.browser)
-        for route in ('policy','request','master','enroll','reconnect','phone-pair','owner-unlock'):app.router.add_post('/launcher/'+route,self.browser)
+        for route in ('policy','request','master','enroll','reconnect','phone-pair','owner-unlock','jobs-stop'):app.router.add_post('/launcher/'+route,self.browser)
         self.runner=web.AppRunner(app,access_log=None);await self.runner.setup()
         await web.TCPSite(self.runner,'127.0.0.1',8791).start()
 
@@ -794,6 +828,7 @@ async def supervise(path,prefix,stopped):
     await gateway.start()
     tasks = {}
     telemetry_task=asyncio.create_task(gateway.publish_telemetry(stopped),name='launcher-telemetry-push')
+    routing_task=asyncio.create_task(maintain_routing(agent,stopped),name='launcher-routing')
     try:
         while not stopped.is_set():
             try:
@@ -803,6 +838,12 @@ async def supervise(path,prefix,stopped):
                 desired = {}
                 if all(key in config for key in ('name','peers','key')):
                     desired['lan'] = {key:config[key] for key in ('name','peers','key')}
+                    from launcher_registry import lan_paths
+                    import subprocess
+                    rows=json.loads(await asyncio.to_thread(subprocess.check_output,['ip','-j','-4','addr'],text=True,timeout=5))
+                    desired['lan']['addresses']=[p['address'] for p in lan_paths(rows,config['peers'])]
+                    if not desired['lan']['addresses']:
+                        desired.pop('lan')
                 if config.get('internet') and not config['internet'].get('pending'):
                     desired['internet'] = {'internet':config['internet'],'internet_nodes':config.get('internet_nodes',{}),'reconnect':gateway.reconnect_generation}
                 for name,(version,task) in list(tasks.items()):
@@ -835,13 +876,30 @@ async def supervise(path,prefix,stopped):
                 await asyncio.sleep(1)
     finally:
         telemetry_task.cancel()
-        await asyncio.gather(telemetry_task,return_exceptions=True)
+        routing_task.cancel()
+        await asyncio.gather(telemetry_task,routing_task,return_exceptions=True)
         await gateway.runner.cleanup()
         for task in gateway.inflight:task.cancel()
         await asyncio.gather(*gateway.inflight,return_exceptions=True)
         await asyncio.to_thread(agent.close)
         for _,task in tasks.values():task.cancel()
         await asyncio.gather(*(task for _,task in tasks.values()),return_exceptions=True)
+
+
+async def maintain_routing(agent,stopped):
+    """Reconcile hotplug/DHCP changes without restarting jobs or changing defaults."""
+    from launcher_registry import configure_launcher_routing
+    while not stopped.is_set():
+        try:
+            config=json.loads(agent.config.read_text())
+            agent.routing_status=await asyncio.to_thread(configure_launcher_routing,config.get('peers',{}))
+        except Exception as error:
+            agent.routing_status={'status':'unavailable','error':str(error)[-600:]}
+            logging.warning('Launcher routing reconciliation unavailable: %s',type(error).__name__)
+        agent.routing_status['checked_at']=time.time()
+        for _ in range(30):
+            if stopped.is_set():break
+            await asyncio.sleep(1)
 
 
 if __name__=='__main__':main()

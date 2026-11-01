@@ -1,3 +1,4 @@
+from pathlib import Path
 """Dispatch file jobs to whichever persistent worker has CPU and memory free."""
 import concurrent.futures
 import time
@@ -104,8 +105,10 @@ def execute(service, hosts, images):
                 if result.get('events_lost'):
                     raise RuntimeError('Worker event history has a gap')
                 for item in result['events']:
-                    event = item['event']
+                    event = {**item['event'], '_worker_sequence':item['sequence'], '_worker_job':ident}
                     if event.get('kind') == 'capacity':
+                        from task_events import EventStore
+                        EventStore((Path(service.folder).parent if Path(service.folder).name=='distributed' else Path(service.folder))/'compute-events.sqlite3').append(run['id'], host['host'], 'capacity', event)
                         with service.lock:
                             host['capacity'] = {k: int(event[k]) for k in ('cpus', 'memory_mb')}
                             ready = True

@@ -43,6 +43,125 @@ def transport_socket(address_info):
     return socket.socket(family,kind,protocol)
 
 
+def lan_paths(rows, peers):
+    """Only live physical IPv4 networks containing another enrolled LAN address."""
+    import ipaddress
+    addresses={ipaddress.ip_address(value) for value in peers.values()}
+    paths=[]
+    for row in rows:
+        if not row['ifname'].startswith(('en','eth','wl')) or row.get('operstate')!='UP':continue
+        if not 0<row['ifindex']<1024:continue
+        for address in row.get('addr_info',[]):
+            if address.get('family')!='inet' or address.get('scope')!='global':continue
+            interface=ipaddress.ip_interface(address['local']+'/'+str(address['prefixlen']))
+            if not any(peer!=interface.ip and peer in interface.network for peer in addresses):continue
+            paths.append({'address':str(interface.ip),'network':str(interface.network),
+                          'device':row['ifname'],'table':42000+row['ifindex'],
+                          'priority':24000+row['ifindex']})
+    return sorted(paths,key=lambda path:(path['device'].startswith('wl'),path['device'],path['address']))
+
+
+def reconcile_lan_routing(peers):
+    """Run in the host network namespace with NET_ADMIN, without host mounts."""
+    import json
+    import subprocess
+    def ip(*args):
+        result=subprocess.run(['ip',*map(str,args)],capture_output=True,text=True,timeout=5)
+        if result.returncode:raise RuntimeError(result.stderr.strip()[:300])
+        return result.stdout
+    paths=lan_paths(json.loads(ip('-j','-4','addr')),peers)
+    # Do not steal global/default routes. These source-and-destination rules
+    # affect only traffic between an enrolled LAN and a local LAN address.
+    rules=json.loads(ip('-N','-j','rule','show'))
+    all_routes=json.loads(ip('-N','-j','route','show','table','all'))
+    owned=lambda rule:str(rule.get('protocol'))=='242' and 24000<=rule.get('priority',0)<25024
+    def rule_key(rule):
+        import ipaddress
+        destination=rule.get('dst','0.0.0.0')
+        if '/' not in destination:destination+='/'+str(rule.get('dstlen',32))
+        return (rule.get('priority'),rule.get('src','').removesuffix('/32'),
+                str(ipaddress.ip_network(destination,strict=False)),str(rule.get('table')))
+    desired={(p['priority'],p['address'],p['network'],str(p['table'])) for p in paths}
+    desired_routes={(str(p['table']),p['network'],p['device'],p['address']) for p in paths}
+    for rule in rules:
+        key=rule_key(rule)
+        if owned(rule) and key not in desired:
+            ip('rule','del','priority',rule['priority'],'from',rule['src'],'to',rule_key(rule)[2],'table',rule['table'],'protocol',242)
+    for route in all_routes:
+        table=str(route.get('table',''))
+        if (table.isdecimal() and 42000<int(table)<43024 and str(route.get('protocol'))=='242'
+                and (table,route.get('dst'),route.get('dev'),route.get('prefsrc')) not in desired_routes):
+            ip('route','del',route['dst'],'table',table,'protocol',242)
+    for path in paths:
+        if any(rule.get('priority')==path['priority'] and not owned(rule) for rule in rules):
+            raise RuntimeError('LAN routing rule priority is already in use')
+        routes=[route for route in all_routes if str(route.get('table'))==str(path['table'])]
+        if any(str(route.get('protocol'))!='242' for route in routes):
+            raise RuntimeError('LAN routing table is already in use')
+        ip('route','replace',path['network'],'dev',path['device'],'src',path['address'],
+           'table',path['table'],'protocol',242)
+        key=(path['priority'],path['address'],path['network'],str(path['table']))
+        if not any(owned(rule) and rule_key(rule)==key for rule in rules):
+            ip('rule','add','priority',path['priority'],'from',path['address']+'/32',
+               'to',path['network'],'table',path['table'],'protocol',242)
+    # NetworkManager defaults to client-only endpoints. A launcher is also a
+    # server: advertise its addresses so incoming connections can add paths.
+    endpoints=json.loads(ip('-j','mptcp','endpoint','show'))
+    for endpoint in list(endpoints):
+        if 160<=endpoint['id']<224 and not any(endpoint['address']==p['address'] for p in paths):
+            ip('mptcp','endpoint','delete','id',endpoint['id'])
+            endpoints.remove(endpoint)
+    for path in paths:
+        existing=next((e for e in endpoints if e['address']==path['address']),None)
+        if existing and existing.get('signal') and existing.get('subflow') and existing.get('dev')==path['device']:continue
+        if existing:
+            ident=existing['id']
+            ip('mptcp','endpoint','delete','id',ident)
+        else:
+            ident=next((i for i in range(160,224) if i not in {e['id'] for e in endpoints}),None)
+            if ident is None:raise RuntimeError('No launcher MPTCP endpoint IDs available')
+        try:
+            ip('mptcp','endpoint','add',path['address'],'dev',path['device'],'id',ident,'signal','subflow')
+        except Exception:
+            if existing:
+                flags=[flag for flag in ('signal','subflow','backup','fullmesh') if existing.get(flag)]
+                ip('mptcp','endpoint','add',existing['address'],'dev',existing['dev'],'id',ident,*flags)
+            raise
+        endpoints=[e for e in endpoints if e['id']!=ident]+[{'id':ident,'address':path['address']}]
+    limits=ip('mptcp','limits','show').split()
+    current=dict(zip(limits[::2],map(int,limits[1::2])))
+    ip('mptcp','limits','set','subflows',max(4,current.get('subflows',0)),
+       'add_addr_accepted',max(4,current.get('add_addr_accepted',0)))
+    return {'status':'configured' if paths else 'no-lan-paths','paths':paths,'endpoints':json.loads(ip('-j','mptcp','endpoint','show')),
+            'limits':ip('mptcp','limits','show').strip(),
+            'scheduler':'kernel','connections':subprocess.check_output(['ss','-Mani'],text=True,timeout=5)[-12000:]}
+
+
+def configure_launcher_routing(peers):
+    """Use a short-lived, narrowly privileged helper; the launcher stays unprivileged."""
+    import inspect
+    import docker
+    source=inspect.getsource(lan_paths)+'\n'+inspect.getsource(reconcile_lan_routing)
+    source+='\nimport json\nprint(json.dumps(reconcile_lan_routing('+repr(dict(peers))+')))\n'
+    client=docker.from_env(timeout=20)
+    container=None
+    try:
+        # The launcher image is already provisioned locally. No pull or host
+        # filesystem/socket mount is needed by this network-only helper.
+        container=client.containers.run('organization-launcher:webrtc-1',
+            ['python','-c',source],detach=True,network_mode='host',user='0:0',
+            cap_drop=['ALL'],cap_add=['NET_ADMIN'],read_only=True,
+            security_opt=['no-new-privileges'],pids_limit=32,mem_limit='96m',
+            labels={'organization.container-class':'launcher-routing'})
+        result=container.wait(timeout=20)
+        output=container.logs().decode()
+        if result['StatusCode']:raise RuntimeError(output[-600:])
+        return json.loads(output)
+    finally:
+        if container is not None:container.remove(force=True)
+        client.close()
+
+
 def cache_read(cache,path,offset,head):
     if cache is None:return None
     digest=path.rsplit(':',1)[1]

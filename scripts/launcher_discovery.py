@@ -7,14 +7,15 @@ SERVICE = '_lifetech._tcp.local.'
 
 
 class Discovery:
-    def __init__(self, name, peers, port):
+    def __init__(self, name, peers, port, addresses=None):
         self.name, self.peers = name, dict(peers)
-        self.address = peers[name]
+        addresses=addresses or [peers[name]]
+        self.address = addresses[0]
         self.lock = threading.Lock()
         self.services = {}
-        self.zc = Zeroconf(interfaces=[self.address], ip_version=IPVersion.V4Only)
+        self.zc = Zeroconf(interfaces=addresses, ip_version=IPVersion.V4Only)
         self.info = ServiceInfo(SERVICE, name + '.' + SERVICE,
-            addresses=[socket.inet_aton(self.address)], port=port,
+            addresses=[socket.inet_aton(address) for address in addresses], port=port,
             properties={'node': name, 'protocol': 'lifetech-launcher.v1', 'agent':'lifetech-agent.v1'},
             server=name.rstrip('.') + '.',
             host_ttl=45, other_ttl=45)

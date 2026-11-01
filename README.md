@@ -197,6 +197,25 @@ refresh the dev baseline without overwriting existing development workspaces.
 
 ### Launcher WebRTC mesh
 
+Fleet note (2026-11-01): Wolf's laptop (`wolf-latitude.local`) is no longer
+part of the swarm; do not count it as an expected online worker. The MiniPC
+has Ethernet and Wi-Fi available together. Launcher TCP transport should use
+MPTCP across available paths, with Ethernet as the preferred initial route.
+WebRTC data channels use their separate UDP transport.
+
+The launcher reconciles LAN MPTCP routing every 30 seconds. It advertises live
+Ethernet and Wi-Fi LAN addresses, listens on both, accepts additional peer
+addresses, and installs source-specific LAN routes so Wi-Fi subflows use Wi-Fi.
+The kernel schedules packets across established paths using its MPTCP scheduler;
+Ethernet remains the preferred initial route according to the host's route
+metrics. Default routes and unrelated interface endpoints are preserved.
+The launcher uses an ephemeral host-network helper with only `NET_ADMIN` from
+its locally installed launcher image. The helper has no host filesystem or
+Docker socket mounts. `/launcher/status` and authenticated agent `status` report
+the latest routing result, including errors and the kernel's MPTCP connections.
+Owned source rules use protocol 242, priorities 24001–25023 and tables
+42001–43023; hotplug reconciliation removes stale owned rules and routes.
+
 Launchers exchange readiness and Docker service names/states over encrypted WebRTC data channels. They use the enrolled fleet configuration, including the coordinator itself. The alphabetically earlier hostname initiates each connection; disconnected peers retry automatically. Each launcher keeps its current peer observations in `/tmp/launcher-peers.json` inside its container, and removes stale observations when a connection times out.
 
 After the updated code is available on each machine, run `./run.py --peer-enroll` on the coordinator. This provisions a shared fleet key and machine-specific configuration through the saved SSH accounts at `~/.config/lifetech-launcher/peers.json` with owner-only permissions. Then run `./run.py --recreate-launcher` on each machine to rebuild and recreate its launcher with the host configuration directory mounted. Enrollment alone does not restart anything.

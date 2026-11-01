@@ -24,6 +24,8 @@ class LiveDistributedTests:
         self.requests=TestRequests(self)
         from snapshot_staging import SnapshotStaging
         self.staging=SnapshotStaging(self.runner.root)
+        from retry_jobs import run as retry_jobs
+        threading.Thread(target=retry_jobs,args=(self,),daemon=True).start()
 
     @staticmethod
     def load():
@@ -130,6 +132,28 @@ class LiveDistributedTests:
             runner.run['parent_run_id']=parent_run_id;runner.save()
             threading.Thread(target=runner.execute,daemon=True).start()
             return runner.run['id']
+
+    def retry_pinned(self,parent,ticket):
+        """Retry one failed logical job against its existing published commits."""
+        task=ticket['task']
+        matches=[(h,j) for h in parent.get('hosts',[]) for key,j in h.get('jobs',{}).items() if key==task]
+        if not matches:raise ValueError('Pinned failed task no longer exists')
+        original,job=matches[-1];base=job.get('suite') or task.split('--',1)[0]
+        if base in ('p2p','mobile','gpu'):raise ValueError('Specialized hardware jobs require their explicit retry workflow')
+        if job.get('file'):
+            from work_queue import FILES
+            from pathlib import PurePosixPath
+            repo,prefix,_=FILES[base];selection={'paths':[str(PurePosixPath(repo)/prefix/job['file'])],'suites':[]}
+        else:selection={'paths':[],'suites':[base]}
+        from github_sources import source_digest
+        repositories=copy.deepcopy(parent['repositories'])
+        if source_digest(repositories)!=parent['source_sha256']:raise ValueError('Pinned source identity mismatch')
+        runner=self.create_run(force=True,selection=selection)
+        if runner is None:raise RuntimeError('Retry waiting for ordinary admission')
+        runner.run.update(pinned_repositories=repositories,retry_family=parent.get('retry_family',parent['id']),
+                          retry_ticket=ticket['id'],retry_attempt=ticket['attempts']+1,parent_run_id=parent['id'],
+                          avoid_workers=[original['host']],scope='Automatic bounded retry of the original published commits; no commit, push or deployment.')
+        runner.save();return runner
 
     def stop_run(self,ident):
         with self.lock:

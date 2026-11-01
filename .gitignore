@@ -162,3 +162,25 @@
 !/scripts/gpu_qc_native.py
 
 !/tests/test_gpu_qc_native.py
+
+# Run-manager input distribution and standard machine releases.
+!/scripts/run_inputs.py
+!/scripts/run_input_cache.py
+!/scripts/run_cache_peers.py
+!/scripts/run_input_source.py
+!/scripts/run_manager.py
+!/scripts/venter_stream_offload.py
+!/scripts/venter_peer_qc.py
+!/scripts/venter_peer_deploy.py
+!/scripts/deploy_swarm_inputs.py
+!/tests/test_run_inputs.py
+!/tests/test_run_input_cache.py
+!/tests/test_run_cache_peers.py
+!/tests/test_venter_stream_offload.py
+!/genomics/RUN_INPUTS.md
+
+!/scripts/huref_compare_worker.py
+!/scripts/huref_compare_swarm.py
+!/tests/test_huref_compare_worker.py
+!/genomics/comparison-image/
+!/genomics/comparison-image/Dockerfile

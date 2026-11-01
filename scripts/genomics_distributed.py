@@ -47,7 +47,7 @@ def eligible(status):
                 status.get('worker_policy',{}).get('accepting_jobs'))
 
 
-def discover():
+def discover(require_python_image=True):
     from concurrent.futures import ThreadPoolExecutor
     sys.path.insert(0,str(ROOT/'swarm-control/server'))
     from agent_client import AgentClient,CONFIG
@@ -55,11 +55,11 @@ def discover():
     from docker_utils.images import ImageResolver
     config=json.loads(CONFIG.read_text());accounts={h['host']:h for h in inventory()}
     resolver=ImageResolver([],lambda h:h['ssh'])
-    expected=resolver.fingerprint(None,'python:3.12-bookworm')
-    if not expected:raise RuntimeError('Approved local Python image unavailable')
+    expected=resolver.fingerprint(None,'python:3.12-bookworm') if require_python_image else None
+    if require_python_image and not expected:raise RuntimeError('Approved local Python image unavailable')
     def check(item):
         name,address=item
-        host={'host':name,'local':name==config['name'],'agent_endpoint':'http://'+address+':8790'}
+        host={'host':name,'local':name==config['name'],'lan_address':address,'agent_endpoint':'http://'+address+':8790'}
         client=None
         try:
             client=AgentClient(host);status=client.call('status',timeout=15)
@@ -71,11 +71,12 @@ def discover():
                 host['ssh']=ssh(accounts[name])[:-1]+['-4','-o','HostName='+address,'-o','HostKeyAlias='+name,ssh(accounts[name])[-1]]
             limits=subprocess.check_output(shell_command(host,['docker','info','--format','{{json .MemoryLimit}} {{json .SwapLimit}}']),text=True,stderr=subprocess.DEVNULL,timeout=30).split()
             if limits!=['true','true']:raise RuntimeError('Docker memory/swap isolation unavailable')
-            image=subprocess.check_output(shell_command(host,['docker','image','inspect','python:3.12-bookworm','--format','{{.Id}}']),text=True,stderr=subprocess.DEVNULL,timeout=20).strip()
-            fingerprint=resolver.fingerprint(None if host['local'] else host,'python:3.12-bookworm')
-            if fingerprint!=expected or not image.startswith('sha256:'):raise RuntimeError('Worker does not have the approved Python image contents')
-            host['image_fingerprint']=fingerprint
-            host['image']=image
+            if require_python_image:
+                image=subprocess.check_output(shell_command(host,['docker','image','inspect','python:3.12-bookworm','--format','{{.Id}}']),text=True,stderr=subprocess.DEVNULL,timeout=20).strip()
+                fingerprint=resolver.fingerprint(None if host['local'] else host,'python:3.12-bookworm')
+                if fingerprint!=expected or not image.startswith('sha256:'):raise RuntimeError('Worker does not have the approved Python image contents')
+                host['image_fingerprint']=fingerprint
+                host['image']=image
             host['eligible']=True;host['machine']=status['machine'];host['cpus']=client.call('metrics',timeout=15).get('cpus') or 2
             if 'shared-resources' not in status.get('capabilities',[]):raise RuntimeError('Worker needs the shared resource scheduler update')
         except Exception as error:host.update(eligible=False,reason=type(error).__name__+': '+str(error)[:240])

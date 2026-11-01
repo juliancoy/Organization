@@ -20,6 +20,34 @@ import time
 import urllib.request
 import urllib.error
 
+def persist_job_event(root, ident, job, event):
+    """Commit worker events before publishing them, independent of the RAM buffer."""
+    import sqlite3
+    path=Path(root)/'test-events.sqlite3'
+    db=sqlite3.connect(path,timeout=30)
+    try:
+        db.execute('PRAGMA journal_mode=WAL');db.execute('PRAGMA synchronous=FULL')
+        with db:
+            db.execute('CREATE TABLE IF NOT EXISTS events(job TEXT NOT NULL, sequence INTEGER NOT NULL, payload TEXT NOT NULL, recorded_at REAL NOT NULL, PRIMARY KEY(job,sequence))')
+            sequence=job['sequence']+1
+            db.execute('INSERT INTO events VALUES(?,?,?,?)',(ident,sequence,json.dumps(event,separators=(',',':')),time.time()))
+        path.chmod(0o600)
+    finally:db.close()
+    job['sequence']=sequence;job['events'].append((sequence,event))
+
+
+def persisted_job_events(root, ident, cursor):
+    import sqlite3
+    path=Path(root)/'test-events.sqlite3'
+    if not path.exists():return None
+    db=sqlite3.connect(path,timeout=30)
+    try:
+        rows=db.execute('SELECT sequence,payload FROM events WHERE job=? AND sequence>? ORDER BY sequence LIMIT 200',(ident,cursor)).fetchall()
+        maximum=db.execute('SELECT max(sequence) FROM events WHERE job=?',(ident,)).fetchone()[0]
+        return None if maximum is None else [{'sequence':n,'event':json.loads(value)} for n,value in rows]
+    finally:db.close()
+
+
 class ResourceLease:
     """Cross-process CPU/RAM admission; locks release on process death.
 
@@ -374,6 +402,48 @@ def worker_policy(config, power_root=Path('/sys/class/power_supply')):
     return {'mode':mode,'accepting_jobs':accepting,'on_battery':on_battery,'batteries':batteries,
             'reason':'Submit only; new worker jobs paused' if mode=='paused' else
                      'Saving battery; new worker jobs paused' if not accepting else 'Accepting worker jobs'}
+
+
+def local_peer_qc(config, include_inactive=False):
+    """Expose only the native user's signed, fixed peer-QC service to its UI."""
+    import shlex
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    from cryptography.exceptions import InvalidSignature
+    home = Path.home()
+    if Path(config).resolve() != (home/'.config/lifetech-launcher/peers.json').resolve():
+        return None
+    unit = home/'.config/systemd/user/venter-peer-qc.service'
+    if not unit.exists():
+        return None
+    try:
+        argv = shlex.split(next(line.split('=', 1)[1] for line in unit.read_text().splitlines() if line.startswith('ExecStart=')))
+        if len(argv) != 4 or argv[2] != '--root':
+            return None
+        root = Path(argv[3]).resolve()
+        if root.parent != (home/'.local/state/venter-peer-qc').resolve() or argv[1] != str(root/'worker.py'):
+            return None
+        envelope = json.loads((root/'manifest.json').read_text()); value = envelope['value']
+        enrolled = json.loads(Path(config).read_text())
+        key = Ed25519PublicKey.from_public_bytes(bytes.fromhex(enrolled['controller_public_key']))
+        key.verify(base64.b64decode(envelope['signature'], validate=True), json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode())
+        if value['id'] != root.name or value['expires'] < time.time() or enrolled['name'] not in value['nodes'] or hashlib.sha256((root/'worker.py').read_bytes()).hexdigest() != value['worker_sha256']:
+            return None
+        running = subprocess.run(['systemctl', '--user', 'is-active', 'venter-peer-qc.service'], capture_output=True, text=True, timeout=5).stdout.strip() == 'active'
+        if not running and not include_inactive:
+            return None
+        state = json.loads((root/'state.json').read_text()) if (root/'state.json').exists() else {}
+        count = len(state.get('completed', [])); total = len(value['jobs'])
+        return {'id': value['id'], 'kind': 'peer-qc', 'status': 'running' if running else 'stopped',
+                'label': f'Venter QC peer · {count}/{total} verified results'}
+    except (OSError, ValueError, KeyError, StopIteration, subprocess.SubprocessError, InvalidSignature):
+        return None
+
+
+def start_local_peer_qc(config):
+    job = local_peer_qc(config, include_inactive=True)
+    if job:
+        subprocess.run(['systemctl', '--user', 'start', 'venter-peer-qc.service'], check=True, timeout=15)
+    return bool(job)
 
 
 def worker_environment(home):
@@ -978,6 +1048,35 @@ class Agent:
                         entry['timer']=timer;timer.start();return
             self.dispatch('resource.release',{'id':ident})
 
+    def local_jobs(self):
+        """Only work owned by this worker; deployment containers are excluded."""
+        with self.lock:
+            rows=[{'id':ident,'kind':'test','status':'stopping' if (self.folder(ident)/'STOP').exists() else 'running',
+                   'label':'Source preparation' if job.get('prepare_only') else 'Test job'}
+                  for ident,job in self.jobs.items() if job['status'] in ('running','starting')]
+            rows.extend({'id':ident,'kind':'resource','status':'running' if entry['lease'].row['active'] else 'waiting',
+                         'label':entry['lease'].row['group']}
+                        for ident,entry in getattr(self,'resource_leases',{}).items())
+            rows.extend({'id':ident,'kind':'browser','status':'running','label':'Swarm browser'} for ident in self.browsers)
+            external = local_peer_qc(self.config)
+            if external:
+                rows.append(external)
+            return rows
+
+    def stop_local_job(self, kind, ident):
+        if not isinstance(ident,str) or kind not in ('test','resource','browser','peer-qc'):
+            raise ValueError('Invalid local job')
+        with self.lock:
+            if not any(row['id']==ident and row['kind']==kind for row in self.local_jobs()):
+                raise ValueError('Job is no longer active on this computer')
+            if kind=='peer-qc':
+                subprocess.run(['systemctl', '--user', 'stop', 'venter-peer-qc.service'], check=True, timeout=45)
+            elif kind=='resource':
+                self.expire_resource(ident)
+            else:
+                self.dispatch('job.stop' if kind=='test' else 'p2p.stop',{'id':ident})
+        return {'id':ident,'kind':kind,'status':'stopping'}
+
     def telemetry_policy(self):
         try:policy=json.loads((self.config.parent/'telemetry-transport.json').read_text())
         except FileNotFoundError:return {'transport':'tcp','updated_at':0}
@@ -1121,6 +1220,7 @@ class Agent:
             return {'protocol':VERSION,'source_revision':self.source_revision,'node':config['name'],'ready':bool(shutil.which('docker')) and not Path('/tmp/launcher-agent-draining').exists(),'time':time.time(),
                     'machine':hashlib.sha256(machine.read_bytes()).hexdigest(),'hostname':socket.gethostname(),
                     'addresses':addresses,'platform':info['OSType']+'/'+info['Architecture'],
+                    'routing':getattr(self,'routing_status',{'status':'pending'}),
                     'worker_policy':policy,'capabilities':['controller-signature','github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','peer-layer-cache','mptcp-transport','file-queue','snapshot-stage','event-wait','shared-resources','renewable-resources','encrypted-backup','gpu-kernel','telemetry-push'],
                     'enrolled_peers':sorted(config['peers']),'storage':self.storage_status,
                     'hardware':self.hardware(info),
@@ -1174,15 +1274,18 @@ class Agent:
             with self.lock:
                 job=self.jobs.get(ident)
                 if job is None:
-                    state=json.loads((folder/'state.json').read_text())
-                    return {**state,'events':[],'cursor':0,'events_lost':True}
+                    events=persisted_job_events(self.root,ident,int(args.get('cursor',0)))
+                    state=json.loads((folder/'state.json').read_text()) if (folder/'state.json').exists() else {'status':'interrupted'}
+                    if state.get('status') in ('running','starting'):state['status']='interrupted'
+                    return {**state,'events':events or [],'cursor':events[-1]['sequence'] if events else int(args.get('cursor',0)), 'events_lost':events is None}
                 cursor=int(args.get('cursor',0))
                 wait=min(20,max(0,float(args.get('wait_seconds',0))))
                 self.changed.wait_for(lambda:job['sequence']>cursor or job['status']!='running',timeout=wait)
-                events=[{'sequence':n,'event':event} for n,event in job['events'] if n>cursor][:200]
+                persisted=persisted_job_events(self.root,ident,cursor)
+                events=persisted if persisted is not None else [{'sequence':n,'event':event} for n,event in job['events'] if n>cursor][:200]
                 return {'status':job['status'],'exit_code':job.get('exit_code'),'error':job.get('error'),'preparation':job.get('preparation'),
                         'events':events,'cursor':events[-1]['sequence'] if events else cursor,
-                        'events_lost':bool(job['events'] and cursor<job['events'][0][0]-1)}
+                        'events_lost':persisted is None and bool(job['events'] and cursor<job['events'][0][0]-1)}
         if op == 'job.stop':
             folder=self.folder(args['id']);folder.mkdir(exist_ok=True,mode=0o700)
             (folder/'STOP').touch()
@@ -1400,8 +1503,7 @@ class Agent:
                         source.rename(work)
                         (work/'distributed-plan.json').write_text(json.dumps(manifest))
                         previous['status']='consumed'
-                        job['sequence']+=1
-                        job['events'].append((job['sequence'],{'kind':'source','repository':'.','commit':manifest['repositories']['.']['commit'],'status':'prepared_snapshot','cache_hit':True}))
+                        persist_job_event(self.root,ident,job,{'kind':'source','repository':'.','commit':manifest['repositories']['.']['commit'],'status':'prepared_snapshot','cache_hit':True})
                         self.changed.notify_all()
                         return
 
@@ -1422,9 +1524,8 @@ class Agent:
 
         def event(name,repo,status,**details):
             with self.lock:
-                job['sequence']+=1
-                job['events'].append((job['sequence'],{'kind':'source','repository':name,
-                    'commit':repo['commit'],'status':status,**details}))
+                persist_job_event(self.root,manifest['id'],job,{'kind':'source','repository':name,
+                    'commit':repo['commit'],'status':status,**details})
                 self.changed.notify_all()
 
         for name in sorted(needed,key=lambda value:(len(Path(value).parts),value)):
@@ -1534,7 +1635,7 @@ class Agent:
                     except ValueError:event={'kind':'log','line':line[:2000]}
                     with self.lock:
                         if event.get('kind')=='prepared':job['preparation']='ready'
-                        job['sequence']+=1;job['events'].append((job['sequence'],event));self.changed.notify_all()
+                        persist_job_event(self.root,ident,job,event);self.changed.notify_all()
                 code=process.wait(timeout=30)
             finally:timer.cancel()
             job.update(status='stopped' if (folder/'STOP').exists() else 'completed' if code==0 else 'failed',exit_code=code)

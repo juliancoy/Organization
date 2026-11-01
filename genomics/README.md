@@ -298,3 +298,119 @@ A new kernel needs exact CPU agreement and a benchmark including transfers and
 setup before it is described as an acceleration.
 Keep a persistent GPU context if it materially improves throughput, respect live
 resource leases, and preserve other applications' GPU-memory headroom.
+
+## Venter collection download service
+
+The local huref2-download.service now reads a persistent collection.json under
+~/Downloads/HuRef2.0. It keeps the three existing SUP BAMs at their original
+paths, then queues four published assemblies, the Zenodo phased-variant/haplotype
+support files, and the ENA HAC FASTQ. Old Illumina files stay in their existing
+collection; they are not downloaded twice. Raw POD5/FAST5 is explicitly unavailable
+until an actual public source is identified. The current collection is 15 files,
+about 607.22 GB in total.
+
+The running user installation uses copies of scripts/huref_download_service.py
+and scripts/huref_download_status.py under ~/.local/opt/huref-download.
+Its aria2 runtime negotiates MPTCP where supported, falls back to TCP, retains
+segmented resume controls, and verifies publisher MD5s. Verified receipts are tied
+to expected checksum, size, inode/device and modification metadata. Changed or
+unverified files are rechecked on restart. Failed transfers are requeued after a
+delay without restarting healthy transfers. Storage admission was checked for the
+current collection, and the supervisor pauses active transfers below a 30 GB
+free-space reserve.
+
+Commands: huref2-status --watch, huref2-status --datasets, and
+huref2-status --all. The existing systemctl --user controls still apply.
+
+Use j/k or n/p to page through the watch view. Closing it leaves the service
+running. Per-file ETA is shown for active transfers; queued files have no invented
+completion estimate. Overall ETA excludes final integrity verification. Durable
+state and receipts also allow the display to show saved progress while offline.
+The collection-md5checksums.txt manifest can be used for an independent later
+checksum audit from the download root.
+
+Focused verification:
+python3 -m pytest -q scripts/tests/test_huref_download_service.py
+
+
+## Signed Venter peer QC
+
+`scripts/venter_peer_deploy.py` enrolls a fixed set of authenticated machines in a
+signed run executed by `scripts/venter_peer_qc.py`. The controller retains its
+signing key; each worker generates its own identity key. Once provisioned, peers
+schedule work and exchange verified inputs, signed receipts, and result files
+directly over mutual TLS without a running controller scheduler. Placement and
+fallback decisions are recorded in `events.jsonl`; partitions can cause duplicate
+execution, and differing output hashes are flagged rather than silently replaced.
+
+Each node keeps its run under `~/.local/state/venter-peer-qc/<run-id>/`. The signed
+manifest records recipes, input identities, image IDs, resource limits, and node
+identities. Original BAM QC runs on the machine holding the BAMs. Other inputs
+use resumable transfers with fixed 1 MiB buffers and MD5 verification against the
+publisher inventory. Downloads and cached inputs are retained. These are ordinary
+TLS transfers; no RDMA transport is implemented.
+
+The native launcher at http://127.0.0.1:8791/launcher exposes **Join swarm**,
+**Pause new jobs**, and **Worker mode**. Automatic mode accepts work on AC power;
+Always also accepts work on battery. The Jobs section shows the signed peer QC
+service and provides an explicit stop action. Pausing admission lets accepted jobs
+finish. Joining starts an existing valid signed peer run if it was stopped; it
+does not create a new authorization or enroll an unknown machine automatically.
+Both native launcher and peer QC services are enabled as user systemd services.
+
+## HuRef2 DAT1/SLC6A3 VNTR check
+
+The priority task `huref2-dat1-vntr` uses public HuRef2 inputs. Its primary assembly
+(GCA_059792245.1, CM186513.1) has a DAT1 3′-UTR repeat at zero-based coordinates
+1,404,324–1,404,728 that exactly matches the GRCh38 repeat annotated as 10 copies
+by UCSC simpleRepeat. The 404-bp annotated interval includes repeat imperfections;
+it should not be naively divided by 40 to assign a fractional biological allele.
+
+CodeCollective checked unique flanking sequences and exact repeat identity; CompAI
+independently checked a published primer pair in silico. CodeCollective also
+verified the publisher MD5 and scanned all 2,941,282 records of the phased VCF,
+finding no overlapping locus call. The supported result is **10R in the assembled
+sequence**. The second allele and a diploid 10R/10R genotype remain unresolved:
+absence from a heterozygous-only VCF does not establish reference homozygosity.
+No ADHD diagnosis or phenotype is inferred.
+
+The workers used existing signed resource leases, pinned local images, one CPU,
+256 MiB, and containers without network access. Only a small public locus payload
+was streamed for cross-checking; the full VCF audit used the worker's verified
+cache. Task transitions, the timed-out worker attempt, successful retries, and
+results are retained in the transactional compute journal. Recipes are in
+`scripts/dat1_vntr_worker.py`, `scripts/dat1_vntr_swarm.py`, and
+`scripts/dat1_vntr_vcf_audit.py`. CompAI keeps evidence under
+`~/.local/state/swarm-control/analyses/huref2-dat1-vntr/`; this laptop keeps the
+report and extraction artifacts under `~/Downloads/HuRef2.0/analysis/dat1-vntr/`.
+
+## Transfer and memory hierarchy measurements
+
+Use `scripts/swarm_transfer_audit.py` for read-only NIC DMA masks, checksum and
+segmentation offloads, RDMA devices, NUMA topology, page-cache headroom, storage
+read-ahead and Linux pressure-stall metrics. A DMA mask is a capability report,
+not a DMA traffic counter. All five enrolled workers exposed a single NUMA node
+and no RDMA device in the 2026-10-31 audit. Ordinary NIC drivers manage DMA;
+Python TLS still performs CPU encryption and copies. No zero-copy or RDMA claim
+is made. CPU affinity and huge pages are not justified by these measurements.
+
+`scripts/swarm_transfer_benchmark.py` reads at most 64 MiB of an allowed public
+object through the existing pinned mTLS peer connection and compares the prefix
+SHA256 with a source-derived expected digest. It uses one reusable buffer and
+compares 64 KiB, 256 KiB and 1 MiB reads. This is an end-to-end warm-cache sample,
+not a cold-disk or maximum-link benchmark. On 2026-10-31, the Latitude → CompAI
+Ethernet path achieved 908–911 Mbps, with no meaningful buffer-size advantage.
+CodeCollective → Latitude achieved 21–27 Mbps with CodeCollective Ethernet down.
+Larger buffers or RDMA emulation would not fix that wireless bottleneck.
+
+Keep the existing 1 MiB transfer buffers, sequential buffered reads and Linux
+page cache. Do not flush cache, lock entire genomes into RAM, or raise global
+read-ahead speculatively. BAM processing stays on its source NVMe machine and
+uses record-bounded streaming, avoiding whole-file RAM residency and large
+inter-node copies. The measured BAM container used ~26 MiB, with zero current
+memory PSI and no swap-in/out during a short vmstat sample. Swap occupancy alone
+is not evidence of current paging. Inspiron has a rotational root disk, high I/O
+PSI and a 100 Mbps Ethernet link; that is a separate placement/storage constraint.
+Raw measurements and SHA256-verified transfer checks are retained under CompAI's
+owner-only `~/.local/state/swarm-control/analyses/swarm-memory-transfer/` and in the
+transactional compute event journal. Running jobs are not restarted for auditing.
