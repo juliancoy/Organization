@@ -184,3 +184,6 @@
 !/tests/test_huref_compare_worker.py
 !/genomics/comparison-image/
 !/genomics/comparison-image/Dockerfile
+
+!/scripts/worker_maintenance.py
+!/tests/test_worker_maintenance.py
