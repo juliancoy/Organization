@@ -985,11 +985,26 @@ class Agent:
         import docker
         return contextlib.closing(docker.from_env(timeout=120))
 
+    @staticmethod
+    def remove_container(container):
+        """Accept a concurrent Docker removal without masking other failures."""
+        from docker.errors import APIError, NotFound
+        try:
+            container.remove(force=True)
+        except NotFound:
+            pass
+        except APIError as error:
+            if error.status_code != 409 or not re.fullmatch(
+                r'removal of container [a-f0-9]{12,64} is already in progress',
+                error.explanation or '',
+            ):
+                raise
+
     def remove_containers(self, ident):
         with self.client() as client:
             for container in client.containers.list(all=True, filters={'name':'orgportal-test-'+ident+'-'}):
                 if container.name.startswith('orgportal-test-'+ident+'-'):
-                    container.remove(force=True)
+                    self.remove_container(container)
 
     async def handle(self, request):
         import asyncio

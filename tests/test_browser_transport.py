@@ -14,6 +14,24 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from launcher_agent import browser_request,Agent
 
 class BrowserTransportTests(unittest.TestCase):
+    def test_cleanup_accepts_concurrent_removal_and_missing_container(self):
+        from docker.errors import APIError, NotFound
+        response=Mock(status_code=409)
+        for error in (NotFound('gone'), APIError('conflict',response=response,
+                     explanation='removal of container '+64*'a'+' is already in progress')):
+            with self.subTest(error=type(error).__name__):
+                container=Mock();container.remove.side_effect=error
+                Agent.remove_container(container)
+                container.remove.assert_called_once_with(force=True)
+
+    def test_cleanup_preserves_unrelated_docker_errors(self):
+        from docker.errors import APIError
+        for status,explanation in ((409,'container is paused'),(500,'daemon unavailable')):
+            with self.subTest(status=status):
+                error=APIError('failure',response=Mock(status_code=status),explanation=explanation)
+                container=Mock();container.remove.side_effect=error
+                with self.assertRaises(APIError):Agent.remove_container(container)
+
     def test_worker_module_imports_as_a_standalone_bundle(self):
         with tempfile.TemporaryDirectory() as temporary:
             worker=Path(temporary)/'worker.py'
