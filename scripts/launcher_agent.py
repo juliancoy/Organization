@@ -4,7 +4,6 @@ import collections
 import contextlib
 import fcntl
 import hashlib
-from launcher_registry import sha256_stream
 import json
 import io
 import os
@@ -20,6 +19,13 @@ import threading
 import time
 import urllib.request
 import urllib.error
+
+def sha256_stream(stream):
+    """Keep hashing available in the standalone worker bundle on Python 3.10."""
+    digest=hashlib.sha256()
+    for chunk in iter(lambda:stream.read(1024*1024),b''):digest.update(chunk)
+    return digest.hexdigest()
+
 
 def persist_job_event(root, ident, job, event):
     """Commit worker events before publishing them, independent of the RAM buffer."""

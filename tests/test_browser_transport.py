@@ -1,6 +1,7 @@
 import json
 import base64
 import hashlib
+import subprocess
 import io
 import tarfile
 from pathlib import Path
@@ -13,6 +14,12 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from launcher_agent import browser_request,Agent
 
 class BrowserTransportTests(unittest.TestCase):
+    def test_worker_module_imports_as_a_standalone_bundle(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            worker=Path(temporary)/'worker.py'
+            worker.write_bytes((Path(__file__).resolve().parents[1]/'scripts/launcher_agent.py').read_bytes())
+            subprocess.run([sys.executable,'-I','-c','import runpy,sys; runpy.run_path(sys.argv[1])',str(worker)],check=True,capture_output=True)
+
     def test_upload_verifies_bytes_without_python_311_file_digest(self):
         with tempfile.TemporaryDirectory() as temporary:
             agent=Agent.__new__(Agent);agent.root=Path(temporary)
