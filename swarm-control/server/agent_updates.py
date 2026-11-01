@@ -111,7 +111,7 @@ class LauncherUpdates:
         self.progress(host,'updating',detail)
         self.stage(host,status)
         self.progress(host,'waiting_for_update',{**detail,'status':'waiting_for_update'})
-        deadline=time.monotonic()+120
+        deadline=time.monotonic()+240
         while time.monotonic()<deadline:
             if self.stopped():raise InterruptedError('Launcher update stopped')
             try:value=client.call('status',timeout=5)

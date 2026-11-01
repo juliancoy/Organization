@@ -25,7 +25,7 @@ def service(*, source, config, jobs, socket, image, uid, gid, socket_gid, hostna
           '--group-add',str(socket_gid),'--cap-drop','ALL','--security-opt','no-new-privileges',
           '--read-only','--tmpfs','/tmp:rw,nosuid,nodev,size=128m']
     health=shlex.join(['python','-c',"from pathlib import Path; import json,urllib.request; assert Path('/tmp/launcher-agent-ready.json').is_file(); json.load(urllib.request.urlopen('http://127.0.0.1:8791/launcher/status',timeout=2))"])
-    args+=['--health-cmd',health,'--health-interval','10s','--health-timeout','5s','--health-start-period','45s','--health-retries','3']
+    args+=['--health-cmd',health,'--health-interval','10s','--health-timeout','5s','--health-start-period','180s','--health-retries','3']
     for path,readonly in ((source,True),(str(Path(config).parent),False),(jobs,False),(socket,False),('/etc/machine-id',True)):
         args+=['--mount',f'type=bind,src={path},dst={path}'+(',readonly' if readonly else '')]
     for value in ('HOME='+home,'DOCKER_HOST=unix://'+socket,'LIFETECH_PEER_CONFIG='+config,
