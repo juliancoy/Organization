@@ -110,3 +110,29 @@ Worker concurrency follows available cores and shared resource admission, and
 there is no fixed per-job runtime timeout. Reservations are calculated from the
 reference/query lengths, compressed inputs and the selected query span instead
 of being clamped to 4 GiB. Reference indices are still chromosome-scoped.
+
+### Worker maintenance and future updates
+
+Use `python -m scripts.worker_maintenance status` to inspect enrolled workers.
+`drain --reason 'fleet update'` closes admission through a durable maintenance
+marker and preserves each owner's worker preference. Existing signed leases can
+still renew and release, so bounded work can finish and commit receipts.
+Persistent GPU services must be stopped through their owning systemd services;
+the marker does not terminate them. Keep a record of previously active services
+and restart them after the update, rather than starting completed runs again.
+
+The standard SSH launcher deployer installs supervisor fixes in native agents
+and owned container sessions as well as staging agent releases. Verify all nodes
+have the expected revision before `python -m scripts.worker_maintenance resume`;
+the command checks the selected fleet before reopening admission. Deferred
+updates leave busy workers available, while an actual update blocks new resource
+acquisitions and continues to allow renewals. Agent status includes the active
+and desired release and whether an update is current, applying, or deferred.
+
+This is a path toward rolling updates, not stopless lease handoff. Resource
+ownership and expiry timers currently live in the agent process. A stopless
+upgrade needs an independent lease supervisor, authenticated reattachment to
+existing containers, durable ownership fencing between old and new agents, and
+rollback tests that prove capacity cannot be double allocated. Native GPU
+controllers already hold their own shared-pool leases independently of agent
+reloads and provide a useful starting point for that separation.

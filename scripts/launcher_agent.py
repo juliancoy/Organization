@@ -380,6 +380,9 @@ with response:print(response.read(4*1024*1024+1).decode())
 
 def worker_policy(config, power_root=Path('/sys/class/power_supply')):
     """Local owner policy; unknown laptop power fails closed in automatic mode."""
+    maintenance=Path(config).parent/'maintenance.json'
+    if maintenance.exists():
+        return {'mode':'maintenance','accepting_jobs':False,'reason':'Owner maintenance: draining existing work; renewals remain available'}
     path=Path(config).parent/'worker-policy.json'
     try:
         mode=json.loads(path.read_text()).get('mode','auto') if path.exists() else 'auto'
@@ -1121,6 +1124,7 @@ class Agent:
                     return {'renewed':True,'expires_in_seconds':240}
                 if set(args)!={'id','group','cpus','memory_mb','container'} or type(args['cpus']) is not int or args['cpus']<1 or type(args['memory_mb']) is not int or args['memory_mb']<1 or not re.fullmatch(r'genomics-[a-f0-9]{32}',args['container']):
                     raise ValueError('Expected a bounded private batch resource request')
+                if Path('/tmp/launcher-agent-draining').exists():raise RuntimeError('Agent is applying an explicit update; lease renewals remain available')
                 policy=worker_policy(self.config)
                 if not policy['accepting_jobs']:raise RuntimeError(policy['reason'])
                 previous=leases.get(ident)
@@ -1217,7 +1221,9 @@ class Agent:
             if not machine.exists():raise RuntimeError('Host machine identity is not mounted')
             rows = json.loads(subprocess.check_output(['ip','-j','addr'],text=True,timeout=5))
             addresses = [a['local'].split('%')[0] for row in rows if row['ifname'].startswith(('en','eth','wl')) for a in row.get('addr_info',[]) if a.get('scope')!='host']
-            return {'protocol':VERSION,'source_revision':self.source_revision,'node':config['name'],'ready':bool(shutil.which('docker')) and not Path('/tmp/launcher-agent-draining').exists(),'time':time.time(),
+            try:update_state=json.loads(Path('/tmp/launcher-agent-update.json').read_text())
+            except (OSError,ValueError):update_state={}
+            return {'update':update_state,'protocol':VERSION,'source_revision':self.source_revision,'node':config['name'],'ready':bool(shutil.which('docker')) and not Path('/tmp/launcher-agent-draining').exists(),'time':time.time(),
                     'machine':hashlib.sha256(machine.read_bytes()).hexdigest(),'hostname':socket.gethostname(),
                     'addresses':addresses,'platform':info['OSType']+'/'+info['Architecture'],
                     'routing':getattr(self,'routing_status',{'status':'pending'}),

@@ -25,6 +25,10 @@ for name,address in peers.items():
  if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,252}',name):raise RuntimeError('Invalid enrolled node')
  ip=ipaddress.ip_address(address)
  if not ip.is_private or ip.is_loopback or ip.is_unspecified:raise RuntimeError('Enrolled LAN address required')
+supervisor=payload['supervisor_source']
+if hashlib.sha256(supervisor.encode()).hexdigest()!=payload['supervisor_sha256']:raise RuntimeError('Supervisor checksum mismatch')
+compile(supervisor,'launcher_peer_supervisor.py','exec')
+targets=[pathlib.Path.home()/'.local/share/organization-node/scripts/launcher_peer_supervisor.py']
 settings['peers']=dict(peers)
 settings['controller_public_key']=public_key
 pending=config.with_suffix('.controller.tmp');pending.write_text(json.dumps(settings,indent=2)+'\\n');pending.chmod(0o600);pending.replace(config)
@@ -35,10 +39,15 @@ for container_name in ('lifetech-launcher','lifetech-launcher-session'):
  if result.returncode:continue
  container=json.loads(result.stdout)[0]
  owned=any(m['Destination']=='/run/launcher-config' and pathlib.Path(m['Source']).resolve()==config.parent.resolve() for m in container.get('Mounts',[]))
+ for mount in container.get('Mounts',[]):
+  if owned and mount['Destination']=='/session':targets.append(pathlib.Path(mount['Source'])/'launcher_peer_supervisor.py')
  current_limit=container['HostConfig'].get('PidsLimit') or 0
  target_limit=min(32768,max(1024,len(os.sched_getaffinity(0))*256+512))
  if owned and 0<current_limit<target_limit:
   subprocess.run(['docker','update','--pids-limit',str(target_limit),container_name],check=True,stdout=subprocess.DEVNULL,timeout=20)
+for target in targets:
+ if not target.exists():continue
+ temporary=target.with_suffix('.update.tmp');temporary.write_text(supervisor);temporary.chmod(target.stat().st_mode & 0o777);temporary.replace(target)
 files=payload['files']
 expected=('launcher_peers.py','launcher_discovery.py','launcher_registration.py','launcher_agent.py','launcher_registry.py')
 if set(files)!=set(expected)|{'launcher_update.py'}:
@@ -57,6 +66,7 @@ class LauncherUpdates:
     def __init__(self,root,stopped,progress):
         self.stopped,self.progress=stopped,progress
         folder=Path(root)/'scripts'
+        self.supervisor_source=(folder/'launcher_peer_supervisor.py').read_text()
         self.files={name:(folder/name).read_text() for name in (*FILES,'launcher_update.py')}
         self.revision=hashlib.sha256(b''.join(self.files[name].encode() for name in FILES)).hexdigest()
 
@@ -65,7 +75,7 @@ class LauncherUpdates:
         from agent_client import CONFIG
         public_key=json.loads(CONFIG.read_text())['controller_public_key']
         if len(bytes.fromhex(public_key))!=32:raise ValueError('Invalid pinned controller key')
-        payload={'machine':status['machine'],'node':status['node'],'revision':self.revision,'files':self.files,'controller_public_key':public_key,'peers':json.loads(CONFIG.read_text())['peers']}
+        payload={'supervisor_source':self.supervisor_source,'supervisor_sha256':hashlib.sha256(self.supervisor_source.encode()).hexdigest(),'machine':status['machine'],'node':status['node'],'revision':self.revision,'files':self.files,'controller_public_key':public_key,'peers':json.loads(CONFIG.read_text())['peers']}
         command=self.command(host,INSTALL)
         result=subprocess.run(command,input=json.dumps(payload),capture_output=True,text=True,timeout=40)
         if result.returncode:

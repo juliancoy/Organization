@@ -97,6 +97,13 @@ def main():
                         print('Applying explicit agent release',flush=True)
                 elif child.poll() is not None:
                     stopped.wait(5);child=launch(active);started=time.monotonic()
+                status=Path('/tmp/launcher-agent-update.json')
+                temporary=status.with_suffix('.tmp')
+                temporary.write_text(json.dumps({'active':str(active),'desired':str(wanted),
+                                                'phase':'applying' if pending else 'deferred' if wanted!=active else 'current',
+                                                'reason':'Waiting for active work to finish' if wanted!=active and not pending else '',
+                                                'sampled_at':time.time(),'lease_handoff_supported':False}))
+                temporary.replace(status)
             except (OSError,ValueError,KeyError,TypeError) as error:
                 print('Agent update deferred: '+type(error).__name__,flush=True)
             stopped.wait(1)

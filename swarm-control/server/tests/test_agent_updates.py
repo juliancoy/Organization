@@ -66,3 +66,12 @@ class LauncherUpdateTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'busy'):
                 self.updates.ensure(self.host,Mock(),{**self.status,'active_resource_leases':1})
         stage.assert_not_called()
+
+    def test_supervisor_fix_is_part_of_standard_ssh_deployment(self):
+        import json,hashlib
+        with patch('agent_updates.subprocess.run',return_value=Mock(returncode=0)) as run,patch('agent_client.CONFIG') as config:
+            config.read_text.return_value=json.dumps({'controller_public_key':'ab'*32,'peers':{'worker':'10.42.0.2'}})
+            self.updates.stage(self.host,self.status)
+        payload=json.loads(run.call_args.kwargs['input'])
+        self.assertIn('prepare_update',payload['supervisor_source'])
+        self.assertEqual(payload['supervisor_sha256'],hashlib.sha256(payload['supervisor_source'].encode()).hexdigest())

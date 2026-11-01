@@ -41,3 +41,16 @@ def test_cancelled_queue_timer_cannot_expire_new_active_generation(tmp_path):
                 callbacks[0]();remove.assert_not_called()
             assert args['id'] in agent.resource_leases
         finally:agent.dispatch('resource.release',{'id':args['id']})
+
+
+def test_drain_rejects_new_leases_but_keeps_existing_renewable(tmp_path):
+    agent=Agent.__new__(Agent);agent.root=tmp_path;agent.config=tmp_path/'config.json';agent.lock=threading.RLock();agent.busy=lambda:None
+    args={'id':'a'*32,'group':'genomics-drain','cpus':1,'memory_mb':100,'container':'genomics-'+'b'*32}
+    with patch.object(ResourceLease,'capacity',return_value={'cpus':8,'memory_mb':12000,'available_mb':12000}),patch('scripts.launcher_agent.worker_policy',return_value={'accepting_jobs':True}):
+        try:
+            assert agent.dispatch('resource.acquire',args)['acquired']
+            with patch('scripts.launcher_agent.Path.exists',return_value=True):
+                assert agent.dispatch('resource.renew',{'id':args['id']})['renewed']
+                with pytest.raises(RuntimeError,match='applying an explicit update'):
+                    agent.dispatch('resource.acquire',{**args,'id':'c'*32})
+        finally:agent.dispatch('resource.release',{'id':args['id']})
