@@ -14,11 +14,14 @@ class InputReleaseTests(unittest.TestCase):
             config=Path(directory)/'peers.json';config.write_text(json.dumps({'name':'fixture'}))
             env={**os.environ,'LIFETECH_PEER_CONFIG':str(config)}
             release=InputRuntimeRelease(Path(__file__).resolve().parents[3])
+            fixture_machine=Path(directory)/'machine-id';fixture_machine.write_text('isolated-input-release-machine')
+            install=INSTALL.replace("pathlib.Path('/etc/machine-id')","pathlib.Path(sys.argv[1])")
+            self.assertNotEqual(install,INSTALL)
             def deploy(files,revision=None,machine=None):
                 manifest={name:hashlib.sha256(text.encode()).hexdigest() for name,text in files.items()}
                 payload={'files':files,'revision':revision or hashlib.sha256(json.dumps(manifest,sort_keys=True).encode()).hexdigest(),
-                         'node':'fixture','machine':machine or hashlib.sha256(Path('/etc/machine-id').read_bytes()).hexdigest()}
-                return subprocess.run([sys.executable,'-c',INSTALL],input=json.dumps(payload),capture_output=True,text=True,env=env)
+                         'node':'fixture','machine':machine or hashlib.sha256(fixture_machine.read_bytes()).hexdigest()}
+                return subprocess.run([sys.executable,'-c',install,str(fixture_machine)],input=json.dumps(payload),capture_output=True,text=True,env=env)
             result=deploy(release.files);self.assertEqual(result.returncode,0,result.stderr)
             current=config.parent/'input-releases/current';old=current.resolve()
             self.assertEqual(json.loads(result.stdout)['revision'],release.revision)
