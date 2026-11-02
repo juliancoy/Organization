@@ -98,6 +98,19 @@ def application_test_task(run):
             'status': run.get('status'), 'detail':detail,'progress': aggregate(children), 'children': children}
 
 
+def current_tasks(tasks, registered):
+    """A verified recovery replaces failed current work; original run history stays."""
+    recovered=set()
+    success={'completed','passed','reused','verified'}
+    for task in registered:
+        children=task.get('children',[])
+        if (task.get('kind')=='application-tests' and task.get('status') in success and
+                children and all(child.get('status') in success for child in children)):
+            recovered.update(value for value in task.get('recovery_of',[]) if isinstance(value,str))
+    return [task for task in tasks if not (task.get('id') in recovered and
+            task.get('kind')=='application-tests' and task.get('status') in ('failed','stopped','partial','interrupted'))]
+
+
 def snapshot():
     tasks = []; errors = []
     for root in sorted((Path.home()/'.local/state/venter-peer-qc').glob('venter-qc-*')):
@@ -137,6 +150,7 @@ def snapshot():
         errors.append('Application test status unavailable')
     from task_registry import registry_snapshot
     registered, planned, labels, registry_errors = registry_snapshot()
+    tasks=current_tasks(tasks,registered)
     from run_manager_projection import attach_delegated_runs
     tasks,registered=attach_delegated_runs(tasks,registered,aggregate)
     for task in tasks:
