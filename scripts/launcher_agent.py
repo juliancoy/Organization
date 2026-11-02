@@ -90,7 +90,7 @@ def docker_workers():
         memory=max(limits.get('Memory',0),limits.get('MemoryReservation',0))
         if cpu<=0 or memory<=0:raise RuntimeError('Worker has no explicit CPU/RAM limits')
         name=item['Name'].removeprefix('/')
-        rows.append({'id':item['Id'],'container':name,'job':labels.get('org.lifetech.job',name.removeprefix('genomics-')),
+        rows.append({'id':item['Id'],'container':name,'job':labels.get('org.lifetech.job',name.removeprefix('genomics-').removeprefix('swarm-job-')),
                      'group':labels.get('org.lifetech.group','workers'),'cpus':cpu,'memory_mb':(memory+1024**2-1)//1024**2,
                      'pids':limits.get('PidsLimit') or 512,'active':True,'created':0})
     return rows
@@ -210,7 +210,12 @@ class ResourceLease:
     def try_acquire(self):
         with self.guard():
             if self.row['active']:return True
-            limits=self.capacity();rows=self.rows();active=[r for r in rows if r['active']]
+            try:limits=self.capacity();rows=self.rows()
+            except subprocess.TimeoutExpired:
+                # Unknown Docker state cannot admit work, but is not a failed job.
+                # Keep the queued reservation and retry when the daemon responds.
+                return False
+            active=[r for r in rows if r['active']]
             keys=('cpus','memory_mb')+(('pids',) if 'pids' in limits else ())
             free={k:limits[k]-sum(r.get(k,512) for r in active) for k in keys}
             free['memory_mb']=max(0,min(limits['memory_mb'],limits.get('available_mb',limits['memory_mb']))-sum(r['memory_mb'] for r in active))
@@ -1276,8 +1281,8 @@ class Agent:
                     if not any(r['job']==ident for r in workers) and ident not in self.pending_resources:
                         raise ValueError('Worker is not active')
                     return {'renewed':True,'expires_in_seconds':None,'managed_by':'docker'}
-                if set(args)!={'id','group','cpus','memory_mb','container'} or type(args['cpus']) is not int or args['cpus']<1 or type(args['memory_mb']) is not int or args['memory_mb']<1 or args['container']!='genomics-'+ident:
-                    raise ValueError('Expected worker name genomics-<job ID> and CPU/RAM limits')
+                if set(args)!={'id','group','cpus','memory_mb','container'} or type(args['cpus']) is not int or args['cpus']<1 or type(args['memory_mb']) is not int or args['memory_mb']<1 or args['container'] not in ('genomics-'+ident,'swarm-job-'+ident):
+                    raise ValueError('Expected a job-bound worker name and CPU/RAM limits')
                 existing=next((r for r in workers if r['job']==ident),None)
                 if existing:
                     if any(existing[k]!=args[k] for k in ('group','cpus','memory_mb','container')):raise ValueError('Job ID already used')
@@ -1376,7 +1381,7 @@ class Agent:
                     'machine':hashlib.sha256(machine.read_bytes()).hexdigest(),'hostname':socket.gethostname(),
                     'addresses':addresses,'platform':info['OSType']+'/'+info['Architecture'],
                     'routing':getattr(self,'routing_status',{'status':'pending'}),
-                    'worker_policy':policy,'capabilities':['controller-signature','github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','peer-layer-cache','mptcp-transport','file-queue','snapshot-stage','event-wait','shared-resources','renewable-resources','docker-workers','encrypted-backup','gpu-kernel','telemetry-push','performance-v1','builtin-monitor'],
+                    'worker_policy':policy,'capabilities':['controller-signature','github-jobs','p2p-browser','cancel','events','layer-pull','registry-read','peer-layer-cache','mptcp-transport','file-queue','snapshot-stage','event-wait','shared-resources','renewable-resources','docker-workers','generic-workers','encrypted-backup','gpu-kernel','telemetry-push','performance-v1','builtin-monitor'],
                     'enrolled_peers':sorted(config['peers']),'storage':self.storage_status,
                     'hardware':self.hardware(info),
                     'preparations':[key for key,j in self.jobs.items() if j['status']=='running' and j.get('prepare_only')],

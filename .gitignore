@@ -236,3 +236,8 @@
 # RAM-bounded, resumable whole-genome finalization.
 !/scripts/julian_finalize.py
 !/tests/test_julian_finalize.py
+
+# Shared swarm-node SDK and genome compatibility adapter.
+!/scripts/swarm_runtime.py
+!/scripts/genome_runtime.py
+!/tests/test_swarm_runtime.py

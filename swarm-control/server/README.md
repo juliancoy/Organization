@@ -853,14 +853,30 @@ hooks. Do not encode sample names, genome formats or samtools subcommands into
 this generic contract. RAM-only private inputs, public reusable references and
 durable outputs can have different policies within the same job.
 
-Current placement: `scripts/wgs_recall_swarm.py:leased_run` contains reusable
-execution machinery that belongs in the shared node runtime. Its genomics callers
-should eventually become adapters to that common implementation.
-`scripts/julian_finalize.py` remains application code: it chooses the batch-sized
-algorithm and computes its resource and storage needs. Other controllers should
-use the same execution primitive rather than duplicate Docker command builders.
-Move these responsibilities incrementally with compatibility adapters and pinned
-recipes so already running jobs keep their admitted behavior.
+Implemented placement: `scripts/swarm_runtime.py` is the shared node SDK for
+worker discovery and identity checks, `run_job`, resource admission, bounded RAM
+scratch and no-swap containers, operational receipts, cleanup, verified file
+streaming, and atomic checkpoint publication. It imports no genome applications.
+The existing node image includes it through its scripts package; no second daemon
+or new arbitrary-command HTTP endpoint is introduced.
+
+`scripts/genome_runtime.py` is a small application adapter selecting the genome
+group and labels. `wgs_recall_swarm.py` re-exports its old names for compatibility;
+its execution and transfer implementations have been removed. Current genome
+controllers use the adapter. `julian_finalize.py` retains the batch algorithm,
+scientific validation and resource/storage sizing formulas. Existing controllers
+keep their exception catch boundaries during the migration.
+
+New agents advertise `generic-workers` and accept `swarm-job-<id>` as well as
+legacy job-bound names. The SDK uses existing wire names on older enrolled agents,
+so adopting the common code does not require interrupting active jobs or an
+immediate fleet update. Generic jobs use their own group and labels. Runtime
+identity labels cannot be overridden, and all tmpfs budgets combined must leave
+room inside the admitted RAM limit for application working memory.
+
+Generic lifecycle, transfer, compatibility and RAM-accounting tests live in
+`tests/test_swarm_runtime.py`; genome adapter tests remain in
+`tests/test_wgs_recall_swarm.py`. Biological finalization tests remain separate.
 
 
 ### Host Docker fixtures in the release gate

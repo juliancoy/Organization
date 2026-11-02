@@ -88,3 +88,31 @@ def test_pending_admission_counts_docker_without_double_counting(tmp_path,monkey
         assert not b.try_acquire() # Docker worker still consumes a CPU.
         live.clear();assert b.try_acquire()
     finally:a.close();b.close()
+
+
+def test_generic_worker_names_are_bound_to_the_admitted_job(tmp_path,monkeypatch):
+    monkeypatch.setattr(module,'docker_workers',lambda:[])
+    monkeypatch.setattr(module,'worker_policy',lambda *_:{'accepting_jobs':True})
+    monkeypatch.setattr(ResourceLease,'capacity',lambda *_:{'cpus':4,'memory_mb':4096,'available_mb':4096})
+    monkeypatch.setenv('SWARM_RESOURCE_DIR',str(tmp_path/'resources'))
+    a=agent(tmp_path);args={**request(),'container':'swarm-job-'+'a'*32,'group':'image-processing'}
+    assert a.dispatch('resource.acquire',args)['acquired']
+    a.dispatch('resource.release',{'id':args['id']})
+    with pytest.raises(ValueError,match='job-bound'):
+        a.dispatch('resource.acquire',{**args,'container':'swarm-job-'+'b'*32})
+
+
+def test_docker_inspection_timeout_keeps_reservation_queued(tmp_path,monkeypatch):
+    import subprocess
+    import scripts.launcher_agent as module
+    monkeypatch.setattr(module.ResourceLease,'capacity',lambda self:{'cpus':4,'memory_mb':4096,'available_mb':4096})
+    (tmp_path/'docker-workers').touch()
+    lease=module.ResourceLease('queued-test',1,128,'fixture-worker',directory=tmp_path)
+    try:
+        def unavailable():raise subprocess.TimeoutExpired(['docker','inspect','worker'],15)
+        monkeypatch.setattr(module,'docker_workers',unavailable)
+        assert lease.try_acquire() is False
+        assert not lease.row['active'] and lease.path.exists()
+        monkeypatch.setattr(module,'docker_workers',lambda:[])
+        assert lease.try_acquire() is True
+    finally:lease.close()

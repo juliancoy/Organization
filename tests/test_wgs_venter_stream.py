@@ -141,3 +141,23 @@ def test_complete_old_chunk_mirror_cannot_replace_verified_source(tmp_path,monke
     saved=json.loads((destination/'receipt.json').read_text())
     assert saved['sha256']==receipt['sha256']
     assert saved['mtime_ns']==(destination/'reads.gz').stat().st_mtime_ns
+
+
+def test_lan_disconnect_before_container_start_is_retryable():
+    import errno
+    from scripts.wgs_venter_stream import transient_stream_failure,transport_failure
+    assert transient_stream_failure({},OSError(errno.EHOSTUNREACH,'No route to host'))
+    assert transient_stream_failure({},subprocess.CalledProcessError(255,['ssh']))
+    assert not transport_failure(ValueError('Paired stream failed full original publisher MD5'))
+    assert not transient_stream_failure({'exit_code':1},ValueError('Mate identity mismatch'))
+    assert not transport_failure(OSError(errno.ENOSPC,'No space left'))
+
+
+def test_paused_machine_cannot_accept_venter_work(monkeypatch):
+    from scripts import wgs_venter_stream as stream
+    class Client:
+        def __init__(self,host):pass
+        def call(self,op):assert op=='worker.policy';return {'accepting_jobs':False}
+        def close(self):pass
+    monkeypatch.setattr(stream,'AgentClient',Client)
+    assert not stream.accepting_work({'host':'audio.local'})

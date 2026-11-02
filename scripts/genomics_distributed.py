@@ -22,7 +22,7 @@ import uuid
 from scripts.genomics import private_run,write_json
 from scripts.genomics_compute import compute,MAX_PAYLOAD
 
-class CapacityWait(RuntimeError):pass
+from scripts.swarm_runtime import CapacityWait, shell_command, eligible
 
 STOP=threading.Event()
 GROUP='genomics-'+uuid.uuid4().hex[:16]
@@ -31,61 +31,16 @@ ROOT=Path(__file__).resolve().parents[1]
 WORKER=(ROOT/'scripts/genomics_compute.py').read_text()
 
 
-def shell_command(host,command):
-    if host['local']:return command
-    return host['ssh'][:-1]+['-o','ServerAliveInterval=15','-o','ServerAliveCountMax=2',host['ssh'][-1],shlex.join(command)]
-
-
 def has_capacity(metrics):
     cpu=metrics.get('percent');total=metrics.get('ram_total_bytes');used=metrics.get('ram_used_bytes')
     return (isinstance(cpu,(int,float)) and math.isfinite(cpu) and 0<=cpu<=100 and
             isinstance(total,(int,float)) and isinstance(used,(int,float)) and 0<=used<total)
 
 
-def eligible(status):
-    return bool(status.get('ready') and status.get('protocol')=='lifetech-agent.v1' and
-                status.get('worker_policy',{}).get('accepting_jobs'))
-
-
-def discover(require_python_image=True, names=None):
-    from concurrent.futures import ThreadPoolExecutor
-    sys.path.insert(0,str(ROOT/'swarm-control/server'))
-    from agent_client import AgentClient,CONFIG
-    from docker_utils.policy import inventory,ssh
-    from docker_utils.images import ImageResolver
-    config=json.loads(CONFIG.read_text());accounts={h['host']:h for h in inventory()}
-    resolver=ImageResolver([],lambda h:h['ssh'])
-    expected=resolver.fingerprint(None,'python:3.12-bookworm') if require_python_image else None
-    if require_python_image and not expected:raise RuntimeError('Approved local Python image unavailable')
-    def check(item):
-        name,address=item
-        host={'host':name,'local':name==config['name'],'lan_address':address,'agent_endpoint':'http://'+address+':8790'}
-        client=None
-        try:
-            client=AgentClient(host);status=client.call('status',timeout=15)
-            if not eligible(status):raise RuntimeError('Agent is unavailable or declining jobs')
-            if address not in status.get('addresses',[]):raise RuntimeError('Agent address attestation failed')
-            if not host['local']:
-                if name not in accounts:raise RuntimeError('No pinned SSH account')
-                # Host alias is pinned to known_hosts; never autoaccept a key or forward an agent.
-                host['ssh']=ssh(accounts[name])[:-1]+['-4','-o','HostName='+address,'-o','HostKeyAlias='+name,ssh(accounts[name])[-1]]
-            limits=subprocess.check_output(shell_command(host,['docker','info','--format','{{json .MemoryLimit}} {{json .SwapLimit}}']),text=True,stderr=subprocess.DEVNULL,timeout=30).split()
-            if limits!=['true','true']:raise RuntimeError('Docker memory/swap isolation unavailable')
-            if require_python_image:
-                image=subprocess.check_output(shell_command(host,['docker','image','inspect','python:3.12-bookworm','--format','{{.Id}}']),text=True,stderr=subprocess.DEVNULL,timeout=20).strip()
-                fingerprint=resolver.fingerprint(None if host['local'] else host,'python:3.12-bookworm')
-                if fingerprint!=expected or not image.startswith('sha256:'):raise RuntimeError('Worker does not have the approved Python image contents')
-                host['image_fingerprint']=fingerprint
-                host['image']=image
-            host['eligible']=True;host['machine']=status['machine'];host['cpus']=client.call('metrics',timeout=15).get('cpus') or 2
-            if 'shared-resources' not in status.get('capabilities',[]):raise RuntimeError('Worker needs the shared resource scheduler update')
-        except Exception as error:host.update(eligible=False,reason=type(error).__name__+': '+str(error)[:240])
-        finally:
-            if client:client.close()
-        return host
-    peers=[item for item in config['peers'].items() if names is None or item[0] in names]
-    if not peers:return []
-    with ThreadPoolExecutor(max_workers=min(8,len(peers))) as pool:return list(pool.map(check,peers))
+def discover(require_python_image=True,names=None):
+    # Application image requirement; discovery/identity/transport are node-owned.
+    from scripts.swarm_runtime import discover as discover_nodes
+    return discover_nodes(required_image='python:3.12-bookworm' if require_python_image else None,names=names)
 
 
 def batches(path,kind,limit=50000):

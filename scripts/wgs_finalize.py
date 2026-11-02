@@ -14,7 +14,8 @@ import time
 import uuid
 from scripts import genomics_distributed as distributed
 from scripts.wgs_recall import merge_commands,pipeline
-from scripts.wgs_recall_swarm import AgentClient,copy_receipt,leased_run,GROUP,distribute_reference
+from scripts.genome_runtime import AgentClient,copy_receipt,leased_run,GROUP
+from scripts.wgs_recall_swarm import distribute_reference
 from scripts.wgs_swarm_download import atomic_json,stamp,file_id
 from wgs_evidence import verified_sources
 

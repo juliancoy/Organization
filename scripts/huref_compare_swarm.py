@@ -388,7 +388,7 @@ print(json.dumps(receipts),flush=True)
             if monitor:monitor.join(timeout=3)
             if process is not None and process.poll() is None:process.kill();process.wait()
             if admitted:
-                from scripts.wgs_recall_swarm import cleanup_container
+                from scripts.swarm_runtime import cleanup_container
                 if not cleanup_container(host,name):raise RuntimeError('Container cleanup unconfirmed; lease retained')
             client.call('resource.release',{'id':lease});client.close()
 

@@ -6,6 +6,7 @@ provisional until both complete original FASTQs pass publisher MD5 and QC.
 """
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+import errno
 import json
 from pathlib import Path
 import shlex
@@ -15,7 +16,8 @@ import time
 import uuid
 from scripts import genomics_distributed as distributed
 from scripts.wgs_swarm_download import atomic_json,file_id,stamp
-from scripts.wgs_recall_swarm import AgentClient,leased_run,copy_receipt,distribute_reference,GROUP,IMAGE
+from scripts.genome_runtime import AgentClient,leased_run,copy_receipt,GROUP
+from scripts.wgs_recall_swarm import distribute_reference,IMAGE
 from scripts.wgs_finalize import install,remote_json,capacity
 from scripts.wgs_recall import alignment
 
@@ -137,9 +139,21 @@ def reusable_generation(previous, items):
     return previous.get('phase') in ('provisional','verified') and bool(previous.get('generation'))
 
 
-def transient_stream_failure(report):
+def transport_failure(error):
+    return (isinstance(error,(ConnectionError,TimeoutError)) or
+            isinstance(error,OSError) and error.errno in (errno.EHOSTUNREACH,errno.ENETUNREACH,errno.ECONNREFUSED,errno.ECONNRESET,errno.ETIMEDOUT) or
+            isinstance(error,subprocess.CalledProcessError) and error.returncode==255)
+
+
+def transient_stream_failure(report, error=None):
     # Parsing, pairing and checksum failures are never silently retried.
-    return report.get('exit_code') in (137,143,255) or bool(report.get('lease_errors'))
+    return transport_failure(error) or report.get('exit_code') in (137,143,255) or bool(report.get('lease_errors'))
+
+
+def accepting_work(host):
+    client=AgentClient(host)
+    try:return client.call('worker.policy').get('accepting_jobs') is True
+    finally:client.close()
 
 
 def main(root):
@@ -183,7 +197,7 @@ def main(root):
             except Exception as error:
                 failures+=1
                 report=json.loads((folder/'stream.json').read_text()) if (folder/'stream.json').exists() else {}
-                retry=transient_stream_failure(report) and failures<4
+                retry=transport_failure(error) or transient_stream_failure(report) and failures<4
                 atomic_json(folder/'generation.json',{'generation':generation,'phase':'provisional' if retry else 'needs_attention','error':str(error)[:1000],'work':work,'publication':False,'source_fingerprint':source_fingerprint(items),'updated':stamp(),'stream_failures':failures})
                 if retry:
                     stop.wait(min(60,5*3**(failures-1)))
@@ -209,6 +223,7 @@ def main(root):
     def mapper(host):
         from docker_utils.images import ImageResolver
         try:
+            if not accepting_work(host):return
             resolver=ImageResolver([h for h in hosts if not h['local']],lambda h:h['ssh']);resolver.ensure(IMAGE,[] if host['local'] else [host]);image=resolver.inspect(None if host['local'] else host,IMAGE)
             reference=distribute_reference(host,root/'reference')
         except (OSError,RuntimeError,subprocess.SubprocessError) as error:
@@ -219,6 +234,8 @@ def main(root):
         while True:
             if stream_errors:raise NeedsAttention(stream_errors[0])
             try:
+                if not accepting_work(host):
+                    time.sleep(10);continue
                 data=json.loads(subprocess.check_output(distributed.shell_command(owner,['python3','-c',listing,work+'/shards']),text=True,timeout=30))
             except (OSError,ValueError,subprocess.SubprocessError) as error:
                 with guard:

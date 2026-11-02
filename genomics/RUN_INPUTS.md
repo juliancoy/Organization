@@ -261,3 +261,13 @@ reference/variant/haplotype semantics and scientific report logic. In particular
 the 24 GiB cap and current output-space formula are application settings, not
 universal launcher defaults. The launcher enforces the selected resource plan;
 it does not choose a genome algorithm or infer biological certainty.
+
+
+The execution boundary is now implemented: the shared `scripts/swarm_runtime.py`
+owns discovery, job admission/lifecycle, bounded RAM scratch, verified streaming,
+and operational checkpoint publication. `scripts/genome_runtime.py` supplies
+only genome group/labels and legacy compatibility. `wgs_recall_swarm.py` keeps
+re-exports for existing callers. Genome controllers and finalization use the
+adapter; tool commands, data sizing and biological validation stay in their
+application modules. Existing enrolled agents remain usable through the SDK's
+legacy job-name negotiation, without a fleet restart for this refactor.

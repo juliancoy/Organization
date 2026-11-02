@@ -144,7 +144,15 @@ class NetworkP2P:
         deadline=time.monotonic()+1800
         while True:
             self.check_stop()
-            result=client.call('p2p.start',{'id':self.ident,'upload':upload,'image':self.report['browser_images'][host['host']][IMAGE]},timeout=120)
+            try:
+                result=client.call('p2p.start',{'id':self.ident,'upload':upload,'image':self.report['browser_images'][host['host']][IMAGE]},timeout=120)
+            except RuntimeError as error:
+                # A signed agent may still run an older lease sampler. Its
+                # read-only Docker inspection timeout means admission is unknown.
+                # Retrying this same browser ID cannot admit another reservation.
+                if not (str(error).startswith('TimeoutExpired:') and 'inspect' in str(error) and time.monotonic()<deadline):raise
+                self.log(host,'Waiting for Docker capacity inspection; browser start will retry')
+                time.sleep(1);continue
             if result.get('started'):break
             if not result.get('waiting_capacity') or time.monotonic()>deadline:raise RuntimeError('P2P browser resource admission failed')
             time.sleep(.5)

@@ -26,6 +26,7 @@ import uuid
 from urllib.parse import urlsplit
 
 from scripts import genomics_distributed as distributed
+from scripts.swarm_runtime import atomic_json, stamp
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'swarm-control/server'))
@@ -37,7 +38,6 @@ ALLOWED_HOSTS={'ftp.sra.ebi.ac.uk','ftp.ncbi.nlm.nih.gov','sra-download.ncbi.nlm
 CHUNK_BYTES=128*1024*1024
 
 
-def stamp():return datetime.datetime.now(datetime.timezone.utc).isoformat()
 def file_id(item):return hashlib.sha256(item['url'].encode()).hexdigest()[:20]
 
 
@@ -56,11 +56,6 @@ def validate_manifest(value):
         if item['url'] in seen:raise ValueError('Duplicate manifest file')
         seen.add(item['url'])
     return files
-
-
-def atomic_json(path,value):
-    temporary=path.with_suffix(path.suffix+'.tmp')
-    temporary.write_text(json.dumps(value,indent=2));temporary.chmod(0o600);temporary.replace(path)
 
 
 PREFLIGHT=r'''import hashlib,json,os,pathlib,shutil,subprocess,sys

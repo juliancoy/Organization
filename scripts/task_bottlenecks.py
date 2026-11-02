@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 import time
 from scripts import genomics_distributed as distributed
-from scripts.wgs_recall_swarm import AgentClient
+from scripts.genome_runtime import AgentClient
 
 
 def load(path):

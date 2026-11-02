@@ -13,7 +13,7 @@ import shlex
 import shutil
 
 from scripts.wgs_swarm_download import atomic_json, stamp
-from scripts.wgs_recall_swarm import leased_run
+from scripts.genome_runtime import leased_run
 from scripts.wgs_paired_shards import sha
 from scripts.wgs_finalize import attest
 

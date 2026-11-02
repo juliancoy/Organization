@@ -1,6 +1,7 @@
 import subprocess
 import pytest
 from scripts.wgs_single_copy_download import failure_exit_code
+from scripts import swarm_runtime
 from scripts.genomics_distributed import CapacityWait
 
 @pytest.mark.parametrize('error',[TimeoutError(),ConnectionError(),subprocess.TimeoutExpired('ssh',20),CapacityWait('busy'),RuntimeError('Download lease renewal failed')])
@@ -29,7 +30,7 @@ def test_resumed_lan_copy_requires_full_sha256(tmp_path,monkeypatch,corrupt_pref
         def __init__(self,host):pass
         def call(self,*args,**kwargs):return {'machine':'source-machine'}
         def close(self):pass
-    monkeypatch.setattr(swarm,'AgentClient',Client)
+    monkeypatch.setattr(swarm_runtime,'AgentClient',Client)
     data=b'verified public reads'*1000;source_file=tmp_path/'source.gz';source_file.write_bytes(data)
     digest=hashlib.sha256(data).hexdigest()
     source={'host':'source','local':True,'machine':'source-machine'}
@@ -55,7 +56,7 @@ def test_incomplete_lan_transfer_retains_prefix_and_resumes_without_wall_timeout
         def __init__(self,host):pass
         def call(self,*args,**kwargs):return {'machine':'source-machine'}
         def close(self):pass
-    monkeypatch.setattr(swarm,'AgentClient',Client)
+    monkeypatch.setattr(swarm_runtime,'AgentClient',Client)
     data=b'verified public reads'*1000;source_file=tmp_path/'source.gz';source_file.write_bytes(data[:123])
     digest=hashlib.sha256(data).hexdigest()
     source={'host':'source','local':True,'machine':'source-machine'}

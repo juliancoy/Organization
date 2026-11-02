@@ -21,7 +21,7 @@ import time
 
 from scripts import genomics_distributed as distributed
 from scripts.wgs_swarm_download import atomic_json, stamp, PREFLIGHT
-from scripts.wgs_recall_swarm import leased_run, copy_receipt, AgentClient, GROUP
+from scripts.genome_runtime import leased_run, copy_receipt, AgentClient, GROUP
 from scripts.wgs_finalize import attest, install, remote_json
 from scripts.wgs_paired_shards import record, pair_name, sha
 from docker_utils.images import ImageResolver
