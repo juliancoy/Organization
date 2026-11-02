@@ -116,3 +116,23 @@ def test_docker_inspection_timeout_keeps_reservation_queued(tmp_path,monkeypatch
         monkeypatch.setattr(module,'docker_workers',lambda:[])
         assert lease.try_acquire() is True
     finally:lease.close()
+
+
+def test_rpc_authentication_does_not_take_job_lock_and_still_rejects_replay(tmp_path,monkeypatch):
+    import asyncio,time,secrets
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from unittest.mock import Mock
+    class JobLock:
+        def __enter__(self):raise AssertionError('RPC authentication blocked on job lock')
+        def __exit__(self,*args):pass
+    a=agent(tmp_path);a.lock=JobLock();a.nonce_lock=threading.Lock();a.nonces={}
+    key=secrets.token_bytes(32)
+    a.config.write_text(json.dumps({'name':'worker','master':'worker','peers':{'controller':'10.0.0.1'},'key':key.hex()}))
+    a.telemetry=Mock();a.telemetry.accept.return_value={'accepted':True};a.telemetry_policy=lambda:{}
+    monkeypatch.setattr(module,'verify_controller',lambda *_:None)
+    value={'to':'worker','from':'controller','time':time.time(),'nonce':'a'*32,'op':'metrics.publish','args':{}}
+    cipher=AESGCM(key);nonce=secrets.token_bytes(12)
+    raw=nonce+cipher.encrypt(nonce,json.dumps(value).encode(),module.VERSION.encode())
+    reply=asyncio.run(a.process(raw));decoded=json.loads(cipher.decrypt(reply[:12],reply[12:],module.VERSION.encode()))
+    assert decoded['ok'] and decoded['result']['accepted']
+    with pytest.raises(ValueError,match='authentication rejected'):asyncio.run(a.process(raw))

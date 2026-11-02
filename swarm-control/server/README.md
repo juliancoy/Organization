@@ -859,6 +859,9 @@ scratch and no-swap containers, operational receipts, cleanup, verified file
 streaming, and atomic checkpoint publication. It imports no genome applications.
 The existing node image includes it through its scripts package; no second daemon
 or new arbitrary-command HTTP endpoint is introduced.
+Verified transfers check the destination cache before opening the source stream.
+A matching size and SHA256 skip retransmission; missing or corrupt copies still
+use the verified resumable stream. Cache validation remains content based.
 
 `scripts/genome_runtime.py` is a small application adapter selecting the genome
 group and labels. `wgs_recall_swarm.py` re-exports its old names for compatibility;

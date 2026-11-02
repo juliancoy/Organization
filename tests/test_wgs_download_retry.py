@@ -65,7 +65,7 @@ def test_incomplete_lan_transfer_retains_prefix_and_resumes_without_wall_timeout
     original_popen=subprocess.Popen;waits=[]
     def popen(*args,**kwargs):
         p=original_popen(*args,**kwargs)
-        if kwargs.get('stdout')==subprocess.DEVNULL and kwargs.get('stdin') is not None:
+        if kwargs.get('stdout')==subprocess.DEVNULL and kwargs.get('stdin') not in (None,subprocess.DEVNULL):
             communicate=p.communicate
             def wait(*a,**kw):
                 waits.append(kw);return communicate(*a,**kw)

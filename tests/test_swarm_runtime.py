@@ -29,6 +29,26 @@ class TransferTests(unittest.TestCase):
             self.assertEqual(Path(result['path']).read_bytes(),b'expected!')
             self.assertEqual(result['original_host'],'source')
 
+    def test_cached_copy_never_opens_source_stream_and_corruption_is_repaired(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source=Path(folder)/'synthetic.bin';source.write_bytes(b'expected!')
+            first={'host':'source','local':True,'machine':'id'}
+            second={'host':'target','local':True,'cache':str(Path(folder)/'cache')}
+            receipt={'host':'source','path':str(source),'sha256':hashlib.sha256(b'expected!').hexdigest(),'bytes':9}
+            with patch('scripts.swarm_runtime.AgentClient') as client:
+                client.return_value.call.return_value={'machine':'id'}
+                result=copy_receipt(first,second,receipt)
+                import subprocess
+                real_popen=subprocess.Popen
+                def probe_only(args, **kwargs):
+                    if args[-1]!='probe':raise AssertionError('Cache hit opened source stream')
+                    return real_popen(args, **kwargs)
+                with patch('scripts.swarm_runtime.subprocess.Popen',side_effect=probe_only):
+                    self.assertEqual(copy_receipt(first,second,receipt),result)
+                Path(result['path']).write_bytes(b'corrupted')
+                copy_receipt(first,second,receipt)
+                self.assertEqual(Path(result['path']).read_bytes(),b'expected!')
+
 class CleanupTests(unittest.TestCase):
     def test_dead_ssh_still_removes_container_before_releasing_lease(self):
         from functools import partial

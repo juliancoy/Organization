@@ -241,3 +241,11 @@
 !/scripts/swarm_runtime.py
 !/scripts/genome_runtime.py
 !/tests/test_swarm_runtime.py
+
+!tests/test_worker_event_journal.py
+
+# Required by immutable input-runtime packages in clean worker checkouts.
+!/scripts/__init__.py
+
+# Publish the RPC authentication and worker-policy regression fixtures.
+!/tests/test_swarm_jobs.py

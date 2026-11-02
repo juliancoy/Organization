@@ -241,6 +241,8 @@ if path.exists() and path.stat().st_size==size:
  with path.open('rb') as s:
   for block in iter(lambda:s.read(8388608),b''):h.update(block)
  if h.hexdigest()==expected:publish('cached',size,size,force=True);sys.exit(0)
+# Cache probe must finish before the source stream is opened.
+if len(sys.argv)>6 and sys.argv[6]=='probe':sys.exit(42)
 partial=path.with_suffix(path.suffix+'.partial');h=hashlib.sha256();n=0;offset=int(sys.argv[4])
 if offset:
  if not partial.exists() or partial.stat().st_size!=offset:raise RuntimeError('Partial transfer changed before resume')
@@ -268,12 +270,19 @@ if progress is not None:
   for old in sorted(progress.parent.glob('*.json'),key=lambda p:p.stat().st_mtime)[:-512]:old.unlink(missing_ok=True)
  except OSError:pass
 """
+    metadata=json.dumps({'id':uuid.uuid4().hex,'task_id':receipt.get('task_id') if isinstance(receipt.get('task_id'),str) and re.fullmatch(r'[A-Za-z0-9_-]{1,100}',receipt['task_id']) else None,'source':source['host'],'destination':destination['host']})
+    writer_args=['python3','-c',writer,target,str(receipt['bytes']),receipt['sha256'],str(offset),metadata]
+    cached=subprocess.run(shell_command(destination,writer_args+['probe']),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+    if cached.returncode==0:
+        return {**receipt,'host':destination['host'],'path':target,'original_host':source['host']}
+    if cached.returncode!=42:
+        raise RuntimeError('LAN cache verification failed: '+cached.stderr.decode(errors='replace')[-300:])
     reader="import shutil,sys;s=open(sys.argv[1],'rb');s.seek(int(sys.argv[2]));shutil.copyfileobj(s,sys.stdout.buffer,8388608)"
     source_command=['python3','-c',reader,receipt['path'],str(offset)] if offset else ['cat','--',receipt['path']]
     producer=subprocess.Popen(shell_command(source,source_command),stdout=subprocess.PIPE,stderr=subprocess.PIPE)
     consumer=None
     try:
-        consumer=subprocess.Popen(shell_command(destination,['python3','-c',writer,target,str(receipt['bytes']),receipt['sha256'],str(offset),json.dumps({'id':uuid.uuid4().hex,'task_id':receipt.get('task_id') if isinstance(receipt.get('task_id'),str) and re.fullmatch(r'[A-Za-z0-9_-]{1,100}',receipt['task_id']) else None,'source':source['host'],'destination':destination['host']})]),stdin=producer.stdout,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+        consumer=subprocess.Popen(shell_command(destination,writer_args),stdin=producer.stdout,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
         producer.stdout.close()
         # Large verified files can take hours on a healthy LAN. SSH keepalives
         # detect broken transports; total elapsed time is not a transfer failure.
