@@ -79,7 +79,7 @@ class Browser:
             '--headless=new','--host-resolver-rules=MAP localhost 127.0.0.2','--no-sandbox','--disable-dev-shm-usage','--disable-features=WebRtcHideLocalIpsWithMdns',
             '--force-webrtc-ip-handling-policy=default_public_and_private_interfaces']}}}})
         self.session=value['sessionId'];self.version=value['capabilities']['browserVersion']
-        self.command('/timeouts',{'script':120000,'pageLoad':45000})
+        self.command('/timeouts',{'script':120000,'pageLoad':120000})
         self.command('/url',{'url':'http://localhost:8789/'})
     def call(self,path,data=None):
         if self.transport:
@@ -91,7 +91,8 @@ class Browser:
                 with urllib.request.urlopen(request,timeout=150) as response:result=json.load(response)
             except urllib.error.HTTPError as error:result=json.load(error)
         value=result.get('value')
-        if isinstance(value,dict) and value.get('error'):raise RuntimeError('WebDriver '+str(value['error']))
+        if isinstance(value,dict) and value.get('error'):
+            raise RuntimeError('WebDriver '+str(value['error'])+' during '+path+': '+str(value.get('message',''))[:400])
         return value
     def command(self,path,data):return self.call('/session/'+self.session+path,data)
     def js(self,body,*args):
