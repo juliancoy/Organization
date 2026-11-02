@@ -65,3 +65,21 @@ class ImageStreamingTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+
+def test_remote_image_timeout_reconnects_and_closes_connections(monkeypatch):
+    import agent_client
+    import distributed_images
+    calls=[];closed=[]
+    class Client:
+        def __init__(self,host):self.number=len(calls)
+        def call(self,*args,**kwargs):
+            calls.append(args)
+            if len(calls)==1:raise TimeoutError('slow Docker daemon')
+            return {'id':'sha256:verified'}
+        def close(self):closed.append(self.number)
+    monkeypatch.setattr(agent_client,'AgentClient',Client)
+    monkeypatch.setattr(__import__('time'),'sleep',lambda _:None)
+    service=ImageDistributor([],Mock(),lambda:False,Mock())
+    assert service.inspect({'host':'peer','agent_endpoint':'http://peer:8790'},'image')=='sha256:verified'
+    assert len(calls)==2 and closed==[0,1]
