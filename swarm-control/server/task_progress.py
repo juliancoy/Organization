@@ -151,6 +151,7 @@ def snapshot():
     from task_registry import registry_snapshot
     registered, planned, labels, registry_errors = registry_snapshot()
     tasks=current_tasks(tasks,registered)
+    registered=current_tasks(registered,registered)
     from run_manager_projection import attach_delegated_runs
     tasks,registered=attach_delegated_runs(tasks,registered,aggregate)
     for task in tasks:

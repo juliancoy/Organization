@@ -28,20 +28,34 @@ def sha256_stream(stream):
     return digest.hexdigest()
 
 
-def persist_job_event(root, ident, job, event):
-    """Commit worker events before publishing them, independent of the RAM buffer."""
-    import sqlite3
-    path=Path(root)/'test-events.sqlite3'
-    db=sqlite3.connect(path,timeout=30)
+class JobEventWriter:
+    """One durable SQLite connection per worker, without per-line checkpoints."""
+    def __init__(self, root):
+        import sqlite3
+        self.path=Path(root)/'test-events.sqlite3'
+        self.db=sqlite3.connect(self.path,timeout=30)
+        self.db.execute('PRAGMA journal_mode=WAL');self.db.execute('PRAGMA synchronous=FULL')
+        self.db.execute('CREATE TABLE IF NOT EXISTS events(job TEXT NOT NULL, sequence INTEGER NOT NULL, payload TEXT NOT NULL, recorded_at REAL NOT NULL, PRIMARY KEY(job,sequence))')
+        self.db.commit();self.path.chmod(0o600)
+
+    def append(self,ident,sequence,event):
+        with self.db:
+            self.db.execute('INSERT INTO events VALUES(?,?,?,?)',(ident,sequence,json.dumps(event,separators=(',',':')),time.time()))
+
+    def close(self):self.db.close()
+
+
+def persist_job_event(root, ident, job, event, writer=None, publish=True):
+    """Commit before publication; a worker may reuse its durable journal."""
+    own=writer is None;writer=writer or JobEventWriter(root)
     try:
-        db.execute('PRAGMA journal_mode=WAL');db.execute('PRAGMA synchronous=FULL')
-        with db:
-            db.execute('CREATE TABLE IF NOT EXISTS events(job TEXT NOT NULL, sequence INTEGER NOT NULL, payload TEXT NOT NULL, recorded_at REAL NOT NULL, PRIMARY KEY(job,sequence))')
-            sequence=job['sequence']+1
-            db.execute('INSERT INTO events VALUES(?,?,?,?)',(ident,sequence,json.dumps(event,separators=(',',':')),time.time()))
-        path.chmod(0o600)
-    finally:db.close()
-    job['sequence']=sequence;job['events'].append((sequence,event))
+        sequence=job['sequence']+1
+        writer.append(ident,sequence,event)
+        if publish:
+            job['sequence']=sequence;job['events'].append((sequence,event))
+        return sequence
+    finally:
+        if own:writer.close()
 
 
 def persisted_job_events(root, ident, cursor):
@@ -1789,14 +1803,19 @@ class Agent:
                 if process.poll() is None:os.killpg(process.pid,signal.SIGTERM)
             timer=threading.Timer(7200,expire);timer.start()
             try:
-                for line in process.stdout:
-                    if len(line)>16000:continue
-                    try:event=json.loads(line)
-                    except ValueError:event={'kind':'log','line':line[:2000]}
-                    with self.lock:
-                        if event.get('kind')=='prepared':job['preparation']='ready'
-                        persist_job_event(self.root,ident,job,event);self.changed.notify_all()
-                code=process.wait(timeout=30)
+                with contextlib.closing(JobEventWriter(self.root)) as journal:
+                    for line in process.stdout:
+                        if len(line)>16000:continue
+                        try:event=json.loads(line)
+                        except ValueError:event={'kind':'log','line':line[:2000]}
+                        # Disk I/O must never hold the agent's global status lock.
+                        # This worker is the only sequence writer for this job.
+                        sequence=persist_job_event(self.root,ident,job,event,writer=journal,publish=False)
+                        with self.lock:
+                            if event.get('kind')=='prepared':job['preparation']='ready'
+                            job['sequence']=sequence;job['events'].append((sequence,event))
+                            self.changed.notify_all()
+                    code=process.wait(timeout=30)
             finally:timer.cancel()
             job.update(status='stopped' if (folder/'STOP').exists() else 'completed' if code==0 else 'failed',exit_code=code)
         except InterruptedError as error:job.update(status='stopped',error=str(error)[:800])
