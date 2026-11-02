@@ -5,7 +5,9 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=10m CMD python -c "from p
 
 # The local monitor, headless collectors and map backend/UI are node components.
 COPY scripts /opt/swarm-node/scripts
+COPY docker_utils /opt/swarm-node/docker_utils
 COPY ramtop /opt/swarm-node/ramtop
 COPY swarm-control/server /opt/swarm-node/swarm-control/server
 RUN pip install --no-cache-dir /opt/swarm-node/ramtop && chmod +x /opt/swarm-node/scripts/swarm_node.py && ln -s /opt/swarm-node/scripts/swarm_node.py /usr/local/bin/swarm-node
 ENV SWARM_WORKSPACE=/opt/swarm-node
+ENV PYTHONPATH=/opt/swarm-node

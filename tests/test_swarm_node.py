@@ -26,3 +26,21 @@ def test_swarm_node_update_uses_standard_deployer(monkeypatch):
 
 def test_swarm_node_enrollment_requires_explicit_target():
     with pytest.raises(SystemExit):main(['enroll'])
+
+
+def test_node_image_contains_shared_sdk_and_discovery_dependencies(monkeypatch):
+    from pathlib import Path
+    from scripts.swarm_node import build_node_image
+    import docker_utils
+    checked=[]
+    def build(image,folder):
+        root=Path(folder)
+        for name in ('scripts/swarm_runtime.py','scripts/genome_runtime.py','docker_utils/policy.py','docker_utils/images.py','swarm-control/server/agent_client.py'):
+            assert (root/name).is_file(),name
+        dockerfile=(root/'Dockerfile').read_text()
+        assert 'COPY docker_utils /opt/swarm-node/docker_utils' in dockerfile
+        assert 'ENV PYTHONPATH=/opt/swarm-node' in dockerfile
+        checked.append(image)
+    monkeypatch.setattr(docker_utils,'build_image',build)
+    assert build_node_image('swarm-node:test')=='swarm-node:test'
+    assert checked==['swarm-node:test']

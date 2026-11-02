@@ -25,7 +25,7 @@ def build_node_image(image='organization-swarm-node:1'):
         destination=Path(folder)
         shutil.copyfile(ROOT/'Dockerfile.swarm-node',destination/'Dockerfile')
         ignored=shutil.ignore_patterns('__pycache__','*.egg-info','.runtime','.git','node_modules','tests','*.pyc')
-        for relative in ('scripts','ramtop','swarm-control/server'):
+        for relative in ('scripts','ramtop','swarm-control/server','docker_utils'):
             shutil.copytree(ROOT/relative,destination/relative,ignore=ignored)
         build_image(image,folder)
     return image
