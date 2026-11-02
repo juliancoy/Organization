@@ -67,16 +67,28 @@ class ImageDistributor(ImageResolver):
 
     def inspect(self,host,reference):
         if host and host.get('agent_endpoint'):
-            from agent_client import AgentClient
-            value=AgentClient(host).call('image.inspect',{'image':reference})
+            value=self.remote_image(host,reference)
             return value['id'] if value else None
         return super().inspect(host,reference)
+
+    def remote_image(self,host,reference):
+        from agent_client import AgentClient
+        import time
+        for attempt in range(3):
+            if self.cancelled():raise InterruptedError('Image verification stopped')
+            client=AgentClient(host)
+            try:return client.call('image.inspect',{'image':reference})
+            except (OSError,RuntimeError) as error:
+                transient=isinstance(error,(TimeoutError,ConnectionError)) or str(error).startswith('TimeoutExpired:')
+                if not transient or attempt==2:raise
+                self.notify(reference,'waiting_for_agent',None,host['host'])
+                time.sleep(1+attempt)
+            finally:client.close()
 
     def compatible(self,host,reference):
         if host and host.get('agent_endpoint'):
             import json,subprocess
-            from agent_client import AgentClient
-            value=AgentClient(host).call('image.inspect',{'image':reference})
+            value=self.remote_image(host,reference)
             if not value:return False
             local=json.loads(subprocess.check_output(['docker','image','inspect',reference],text=True,timeout=25))[0]
             return (local['Os'],local['Architecture'])==(value['os'],value['architecture'])
@@ -84,8 +96,7 @@ class ImageDistributor(ImageResolver):
 
     def fingerprint(self,host,reference):
         if host and host.get('agent_endpoint'):
-            from agent_client import AgentClient
-            value=AgentClient(host).call('image.inspect',{'image':reference})
+            value=self.remote_image(host,reference)
             return value['fingerprint'] if value else None
         return super().fingerprint(host,reference)
 

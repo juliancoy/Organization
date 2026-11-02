@@ -129,7 +129,16 @@ class NetworkP2P:
         return subprocess.check_output(['git','-C',str(ROOT),'show',commit+':'+name],timeout=30)
     def attest(self,host):
         from agent_client import AgentClient
-        value=AgentClient(host).call('status')
+        for attempt in range(3):
+            self.check_stop();client=AgentClient(host)
+            try:
+                value=client.call('status');break
+            except (OSError,RuntimeError) as error:
+                transient=isinstance(error,(TimeoutError,ConnectionError)) or str(error).startswith('TimeoutExpired:')
+                if not transient or attempt==2:raise
+                self.log(host,'Waiting for authenticated agent status; retrying')
+                time.sleep(1+attempt)
+            finally:client.close()
         if not value['addresses']:raise RuntimeError('No physical network addresses on '+host['host'])
         value['clock_skew_seconds']=round(value['time']-time.time(),3)
         if abs(value['clock_skew_seconds'])>60:raise RuntimeError('Agent clock differs by more than 60 seconds')

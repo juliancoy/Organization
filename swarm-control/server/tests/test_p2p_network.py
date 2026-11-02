@@ -94,3 +94,19 @@ def test_browser_admission_retries_authenticated_docker_inspection_timeout(monke
     network=NetworkP2P([], 'test-run');network.report['browser_images']={'peer':{p2p_network.IMAGE:'sha256:pinned'}}
     network.prepare({'host':'peer'},tmp_path/'fixture.tgz')
     assert len(starts)==2 and starts[0]==starts[1]
+
+
+def test_status_attestation_retries_timeout_without_using_stale_status(monkeypatch):
+    import agent_client,p2p_network,time
+    calls=[];closed=[]
+    class Client:
+        def __init__(self,host):pass
+        def call(self,op):
+            calls.append(op)
+            if len(calls)==1:raise TimeoutError('busy')
+            return {'addresses':['10.42.0.2'],'time':time.time(),'machine':'verified-machine'}
+        def close(self):closed.append(True)
+    monkeypatch.setattr(agent_client,'AgentClient',Client)
+    monkeypatch.setattr(p2p_network.time,'sleep',lambda _:None)
+    value=NetworkP2P([],'test-run').attest({'host':'peer'})
+    assert value['machine']=='verified-machine' and len(calls)==2 and len(closed)==2
