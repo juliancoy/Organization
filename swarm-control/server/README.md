@@ -883,3 +883,9 @@ File execution also respects CPU affinity and caps each enrolled worker at four
 test CPU slots. This bounds Docker startup/inspection pressure alongside owner
 workloads; preparation and P2P reservations still reduce the available slots, and
 every selected test remains required.
+
+Worker events remain durable and idempotent. Raw events commit in one transaction
+per received batch, outside the coordinator control lock, before being applied to
+its materialized state. The full run checkpoints once per batch instead of
+independently checkpointing multiple state changes within that batch. Terminal
+batches are drained and saved before completion.

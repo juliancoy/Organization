@@ -41,9 +41,10 @@ class DispatchLifecycleTests(unittest.TestCase):
                  'selection':{'paths':[],'suites':['monitor']},
                  'repositories':{name:{'url':'url','commit':'commit'} for name in ('.','OrgPortal','PIdP')}}
             service=SimpleNamespace(run=run,root=folder,folder=folder,lock=threading.RLock(),save=Mock())
-            def update(worker,event):
+            def update(worker,event,**kwargs):
                 if event.get('suite') in worker['jobs']:worker['jobs'][event['suite']].update(status=event['status'])
             service.update=update
+            service.update_events=lambda worker,events:[update(worker,event) for event in events]
             images=Mock(host_images={'worker':{PYTHON:'image'}},images={PYTHON:'image'})
             spec={**SUITES['monitor'],'base':'monitor','cpus':1,'memory_mb':512}
             with patch.dict(SUITES,{task:spec}), patch('granular_dispatch.catalog',return_value=[task]), \

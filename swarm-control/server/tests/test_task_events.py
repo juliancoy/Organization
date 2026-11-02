@@ -61,3 +61,11 @@ class EventStoreTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.store.ingest_worker('outbox','peer',[(3,'j',2,'{}',11)])
         self.assertEqual(self.store.cursor('outbox'),1)
+
+    def test_batch_replay_matches_individual_worker_event_identity(self):
+        values=[{'line':str(i),'_worker_sequence':i,'_worker_job':'job'} for i in range(1,6)]
+        self.store.append('r','peer','log',values[0])
+        rows=[('r','peer','log',v,None) for v in values]
+        self.store.append_batch(rows);self.store.append_batch(rows)
+        self.assertEqual(self.store.history('r')['total_events'],5)
+        self.assertEqual([e['payload']['line'] for e in self.store.history('r')['events']],['1','2','3','4','5'])

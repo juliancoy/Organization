@@ -185,11 +185,20 @@ class DistributedTests:
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(1,len(run['hosts']))) as pool:
             list(pool.map(stop_host,run['hosts']))
 
-    def update(self, host, event):
+    def update_events(self, host, events):
+        """Durable batch first; never hold the control lock during raw log fsync."""
+        if not events:return
+        from task_events import EventStore
+        EventStore((self.folder.parent if self.folder.name=='distributed' else self.folder)/'compute-events.sqlite3').append_batch(
+            [(self.run['id'],host['host'],event.get('kind','event'),event,None) for event in events])
+        for event in events:self.update(host,event,persist=False,record=False)
+
+    def update(self, host, event, *, persist=True, record=True):
         with self.lock:
             from task_events import EventStore
-            EventStore((self.folder.parent if self.folder.name=='distributed' else self.folder)/'compute-events.sqlite3').append(
-                self.run['id'], host['host'], event.get('kind', 'event'), event)
+            if record:
+                EventStore((self.folder.parent if self.folder.name=='distributed' else self.folder)/'compute-events.sqlite3').append(
+                    self.run['id'], host['host'], event.get('kind', 'event'), event)
             kind = event.get('kind')
             if kind == 'host':
                 host.update(observed_hostname=event.get('hostname'), cpus=event.get('cpus'), python=event.get('python'))
@@ -244,7 +253,7 @@ class DistributedTests:
                     job['logs'] = job['logs'][-80:]
             self.run['updated'] = now()
             if kind not in ('log', 'artifact_chunk') or time.monotonic() - self.last_save > 1:
-                self.save()
+                if persist:self.save()
 
     def host(self, index, host, manifest, ident):
         selected=set(manifest['hosts'][index]['suites'])
@@ -267,8 +276,9 @@ class DistributedTests:
                     client.call('job.stop',{'id':ident},timeout=40)
                 result=client.call('job.poll',{'id':ident,'cursor':cursor})
                 if result.get('events_lost'):raise RuntimeError('Agent event history has a gap; result cannot be verified')
-                for item in result['events']:
-                    self.update(host, {**item['event'], '_worker_sequence':item['sequence'], '_worker_job':ident})
+                self.update_events(host,[{**item['event'], '_worker_sequence':item['sequence'], '_worker_job':ident} for item in result['events']])
+                if result['events']:
+                    with self.lock:self.save()
                 previous=cursor;cursor=result['cursor']
                 if result['status'] not in ('running','starting') and cursor==previous:
                     jobs=[j for suite,j in host['jobs'].items() if suite in selected and not SUITES[suite].get('coordinated')]

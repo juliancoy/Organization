@@ -116,11 +116,10 @@ def execute(service, hosts, images):
                 changed = False
                 if result.get('events_lost'):
                     raise RuntimeError('Worker event history has a gap')
-                for item in result['events']:
-                    event = {**item['event'], '_worker_sequence':item['sequence'], '_worker_job':ident}
+                events = [{**item['event'], '_worker_sequence':item['sequence'], '_worker_job':ident} for item in result['events']]
+                service.update_events(host,events)
+                for event in events:
                     if event.get('kind') == 'capacity':
-                        from task_events import EventStore
-                        EventStore((Path(service.folder).parent if Path(service.folder).name=='distributed' else Path(service.folder))/'compute-events.sqlite3').append(run['id'], host['host'], 'capacity', event)
                         with service.lock:
                             host['capacity'] = {k: int(event[k]) for k in ('cpus', 'memory_mb')}
                             ready = True
@@ -129,8 +128,7 @@ def execute(service, hosts, images):
                         if event.get('kind')=='dependencies':
                             if event.get('status') in ('ready','failed'):ready_bases.add(event['base'])
                             if event.get('status')=='complete':preparing=False
-                            changed=True
-                        service.update(host, event)
+                        changed=True
                     if event.get('kind') == 'suite' and event.get('status') in ('passed', 'failed', 'timed_out'):
                         active.discard(event['suite'])
                 previous, cursor = cursor, result['cursor']

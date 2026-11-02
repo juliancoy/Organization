@@ -30,6 +30,24 @@ class DistributedTestsTests(unittest.TestCase):
                 client.return_value.call.assert_called_once_with('job.stop',{'id':service.run['id']},timeout=40)
                 self.assertTrue(service.run['hosts'][0]['stop_acknowledged'])
 
+    def test_received_batch_is_journaled_before_one_materialized_checkpoint(self):
+        from task_events import EventStore
+        with tempfile.TemporaryDirectory() as folder:
+            service=DistributedTests(state=folder)
+            host={'host':'worker','jobs':{'check':{'status':'running','logs':[]}}}
+            service.run={'id':'batch-run','hosts':[host]};service.last_save=0
+            events=[{'kind':'log','suite':'check','line':'ready','_worker_sequence':1,'_worker_job':'job'},
+                    {'kind':'suite','suite':'check','status':'passed','_worker_sequence':2,'_worker_job':'job'}]
+            with patch.object(service,'save') as checkpoint:
+                service.update_events(host,events)
+                checkpoint.assert_not_called()
+            self.assertEqual(host['jobs']['check']['status'],'passed')
+            self.assertEqual(host['jobs']['check']['logs'],['ready'])
+            store=EventStore(Path(folder)/'compute-events.sqlite3')
+            self.assertEqual(store.history('batch-run')['total_events'],2)
+            service.save()
+            self.assertEqual(store.history('batch-run')['total_events'],3)
+
     def test_inventory_uses_enrollment_and_never_falls_back_to_ssh(self):
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/'peers.json'

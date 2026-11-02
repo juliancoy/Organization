@@ -69,6 +69,8 @@ class EventStore:
     def append_batch(self, records):
         with self.connect() as db:
             for run,source,kind,value,key in records:
+                if key is None and '_worker_sequence' in value:
+                    key = ':'.join(map(str, ('worker', source, value.get('_worker_job'), value['_worker_sequence'])))
                 self._append(db,run,source,kind,value,key)
 
     def observe(self, run, category='task', source='executor'):
