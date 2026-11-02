@@ -59,3 +59,24 @@ class DispatchLifecycleTests(unittest.TestCase):
             self.assertEqual(host['jobs'][task]['status'],'passed')
             self.assertEqual(state['closes'],1)
             self.assertEqual(run['pending_tasks'],[])
+
+
+def test_transport_recovery_keeps_same_operation_and_reports_reconnection(monkeypatch):
+    import granular_dispatch as dispatch
+    calls=[];states=[];accepted=set()
+    payload={'id':'same-run','tasks':['same-task'],'close':False}
+    def operation():
+        calls.append(dict(payload));accepted.update(payload['tasks'])
+        if len(calls)==1:raise TimeoutError('lost acknowledgement')
+        return {'accepted':list(accepted)}
+    monkeypatch.setattr(dispatch.time,'sleep',lambda _:None)
+    result=dispatch.recover_transport(operation,lambda:False,dispatch.time.monotonic()+10,states.append)
+    assert result=={'accepted':['same-task']} and calls==[payload,payload]
+    assert states==[True,False] and len(accepted)==1
+
+
+def test_transport_recovery_does_not_retry_identity_or_worker_errors():
+    import granular_dispatch as dispatch
+    import pytest
+    with pytest.raises(RuntimeError,match='identity'):
+        dispatch.recover_transport(lambda:(_ for _ in ()).throw(RuntimeError('identity mismatch')),lambda:False,dispatch.time.monotonic()+10,lambda _:None)

@@ -101,7 +101,8 @@ def test_status_attestation_retries_timeout_without_using_stale_status(monkeypat
     calls=[];closed=[]
     class Client:
         def __init__(self,host):pass
-        def call(self,op):
+        def call(self,op,**kwargs):
+            assert kwargs.get('timeout')==150
             calls.append(op)
             if len(calls)==1:raise TimeoutError('busy')
             return {'addresses':['10.42.0.2'],'time':time.time(),'machine':'verified-machine'}

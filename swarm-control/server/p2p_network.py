@@ -132,7 +132,7 @@ class NetworkP2P:
         for attempt in range(3):
             self.check_stop();client=AgentClient(host)
             try:
-                value=client.call('status');break
+                value=client.call('status',timeout=150);break
             except (OSError,RuntimeError) as error:
                 transient=isinstance(error,(TimeoutError,ConnectionError)) or str(error).startswith('TimeoutExpired:')
                 if not transient or attempt==2:raise

@@ -77,7 +77,9 @@ class ImageDistributor(ImageResolver):
         for attempt in range(3):
             if self.cancelled():raise InterruptedError('Image verification stopped')
             client=AgentClient(host)
-            try:return client.call('image.inspect',{'image':reference})
+            # The launcher's Docker SDK permits 120s; the authenticated caller
+            # must allow that response rather than abandon it after 30s.
+            try:return client.call('image.inspect',{'image':reference},timeout=150)
             except (OSError,RuntimeError) as error:
                 transient=isinstance(error,(TimeoutError,ConnectionError)) or str(error).startswith('TimeoutExpired:')
                 if not transient or attempt==2:raise
