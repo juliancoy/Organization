@@ -47,7 +47,7 @@ export async function reviewCodexUi(output){
     res.end(JSON.stringify(item?{...item,model:'Codex',owner_connected:ownerConnected,messages:[{role:'user',text:'Make the remote workspace easier to scan and use on a phone.'},{role:'assistant',text:'I’ll organize the conversation list, clarify connection status and keep the instruction composer stable while updates arrive.\n\nThe active conversation will stay visible, and your draft will be preserved.'}]}:{threads,next_offset:null,machine:'Fixture workstation',connected:true}));return
    }
    if(url.pathname==='/'){res.setHeader('Content-Type','text/html');res.end('<!doctype html><html lang="en"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Codex UI review</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/codex.css"><body><main><section id="codex-context"></section></main><script type="module" src="/codex.js"></script></body></html>');return}
-   if(!['/marked-vendor.js','/message-markdown.js','/wgs-progress.js','/machine-connections.js','/task-manager.js','/task-manager.css','/tests.css','/levels.js','/levels-model.js','/resource-history.js','/cpu-report.js','/snapshot-fetch.js','/docker-downloads.js','/research.css','/research.js','/style.css','/codex.css','/codex.js','/codex-screenshots.js','/codex-voice.js','/codex-queue.js','/swarm-status.css','/swarm-status.js','/swarm-machines.js'].includes(url.pathname)){res.writeHead(404).end();return}
+   if(!['/monitor.js','/monitor-model.js','/monitor.css','/swarm-control.svg','/marked-vendor.js','/message-markdown.js','/wgs-progress.js','/machine-connections.js','/task-manager.js','/task-manager.css','/tests.css','/levels.js','/levels-model.js','/resource-history.js','/cpu-report.js','/snapshot-fetch.js','/docker-downloads.js','/research.css','/research.js','/style.css','/codex.css','/codex.js','/codex-screenshots.js','/codex-voice.js','/codex-queue.js','/swarm-status.css','/swarm-status.js','/swarm-machines.js'].includes(url.pathname)){res.writeHead(404).end();return}
    res.setHeader('Content-Type',url.pathname.endsWith('.js')?'text/javascript':'text/css');res.end(await readFile(join(view,url.pathname.slice(1))))
   }catch(error){res.writeHead(500).end(error.message)}
  })
@@ -62,16 +62,16 @@ export async function reviewCodexUi(output){
   await page.waitForFunction(()=>document.querySelector('#levels-status')?.textContent.startsWith('Updated'));
   await page.waitForFunction(()=>document.querySelector('#task-summary')?.textContent.includes('Current run: running'));
   assert.match(await page.locator('#task-summary').textContent(),/Current run: running/);
-  await page.getByRole('button',{name:'CPU',exact:true}).click();
+  await page.getByLabel('Swarm resource usage').getByRole('button',{name:'CPU',exact:true}).click();
   assert.match(await page.locator('#levels-plot path[fill="none"]').first().getAttribute('d'),/L/);
   await page.reload();
   await page.waitForFunction(()=>document.querySelector('#levels-status')?.textContent.startsWith('Updated'));
-  await page.getByRole('button',{name:'CPU',exact:true}).click();
+  await page.getByLabel('Swarm resource usage').getByRole('button',{name:'CPU',exact:true}).click();
   assert.match(await page.locator('#levels-plot path[fill="none"]').first().getAttribute('d'),/L/);
   await page.locator('#task-hosts summary').click();
   assert.match(await page.locator('#task-hosts').textContent(),/Browser checks · running/);
   for(const [name,value] of [['CPU','42.0%'],['GPU','25.0%'],['GPU memory','40.0%'],['Memory','35.0%'],['Disk','12.0%'],['Network','3.0 Mb/s']]){
-   await page.getByRole('button',{name,exact:true}).click();
+   await page.getByLabel('Swarm resource usage').getByRole('button',{name,exact:true}).click();
    assert.match(await page.locator('#levels-legend').textContent(),new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
    if(name==='Network')assert.match(await page.locator('#levels-legend').textContent(),/Receive4\.0 Mb\/s/);
    assert.equal(await page.locator('#levels-plot svg').count(),name==='Network'?2:1);
