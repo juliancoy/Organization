@@ -55,6 +55,18 @@ class AgentClient:
         self.connection_lock=threading.Lock()
 
     def call(self, op, args=None, timeout=30):
+        # Fresh authenticated requests may retry only operations without side effects.
+        attempts = 3 if op in {'status', 'worker.policy', 'image.inspect', 'registry.read'} else 1
+        for attempt in range(attempts):
+            try:
+                return self._request(op, args, timeout)
+            except (OSError, http.client.HTTPException):
+                if attempt + 1 == attempts:
+                    raise
+                self.close()
+                time.sleep(attempt + 1)
+
+    def _request(self, op, args=None, timeout=30):
         request_id=secrets.token_hex(16)
         value={'from':self.sender,'to':self.node,'time':time.time(),'nonce':request_id,'op':op,'args':args or {}}
         if op not in UNPRIVILEGED_OPS:
@@ -107,7 +119,7 @@ def wait_for_events(client,ident,cursor,stopped=lambda:False):
     for attempt in range(3):
         if stopped():raise InterruptedError('Event wait stopped')
         try:
-            return client.call('job.poll',{'id':ident,'cursor':cursor,'wait_seconds':20},timeout=25)
+            return client.call('job.poll',{'id':ident,'cursor':cursor,'wait_seconds':20},timeout=45)
         except (OSError,http.client.HTTPException):
             if attempt==2:raise
             time.sleep(attempt+1)

@@ -12,7 +12,7 @@ import time
 import unittest
 from unittest.mock import Mock,patch
 
-from agent_client import wait_for_events
+from agent_client import AgentClient, wait_for_events
 from granular_worker import Dependencies
 from snapshot_staging import snapshot, SnapshotStaging
 sys.path.insert(0,str(Path(__file__).resolve().parents[3]/'scripts'))
@@ -61,6 +61,24 @@ class LiveCoordinationTests(unittest.TestCase):
             other=agent.root/'other/source';other.parent.mkdir()
             with self.assertRaisesRegex(ValueError,'origin differs'):
                 agent.checkout(other,manifest,dict(os.environ),{'sequence':0,'events':collections.deque()})
+
+    def test_read_only_requests_reconnect_after_transport_loss(self):
+        client=AgentClient.__new__(AgentClient)
+        client._request=Mock(side_effect=[TimeoutError(), {'accepting_jobs':True}])
+        client.close=Mock()
+        with patch('agent_client.time.sleep'):
+            self.assertEqual(client.call('worker.policy'), {'accepting_jobs':True})
+        self.assertEqual(client._request.call_count,2)
+        client.close.assert_called_once()
+
+    def test_mutations_and_authentication_failures_are_not_retried(self):
+        for operation,error in [('job.feed',TimeoutError()),('worker.policy',RuntimeError('Identity mismatch'))]:
+            with self.subTest(operation=operation):
+                client=AgentClient.__new__(AgentClient)
+                client._request=Mock(side_effect=error)
+                with self.assertRaises(type(error)):
+                    client.call(operation)
+                client._request.assert_called_once()
 
     def test_resume_uses_same_cursor_and_never_retries_mutations(self):
         client=Mock()
