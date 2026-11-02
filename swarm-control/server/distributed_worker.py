@@ -350,7 +350,8 @@ def main():
            '--mount','type=bind,src='+str(work)+',dst=/work,readonly',
            target['images'][PYTHON],'python3','-c',
            "import hashlib,pathlib;print(hashlib.sha256(pathlib.Path('/work/distributed-plan.json').read_bytes()).hexdigest())"]
-    result=subprocess.run(probe,capture_output=True,text=True,timeout=45,env=env)
+    # Cold daemon startup can queue behind other admitted container work.
+    result=subprocess.run(probe,capture_output=True,text=True,timeout=180,env=env)
     if result.returncode or result.stdout.strip()!=expected:
         emit('log',phase='mount',line='Docker cannot read this host snapshot. Bind mounts must reference files on the daemon host; use a local Docker context on each agent worker.')
         raise SystemExit(125)
