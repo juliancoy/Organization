@@ -150,7 +150,7 @@ class NetworkP2P:
             time.sleep(.5)
         def transport(path,data=None,method='POST'):
             return client.call('p2p.webdriver',{'id':self.ident,'path':path,'data':data,'method':method},timeout=180)
-        until=time.monotonic()+75
+        until=time.monotonic()+180
         while time.monotonic()<until:
             self.check_stop()
             try:

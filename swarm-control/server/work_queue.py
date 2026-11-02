@@ -17,6 +17,11 @@ FILES = {
     'identity': ('PIdP', 'serverless/', ('test/*.test.mjs', 'test/*.test.ts')),
     'identity-python': ('PIdP', '', ('tests/**/test_*.py','tests/**/*_test.py')),
 }
+# These reviewed fixtures start scoped sibling containers through the enrolled host.
+HOST_DOCKER_FIXTURES = frozenset({'tests/test_docker_worker_restart.py',
+    'tests/test_huref_compare_worker.py','tests/test_huref_followup.py',
+    'tests/test_huref_projected.py','tests/test_julian_finalize.py'})
+
 CHECKS = {'org-api': ('typecheck', 'check:bundle'), 'chat': ('typecheck',),
           'web': ('build:bundle', 'typecheck'), 'identity': ('typecheck',)}
 
@@ -53,6 +58,9 @@ def catalog(root, specs, repositories=None, bases=None):
                             'name': specs[base]['name'] + ' · ' + path, 'cpus': 1,
                             'pids_limit':128 if base in ('monitor','workspace') else 256,
                             'memory_mb': 512 if base in ('monitor','map','workspace') else 1536 if base == 'identity' else 1024}
+            if base == 'workspace' and path in HOST_DOCKER_FIXTURES:
+                specs[ident]['host_fixture'] = True
+                specs[ident]['memory_mb'] = 1024
             if base == 'web':
                 specs[ident]['test']=['npm','test','--','--config','.distributed-tests/'+ident+'.mjs','--maxWorkers=1']
             tasks.append(ident)

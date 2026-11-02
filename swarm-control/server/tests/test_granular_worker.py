@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from granular_worker import Dependencies
+from granular_worker import Dependencies, capacity
 
 
 class DependencySetupTests(unittest.TestCase):
@@ -28,3 +28,13 @@ class DependencySetupTests(unittest.TestCase):
                 self.assertEqual(setup.ensure('first',spec),17)
                 self.assertEqual(setup.ensure('second',spec),17)
                 run.assert_called_once()
+
+
+class CapacityTests(unittest.TestCase):
+    def test_file_concurrency_respects_affinity_and_caps_docker_pressure(self):
+        with patch('granular_worker.Path.read_text',return_value='MemAvailable: 8388608 kB\n'):
+            with patch('granular_worker.os.sched_getaffinity',return_value={0,1}):
+                self.assertEqual(capacity()['cpus'],2)
+            with patch('granular_worker.os.sched_getaffinity',return_value=set(range(32))):
+                self.assertEqual(capacity()['cpus'],4)
+                self.assertEqual(capacity()['memory_mb'],7168)

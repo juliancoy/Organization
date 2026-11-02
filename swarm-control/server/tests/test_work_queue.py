@@ -53,6 +53,21 @@ class FileQueueTests(unittest.TestCase):
         frontend = next(specs[t] for t in tasks if specs[t].get('file') == 'src/root.test.ts')
         self.assertIn('--config', frontend['test'])
 
+    def test_only_reviewed_docker_fixtures_run_on_the_enrolled_host(self):
+        from work_queue import HOST_DOCKER_FIXTURES
+        files = [*sorted(HOST_DOCKER_FIXTURES), 'tests/test_pull_all.py']
+        specs = copy.deepcopy(SUITES)
+        with patch('work_queue.subprocess.check_output', return_value='\0'.join(files).encode()):
+            tasks = catalog('/checkout', specs, {'.':{'commit':'reviewed'}}, bases={'workspace'})
+        for task in tasks:
+            if specs[task].get('base') == 'workspace':
+                self.assertEqual(bool(specs[task].get('host_fixture')), specs[task]['file'] in HOST_DOCKER_FIXTURES)
+        from distributed_worker import _run
+        with tempfile.TemporaryDirectory() as folder:
+            with self.assertRaisesRegex(ValueError,'explicitly reviewed'):
+                _run(Path(folder),'bad','test',{'cwd':'.','base':'workspace',
+                    'file':'tests/unknown.py','host_fixture':True,'test':['false']},'run',{})
+
     def test_claim_fills_spare_memory_and_cpu_without_suite_affinity(self):
         specs = {'long': {'cpus':2,'memory_mb':3072}, 'small': {'cpus':1,'memory_mb':512},
                  'next': {'cpus':1,'memory_mb':512}}

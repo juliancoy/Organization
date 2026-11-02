@@ -31,7 +31,7 @@ try{
  await page.clock.install()
  await page.goto(`http://127.0.0.1:${server.address().port}/task-manager`)
  await expect(page.locator('#levels-status')).toContainText('Updated')
- await page.getByRole('button',{name:'Network',exact:true}).click()
+ await page.getByLabel('Swarm resource usage').getByRole('button',{name:'Network',exact:true}).click()
  await page.getByLabel('Separate send / receive').check()
  await page.clock.pauseAt(new Date(Date.now()+1000))
  const paths=await page.locator('#levels-plot path[fill="none"]').evaluateAll(paths=>paths.map(path=>path.getAttribute('d')))
@@ -76,7 +76,7 @@ try{
   await legend.evaluate(el=>el.scrollTop=0)
   await page.locator('#device-levels').screenshot({path:join(output,`network-${width}.png`)})
  }
- await page.getByRole('button',{name:'Disk',exact:true}).click()
+ await page.getByLabel('Swarm resource usage').getByRole('button',{name:'Disk',exact:true}).click()
  await expect(page.getByRole('button',{name:/worker.local · sda · read/})).toContainText('Read · 60.0 MB/s')
  await expect(page.getByRole('button',{name:/worker.local · sda · read/})).toContainText('60.0%')
  await expect(page.getByRole('button',{name:/worker.local · sda · write/})).toContainText('40.0%')

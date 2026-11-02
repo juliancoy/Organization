@@ -230,7 +230,17 @@ def _run(work, suite_id, phase, spec, run_id, env, cancel=None):
         return 0
     name = 'orgportal-test-' + run_id + '-' + suite_id
     cwd = work / spec['cwd']
-    native = spec.get('native')
+    native = spec.get('native') or (phase == 'test' and spec.get('host_fixture'))
+    if phase == 'test' and spec.get('host_fixture'):
+        from work_queue import HOST_DOCKER_FIXTURES
+        if spec.get('base') != 'workspace' or spec.get('file') not in HOST_DOCKER_FIXTURES:
+            raise ValueError('Host fixtures require an explicitly reviewed test file')
+        temporary = work / '.host-fixtures' / suite_id
+        temporary.mkdir(parents=True, exist_ok=True, mode=0o700)
+        home = temporary / 'home'
+        home.mkdir(exist_ok=True, mode=0o700)
+        env = {**env, 'HOME':str(home), 'TMPDIR':str(temporary),
+               'PYTHONPATH':str(work/'.test-deps/workspace')+os.pathsep+str(work)}
     if not native:
         cache=download_cache()
         command = ['docker', 'run', '--pull=never', '--rm', '--name', name, '--label','org.lifetech.worker=true','--label','org.lifetech.job='+name,'--label','org.lifetech.group='+run_id, '--user', env.get('ORGANIZATION_CONTAINER_USER', str(os.getuid()) + ':' + str(os.getgid())), '-e', 'HOME=/tmp', '--cpus', str(spec.get('cpus',2)), '--memory', str(spec.get('memory_mb',3072))+'m',

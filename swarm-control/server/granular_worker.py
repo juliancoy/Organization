@@ -15,7 +15,10 @@ def capacity():
         key, value = line.split(':', 1)
         memory[key] = int(value.split()[0]) // 1024
     # Leave host services room; reserve task memory before accepting work.
-    return {'cpus': max(1, os.cpu_count() or 1),
+    # Keep Docker startup/inspection responsive alongside owner workloads.
+    # Per-task leases still account for actual CPU and memory admission.
+    available_cpus = len(os.sched_getaffinity(0)) if hasattr(os,'sched_getaffinity') else os.cpu_count() or 1
+    return {'cpus': min(4, max(1, available_cpus)),
             'memory_mb': max(0, memory.get('MemAvailable', 0) - 1024)}
 
 

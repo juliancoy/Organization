@@ -861,3 +861,25 @@ algorithm and computes its resource and storage needs. Other controllers should
 use the same execution primitive rather than duplicate Docker command builders.
 Move these responsibilities incrementally with compatibility adapters and pinned
 recipes so already running jobs keep their admitted behavior.
+
+
+### Host Docker fixtures in the release gate
+
+The five explicitly listed Docker integration files in `work_queue.py` run on
+the enrolled worker host, from the same pinned checkout and with prepared Python
+dependencies. They start only their scoped synthetic sibling containers. Ordinary
+file jobs retain Docker isolation and never receive a daemon socket. Host fixtures
+retain resource admission, a private temporary HOME/TMPDIR and the worker's
+credential-free environment. This is trusted, reviewed operator test code; the
+dashboard cannot provide arbitrary commands or enable host execution for another
+file. Docker and the fixture images must be available on that enrolled host.
+
+Cold Selenium startup has a bounded three-minute readiness window; dependency
+installation and active test time remain separate. Browser resource buttons are
+selected within their named region so unrelated tab buttons cannot make a check
+ambiguous.
+
+File execution also respects CPU affinity and caps each enrolled worker at four
+test CPU slots. This bounds Docker startup/inspection pressure alongside owner
+workloads; preparation and P2P reservations still reduce the available slots, and
+every selected test remains required.
