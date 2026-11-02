@@ -3,6 +3,7 @@ from pathlib import Path
 import concurrent.futures
 import time
 import uuid
+import http.client
 
 from agent_client import AgentClient, wait_for_events
 from distributed_worker import SUITES, PYTHON
@@ -10,6 +11,22 @@ from suite_cache import SuiteCache
 from work_queue import catalog, pending, claim
 from worker_preparation import execution_capacity
 from early_p2p import EarlyP2P
+
+
+def recover_transport(operation, stopped, deadline, report):
+    """Keep accepted work and its cursor during transport loss; never restart it."""
+    reconnecting=False
+    while time.monotonic()<deadline:
+        if stopped():raise InterruptedError('Worker recovery stopped')
+        try:
+            result=operation()
+            if reconnecting:report(False)
+            return result
+        except (PermissionError,FileNotFoundError):raise
+        except (OSError,http.client.HTTPException):
+            if not reconnecting:report(True)
+            reconnecting=True;time.sleep(1)
+    raise TimeoutError('Worker session deadline exceeded during reconnection')
 
 
 def execute(service, hosts, images):
@@ -108,11 +125,19 @@ def execute(service, hosts, images):
             if run.get('stop_requested'):return
             client.call('job.start', {'id': ident, 'manifest': manifest, 'index': index}, timeout=180)
             deadline = time.monotonic() + 7300
+            def connection_state(disconnected):
+                with service.lock:
+                    host['connection_status']='reconnecting' if disconnected else 'connected'
+                    if disconnected:host['preparation']='Connection interrupted; accepted jobs continue; reconnecting to saved events'
+                    elif host.get('preparation','').startswith('Connection interrupted;'):host.pop('preparation',None)
+                    service.save()
+            def recover(operation):
+                return recover_transport(operation,lambda:bool(run.get('stop_requested')),deadline,connection_state)
             while time.monotonic() < deadline:
                 if run.get('stop_requested'):
                     client.call('job.stop', {'id': ident}, timeout=40)
                     break
-                result = wait_for_events(client,ident,cursor,lambda:bool(run.get('stop_requested')))
+                result = recover(lambda:wait_for_events(client,ident,cursor,lambda:bool(run.get('stop_requested'))))
                 changed = False
                 if result.get('events_lost'):
                     raise RuntimeError('Worker event history has a gap')
@@ -139,7 +164,7 @@ def execute(service, hosts, images):
                     break
                 if finish_unused(stop=True):return
                 outgoing = []
-                policy=client.call('worker.policy')
+                policy=recover(lambda:client.call('worker.policy'))
                 host['worker_policy']=policy
                 if not policy['accepting_jobs']:
                     closed=True
@@ -176,7 +201,9 @@ def execute(service, hosts, images):
                 if outgoing or (closed and not close_sent) or release_p2p:
                     p2p_finished=network.done.is_set()
                     try:
-                        client.call('job.feed', {'id': ident, 'tasks': outgoing, 'close': closed,'p2p_finished':p2p_finished})
+                        # Same run ID and task markers make feed acknowledgement
+                        # retries idempotent, including an acknowledgement lost in transit.
+                        recover(lambda:client.call('job.feed', {'id': ident, 'tasks': outgoing, 'close': closed,'p2p_finished':p2p_finished}))
                     except RuntimeError:
                         policy=client.call('worker.policy')
                         if policy['accepting_jobs'] or not outgoing:raise

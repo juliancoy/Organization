@@ -1413,6 +1413,12 @@ class Agent:
             folder=self.folder(args['id'])
             with self.lock:
                 job=self.jobs.get(args['id'])
+                # A lost terminal acknowledgement can arrive after the worker exits.
+                # Acknowledge only the already-persisted empty close; never add work.
+                if (job and job['status']=='completed' and args.get('close') is True and
+                        args.get('tasks',[])==[] and not (folder/'STOP').exists() and
+                        (folder/'tasks/CLOSED').is_file()):
+                    return {'accepted':[],'closed':True}
                 if not job or job['status']!='running':raise ValueError('Worker session is not running')
                 if (folder/'STOP').exists():raise ValueError('Worker session is stopping')
                 manifest=json.loads((folder/'manifest.json').read_text())

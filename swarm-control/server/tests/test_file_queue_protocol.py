@@ -32,3 +32,21 @@ class FileQueueProtocolTests(unittest.TestCase):
             (session/'STOP').touch()
             with self.assertRaises(ValueError):
                 agent.dispatch('job.feed',{'id':ident,'close':True})
+
+
+def test_lost_terminal_close_ack_can_replay_after_success_without_adding_work(tmp_path):
+    import pytest
+    ident='20261024T120000Z-1234abcd'
+    agent=Agent.__new__(Agent);agent.root=tmp_path;agent.lock=threading.RLock()
+    agent.config=tmp_path/'peers.json'
+    (tmp_path/'worker-policy.json').write_text('{"mode":"always"}')
+    agent.jobs={ident:{'status':'running'}}
+    folder=agent.folder(ident);folder.mkdir()
+    (folder/'manifest.json').write_text(json.dumps({'granular':True,'task_catalog':[]}))
+    first=agent.dispatch('job.feed',{'id':ident,'tasks':[],'close':True})
+    agent.jobs[ident]['status']='completed'
+    assert agent.dispatch('job.feed',{'id':ident,'tasks':[],'close':True})==first
+    assert [p.name for p in (folder/'tasks').iterdir()]==['CLOSED']
+    with pytest.raises(ValueError):agent.dispatch('job.feed',{'id':ident,'tasks':['monitor--new']})
+    (folder/'STOP').touch()
+    with pytest.raises(ValueError):agent.dispatch('job.feed',{'id':ident,'tasks':[],'close':True})
