@@ -92,3 +92,41 @@ def test_paused_worker_does_not_claim_more_batches(monkeypatch):
     with pytest.raises(ConnectionError,match='Owner paused'):
         align.capacity({'host':'worker.local'})
     assert calls==['worker.policy']
+
+
+def test_reference_receipt_reuses_unchanged_copy_and_rejects_modified_file(tmp_path, monkeypatch):
+    import hashlib, shutil, subprocess
+    from scripts import julian_huref_align as align
+    source=tmp_path/'source';source.mkdir()
+    data=b'verified-reference';(source/'reference.fa').write_bytes(data)
+    verified={'files':{'reference.fa':{'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()}}}
+    host={'local':False,'cache':str(tmp_path/'remote'/'cache')}
+    copies=[]
+    def copy(local,remote,f,resume):
+        copies.append(f)
+        cached=tmp_path/'cached';shutil.copyfile(f['path'],cached)
+        return {'path':str(cached)}
+    monkeypatch.setattr(align,'copy_receipt',copy)
+    monkeypatch.setattr(align,'command',lambda host,args,**kw:subprocess.run(args,check=True,**kw))
+    target=align.reference_on(host,{},tmp_path,source,verified)
+    align.reference_on(host,{},tmp_path,source,verified)
+    assert len(copies)==1
+    from pathlib import Path
+    (Path(target)/'reference.fa').write_bytes(b'corrupted')
+    align.reference_on(host,{},tmp_path,source,verified)
+    assert len(copies)==2
+    assert (Path(target)/'reference.fa').read_bytes()==data
+
+
+def test_paused_discovery_is_not_reported_as_network_reconnect():
+    import threading
+    from scripts.julian_huref_align import supervise_worker
+    stop=threading.Event();published=[]
+    def publish(value):
+        published.append(value)
+        if value['phase']=='paused':stop.set()
+    supervise_worker('audio.local',lambda h:pytest.fail('Must not run'),
+        lambda *a,**kw:[{'host':'audio.local','eligible':False,'reason':'RuntimeError: Agent is unavailable or declining jobs'}],
+        stop,publish,lambda:False)
+    assert published[-1]['phase']=='paused'
+    assert not any('retry_seconds' in v for v in published)

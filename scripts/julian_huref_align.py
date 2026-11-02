@@ -83,11 +83,15 @@ def command(host, args, **kwargs):
     return subprocess.run(distributed.shell_command(host, args), check=True, **kwargs)
 
 
+class WorkerPaused(ConnectionError):
+    pass
+
+
 def capacity(host):
     c = AgentClient(host)
     try:
         if not c.call('worker.policy').get('accepting_jobs'):
-            raise ConnectionError('Owner paused worker jobs')
+            raise WorkerPaused('Owner paused worker jobs')
         return c.call('resource.capacity', {'group': GROUP})
     finally: c.close()
 
@@ -121,10 +125,37 @@ def reference_on(host, local, root, reference, verified):
     if host['local']: return str(reference)
     target = str(Path(host['cache']).parent / 'huref2-shortread-reference')
     command(host, ['mkdir', '-p', '-m', '700', target])
+    # A receipt binds hashes to local file identities. Reconnects can reuse an
+    # unchanged verified copy without reading tens of GB from a busy disk.
+    check = """import pathlib,json,sys
+p=pathlib.Path(sys.argv[1]); expected=json.loads(sys.argv[2])
+try:
+ r=json.loads((p/'reference-receipt.json').read_text())
+ assert r['files']==expected
+ for name,identity in r['identities'].items():
+  s=(p/name).stat();assert [s.st_dev,s.st_ino,s.st_size,s.st_mtime_ns,s.st_ctime_ns]==identity
+ print('verified')
+except (OSError,ValueError,KeyError,AssertionError):print('missing')
+"""
+    if command(host, ['python3', '-c', check, target, json.dumps(verified['files'])], capture_output=True, text=True).stdout.strip() == 'verified':
+        return target
     for name, f in verified['files'].items():
         receipt = copy_receipt(local, host, {**f, 'path': str(reference / name)}, resume=True)
         code = "import pathlib,os,sys;p=pathlib.Path(sys.argv[2]);t=pathlib.Path(str(p)+'.partial');t.unlink(missing_ok=True);os.link(sys.argv[1],t);os.replace(t,p)"
         command(host, ['python3', '-c', code, receipt['path'], target + '/' + name])
+    seal = """import pathlib,json,sys,hashlib,os
+p=pathlib.Path(sys.argv[1]);files=json.loads(sys.argv[2]);identities={}
+for name,expected in files.items():
+ f=p/name;s=f.stat();h=hashlib.sha256()
+ with f.open('rb') as stream:
+  for block in iter(lambda:stream.read(8*1024**2),b''):h.update(block)
+ assert s.st_size==expected['bytes'] and h.hexdigest()==expected['sha256'],'Reference checksum mismatch'
+ after=f.stat();identity=lambda v:[v.st_dev,v.st_ino,v.st_size,v.st_mtime_ns,v.st_ctime_ns]
+ assert identity(s)==identity(after),'Reference changed during verification'
+ identities[name]=identity(after)
+t=p/'reference-receipt.partial';t.write_text(json.dumps({'files':files,'identities':identities}));t.chmod(0o600);os.replace(t,p/'reference-receipt.json')
+"""
+    command(host, ['python3', '-c', seal, target, json.dumps(verified['files'])])
     return target
 
 
@@ -143,11 +174,19 @@ def supervise_worker(name, run, discover, stop, publish, finished):
             candidates = discover(False, names={name})
             host = next((h for h in candidates if h['host'] == name and h.get('eligible')), None)
             if host is None:
+                reason = next((h.get('reason', '') for h in candidates), '')
+                if 'declining jobs' in reason or 'paused' in reason.lower():
+                    publish({'phase': 'paused', 'detail': 'Worker owner paused new compute jobs', 'updated': stamp()})
+                    stop.wait(30)
+                    continue
                 raise ConnectionError(next((h.get('reason') for h in candidates), 'Enrolled worker unavailable'))
             publish({'phase': 'preparing', 'reconnects': retries, 'updated': stamp()})
             run(host)
             if finished() or stop.is_set(): return
             raise ConnectionError('Worker exited before queued alignment completed')
+        except WorkerPaused:
+            publish({'phase': 'paused', 'detail': 'Worker owner paused new compute jobs', 'updated': stamp()})
+            stop.wait(30)
         except Exception as error:
             retries += 1
             delay = min(60, 5 * 2 ** min(retries - 1, 4))
@@ -251,6 +290,8 @@ def main(root):
                 while not stop.is_set() and not (reference / 'bwa-verified.json').exists(): stop.wait(5)
                 if stop.is_set(): return
                 host_verified = json.loads((reference / 'bwa-verified.json').read_text())
+            with guard:
+                state.setdefault('workers', {})[host['host']] = {'phase': 'transferring_reference', 'mapper': mapper, 'updated': stamp()}; save()
             ref = reference_on(host, local, root, reference, host_verified)
             while not stop.is_set():
                 with guard:
@@ -342,7 +383,12 @@ def main(root):
                     if all(f.done() for f in futures): raise RuntimeError('No alignment workers remain')
                     if outstanding >= 2 * len(hosts) or shutil.disk_usage(root).free < 4 * 1024**3:
                         time.sleep(5); continue
-                    batch = make_batch((a, b), root / 'shards', number, manifest['pairs_per_batch'])
+                    # Policy can be tuned between checkpoints without restarting workers.
+                    policy_path = root / 'execution-policy.json'
+                    policy = json.loads(policy_path.read_text()) if policy_path.exists() else {}
+                    pairs = policy.get('pairs_per_batch', manifest['pairs_per_batch'])
+                    if type(pairs) is not int or pairs <= 0: raise ValueError('Invalid batch pair budget')
+                    batch = make_batch((a, b), root / 'shards', number, pairs)
                     if batch is None: break
                     minipc = any(h['host'] == 'julian-minipc.local' and h.get('eligible') for h in hosts)
                     with guard: state['jobs'][batch['id']] = {**batch, 'phase': 'pending', 'qc_required': minipc and number % 20 == 0}; save()

@@ -88,6 +88,8 @@ def snapshot(root, service_active=True):
         elif phase=='waiting_lower_memory_bwa_index':
             worker_status='preparing' if (root/'reference/bwa-verified.json').exists() else 'waiting_dependency'
             note+=' Preparing this worker with the completed reference.' if worker_status=='preparing' else ' Queued until lower-memory reference index is ready.'
+        elif phase=='paused': worker_status='paused'; note+=' New compute jobs paused by owner.'
+        elif phase=='transferring_reference': worker_status='preparing'; note+=' Transferring and verifying this worker’s reference copy.'
         elif phase=='gpu_quality_checks': worker_status='waiting'; note+=' Assigned GPU quality checks as batches become available.'
         elif phase=='waiting_memory_or_cpus': worker_status='waiting_capacity'; note+=' Waiting for available CPU or RAM.'
         elif phase in ('unavailable', 'reconnecting'): worker_status='waiting'; note+=' Disconnected; retrying authenticated worker connection.'

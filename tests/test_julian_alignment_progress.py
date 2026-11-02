@@ -47,3 +47,13 @@ def test_dead_alignment_workers_not_hidden_by_live_gpu_worker(tmp_path):
     assert value['status']=='waiting'
     assert 'disconnected' in value['detail']
     assert 'execution_eta_seconds' not in value
+
+
+def test_owner_pause_and_reference_transfer_are_explicit(tmp_path):
+    (tmp_path/'state.json').write_text(json.dumps({'jobs':{},'workers':{
+        'audio.local':{'phase':'paused'},'mapper.local':{'phase':'transferring_reference'}}}))
+    value=snapshot(tmp_path,True)
+    workers={c.get('worker'):c for c in value['children'] if c['id'].startswith('worker-')}
+    assert workers['audio.local']['status']=='paused'
+    assert 'owner' in workers['audio.local']['detail']
+    assert 'Transferring and verifying' in workers['mapper.local']['detail']
