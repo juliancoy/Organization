@@ -84,3 +84,26 @@ test('disk read and write share one observed baseline and remain separate series
  assert.equal(rows[0].linkLabel,'Observed sustained: 100.0 MB/s');
  assert.deepEqual(deviceLevels({}, {hosts:[{host:'worker.local',disks}]},'disk',now+16000).map(row=>row.value),[null,null]);
 });
+
+test('full duplex utilization is separate per direction, not a combined ceiling',()=>{
+ const stamp=Date.now();const h={host:'node',network_interfaces:[{name:'eth0',ifindex:1,status:'live',sampled_at:stamp/1000,link_speed_mbps:1000,rx_mbps:900,tx_mbps:900,network_mbps:1800}]};
+ assert.equal(deviceLevels({}, {hosts:[h]},'send',stamp)[0].utilization,90);
+ assert.equal(deviceLevels({}, {hosts:[h]},'receive',stamp)[0].utilization,90);
+ assert.equal(deviceLevels({}, {hosts:[h]},'network',stamp)[0].utilization,null);
+ assert.equal(deviceLevels({}, {hosts:[h]},'send',stamp+16000)[0].utilization,null);
+ delete h.network_interfaces[0].link_speed_mbps;
+ assert.equal(deviceLevels({}, {hosts:[h]},'send',stamp)[0].utilization,null);
+});
+
+test('health and payload labels never imply zero from missing or stale counters',async()=>{
+ const {networkHealthLabel,taskTransferLabel,mergeNetworkMeasurements}=await import('../view/levels-model.js');
+ assert.match(networkHealthLabel({}),/unavailable/);
+ assert.match(networkHealthLabel({},false),/stale/);
+ assert.equal(networkHealthLabel({rx_errors_delta:0,tx_errors_delta:0,rx_dropped_delta:2,tx_dropped_delta:0}),'0 new errors · 2 new drops');
+ assert.match(taskTransferLabel([{status:'running',sampled_at:100,bytes_per_second:1000000}],102),/1.0 MB\/s/);
+ assert.match(taskTransferLabel([{status:'running',sampled_at:100,bytes_per_second:1000000}],120),/No task-transfer data/);
+ const cpu={hosts:[{host:'node',percent:25,network_interfaces:[]}]};
+ const merged=mergeNetworkMeasurements(cpu,{hosts:[{host:'node',percent:90,network_interfaces:[{status:'live',sampled_at:100,name:'eth0'}]}]},102);
+ assert.equal(merged.hosts[0].percent,25);assert.equal(merged.hosts[0].network_interfaces[0].name,'eth0');
+ assert.equal(mergeNetworkMeasurements(cpu,{hosts:[{host:'node',network_interfaces:[{status:'live',sampled_at:100,name:'eth0'}]}]},120).hosts[0].network_interfaces.length,0);
+});

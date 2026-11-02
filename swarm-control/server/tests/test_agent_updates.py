@@ -74,7 +74,7 @@ class LauncherUpdateTests(unittest.TestCase):
         client.call.assert_not_called()
 
     def test_unready_replacement_times_out_without_admitting_worker(self):
-        with patch.object(self.updates,'stage'),patch('agent_updates.time.monotonic',side_effect=[0,121]):
+        with patch.object(self.updates,'stage'),patch('agent_updates.time.monotonic',side_effect=[0,241]):
             with self.assertRaisesRegex(RuntimeError,'did not become ready'):
                 self.updates.ensure(self.host,Mock(),self.status)
 

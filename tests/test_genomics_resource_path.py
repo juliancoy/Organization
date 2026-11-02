@@ -14,9 +14,9 @@ class GenomicsResourcePathTests(unittest.TestCase):
     def test_annotation_memory_is_reserved_atomically_and_remains_bounded(self):
         with tempfile.TemporaryDirectory() as temporary:
             agent=agent_module.Agent.__new__(agent_module.Agent)
-            agent.root=Path(temporary);agent.lock=threading.RLock();agent.config=agent.root/'config.json';agent.busy=lambda:None
-            first={'id':'a'*32,'group':'genomics-vep','cpus':1,'memory_mb':2048,'container':'genomics-'+'b'*32}
-            second={'id':'c'*32,'group':'genomics-vep','cpus':1,'memory_mb':1024,'container':'genomics-'+'d'*32}
+            agent.root=Path(temporary);agent.lock=threading.RLock();agent.config=agent.root/'config.json';agent.busy=lambda:None;agent.reconcile_resources=lambda:[]
+            first={'id':'a'*32,'group':'genomics-vep','cpus':1,'memory_mb':2048,'container':'genomics-'+'a'*32}
+            second={'id':'c'*32,'group':'genomics-vep','cpus':1,'memory_mb':1024,'container':'genomics-'+'c'*32}
             with patch.object(agent_module.ResourceLease,'capacity',return_value={'cpus':8,'memory_mb':2560,'available_mb':2560}),patch.object(agent_module,'worker_policy',return_value={'accepting_jobs':True}):
                 try:
                     self.assertTrue(agent.dispatch('resource.acquire',first)['acquired'])
@@ -24,11 +24,11 @@ class GenomicsResourcePathTests(unittest.TestCase):
                     agent.dispatch('resource.release',{'id':first['id']})
                     self.assertTrue(agent.dispatch('resource.acquire',second)['acquired'])
                     for memory in (True,1024.0,0,-1):
-                        with self.assertRaisesRegex(ValueError,'bounded'):
+                        with self.assertRaisesRegex(ValueError,'CPU/RAM limits'):
                             agent.dispatch('resource.acquire',{**first,'memory_mb':memory})
                     with self.assertRaisesRegex(ValueError,'capacity'):
                         agent.dispatch('resource.acquire',{**first,'memory_mb':4096})
-                    self.assertNotIn(first['id'],agent.resource_leases)
+                    self.assertNotIn(first['id'],agent.pending_resources)
                     self.assertTrue(agent.dispatch('resource.acquire',{**first,'memory_mb':768})['acquired'])
                 finally:
                     for args in (first,second):agent.dispatch('resource.release',{'id':args['id']})
@@ -93,8 +93,8 @@ class GenomicsResourcePathTests(unittest.TestCase):
     def test_resource_pool_does_not_require_a_writable_container_home(self):
         with tempfile.TemporaryDirectory()as temporary:
             agent=agent_module.Agent.__new__(agent_module.Agent)
-            agent.root=Path(temporary);agent.lock=threading.RLock();agent.config=agent.root/'config.json';agent.busy=lambda:None
-            ident='a'*32;args={'id':ident,'group':'genomics-fixture','cpus':1,'memory_mb':512,'container':'genomics-'+'b'*32}
+            agent.root=Path(temporary);agent.lock=threading.RLock();agent.config=agent.root/'config.json';agent.busy=lambda:None;agent.reconcile_resources=lambda:[]
+            ident='a'*32;args={'id':ident,'group':'genomics-fixture','cpus':1,'memory_mb':512,'container':'genomics-'+'a'*32}
             environment={key:value for key,value in os.environ.items()if key!='SWARM_RESOURCE_DIR'}
             with patch.dict(os.environ,environment,clear=True),patch.object(agent_module.Path,'home',return_value=Path('/proc/unwritable-genomics-fixture')),patch.object(agent_module.ResourceLease,'capacity',return_value={'cpus':2,'memory_mb':2048,'available_mb':2048}),patch.object(agent_module,'worker_policy',return_value={'accepting_jobs':True}):
                 try:

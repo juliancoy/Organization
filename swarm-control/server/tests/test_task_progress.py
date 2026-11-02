@@ -110,6 +110,26 @@ class TaskProgressTests(unittest.TestCase):
         self.assertEqual(task['children'][1]['status'],'failed')
         self.assertEqual(task['status'],'failed')
 
+    def test_active_siblings_keep_workflow_running_without_hiding_failure(self):
+        from task_registry import task_view
+        task=task_view({'status':'failed','children':[
+            {'id':'comparison','children':[
+                {'id':'done','status':'completed'},
+                {'id':'broken','status':'failed'},
+                {'id':'busy','status':'running'}]},
+            {'id':'report','status':'queued'}]})
+        self.assertEqual(task['status'],'running')
+        self.assertEqual(task['children'][0]['status'],'running')
+        self.assertEqual(task['children'][0]['children'][1]['status'],'failed')
+        self.assertEqual(task['active_work_items'],1)
+        self.assertEqual(task['failed_work_items'],1)
+        self.assertEqual(task['progress']['completed'],1)
+        task['children'][0]['children'][2]['status']='completed'
+        terminal=task_view(task)
+        self.assertEqual(terminal['status'],'failed')
+        self.assertEqual(terminal['active_work_items'],0)
+        self.assertEqual(terminal['failed_work_items'],1)
+
     def test_stage_eta_uses_verified_timed_jobs_without_extrapolating_workflow(self):
         from task_registry import task_view
         from unittest.mock import patch

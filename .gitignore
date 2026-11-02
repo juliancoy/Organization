@@ -183,6 +183,10 @@
 !/scripts/huref_compare_swarm.py
 !/scripts/huref_followup_worker.py
 !/scripts/huref_followup_swarm.py
+!/scripts/huref_projected_swarm.py
+!/scripts/huref_projected_worker.py
+!/scripts/huref_evidence.py
+!/tests/test_huref_projected.py
 !/tests/test_huref_followup.py
 !/tests/test_huref_compare_worker.py
 !/genomics/comparison-image/
@@ -216,3 +220,19 @@
 /docs/*
 !/docs/container-agent.md
 !/tests/test_agent_container.py
+
+# Private whole-genome run tooling; individual data stays outside the repository.
+!/scripts/julian_huref_align.py
+!/scripts/julian_read_qc.py
+!/scripts/gpu_qc_service.py
+!/tests/test_julian_huref_align.py
+!/scripts/julian_alignment_progress.py
+!/tests/test_julian_alignment_progress.py
+!/scripts/task_bottlenecks.py
+!/tests/test_task_bottlenecks.py
+!/scripts/alignment_phase_timing.py
+!/tests/test_alignment_phase_timing.py
+
+# RAM-bounded, resumable whole-genome finalization.
+!/scripts/julian_finalize.py
+!/tests/test_julian_finalize.py

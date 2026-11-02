@@ -23,7 +23,7 @@ def sequence_gt(row, quality=False):
     return sorted(called)
 
 
-def normalized_rows(work,reference,records):
+def normalized_rows(work,reference,records,exclusions=None):
     """Jointly left normalize both samples, retaining complete diploid alleles."""
     refpath=work/'common.fa'
     refpath.write_bytes(b'>reference\n'+reference+b'\n')
@@ -42,7 +42,19 @@ def normalized_rows(work,reference,records):
     for line in output.read_text().splitlines():
         if line.startswith('#') or not line.strip():continue
         row=line.split('\t');called=sequence_gt(row)
-        if called is None:raise ValueError('Normalization lost explicit genotype')
+        if called is None:
+            # Left normalization can add an unknown reference anchor at a gap.
+            # This does not establish a complete sequence genotype. Exclude it
+            # explicitly rather than failing every other allele in the shard.
+            fields=dict(zip(row[8].split(':'),row[9].split(':')))
+            gt=fields.get('GT','.').replace('|','/').split('/')
+            alleles=[row[3],*row[4].split(',')]
+            try:unknown=[alleles[int(a)].upper() for a in gt] if len(gt)==2 and all(a.isdigit() for a in gt) else []
+            except IndexError:unknown=[]
+            if unknown and any('N' in a for a in unknown) and all(a and not set(a)-set('ACGTN') for a in unknown):
+                if exclusions is not None:exclusions['excluded_ambiguous_normalized_sequence']+=1
+                continue
+            raise ValueError('Normalization lost explicit genotype')
         result[row[2]]=(int(row[1])-1,row[3],called)
     return result
 
@@ -104,7 +116,7 @@ def projected_compare(work,header):
     for pos in julian_ambiguous:julian_snvs.pop(pos,None)
     with (work/'alignment.paf').open() as stream:
         assembly=assembly_site_comparison(stream,query,reference,julian_snvs,header['public_sha256'])
-    normalized=normalized_rows(work,reference,records)
+    normalized=normalized_rows(work,reference,records,counts)
     julian={};ambiguous=set()
     for ident,(pos,ref,called) in normalized.items():
         if not ident.startswith('j'):continue

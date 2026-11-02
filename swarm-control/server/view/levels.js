@@ -1,7 +1,7 @@
 import {recordResourceHistory} from './resource-history.js';
 import {cpuCoverage,testCpuSummary,percent} from './cpu-report.js';
 import {snapshotFetch} from './snapshot-fetch.js';
-import {deviceLevels,deviceColor,compareNetworkRows} from './levels-model.js';
+import {deviceLevels,deviceColor,compareNetworkRows,taskTransferLabel,mergeNetworkMeasurements} from './levels-model.js';
 import {renderDockerDownloads} from './docker-downloads.js';
 const root=document.getElementById('device-levels');
 root.innerHTML=`<div class="panel-heading"><div><div class="eyebrow">ALL DEVICES · LIVE OVERLAY</div><h2 id="usage-title">Resource usage</h2><p id="levels-description" class="muted"></p></div><div class="levels-controls"><label>Measure <select id="levels-mode"><option value="network">Network</option><option value="disk">Disk</option><option value="ram">RAM</option><option value="cpu">CPU (%)</option><option value="gpu">GPU (%)</option><option value="vram">GPU memory (%)</option></select></label><label>Global telemetry <select id="levels-transport" disabled><option value="tcp">TCP preferred</option><option value="webrtc">WebRTC preferred</option></select></label><label class="levels-smoothing"><input id="levels-smooth" type="checkbox"> Smooth (10 s)</label><label class="levels-smoothing" id="levels-split-label"><input id="levels-split" type="checkbox"> Separate send / receive</label></div></div><p id="levels-transport-status" class="muted" role="status">Connecting to launcher transport settings…</p><div class="levels-workspace"><div class="levels-chart"><div class="levels-key"><span id="levels-scale"></span><span id="levels-status" role="status">Connecting…</span></div><div id="levels-plot" tabindex="0" aria-label="Overlaid device measurements"></div><div class="levels-time"><span id="levels-window">Collecting history…</span><span>Now</span></div></div><aside class="levels-devices"><h3>Devices <small>Click to show or hide</small></h3><div id="levels-legend"></div></aside></div><section id="levels-docker" aria-label="Docker image download context"></section><p id="levels-coverage" class="muted"></p>`;
@@ -43,9 +43,11 @@ function legendButton(row,network=false){
  button.onmouseleave=button.onblur=()=>{if(highlighted===row.id){highlighted=null;draw();}};
  const label=document.createElement('span');if(row.disk)label.style.whiteSpace='normal';label.textContent=network?(row.direction==='send'?'↑ Send':row.direction==='receive'?'↓ Receive':row.direction==='read'?'Read · '+(row.throughput===null?'No data':row.throughput.toFixed(1)+' MB/s'):row.direction==='write'?'Write · '+(row.throughput===null?'No data':row.throughput.toFixed(1)+' MB/s'):'Total'):row.name;
  const value=document.createElement('strong');value.textContent=amount;button.append(label,value);
+ if(network&&mode==='network'&&row.value!==null){const meta=document.createElement('small');meta.className='levels-rate-meta';meta.textContent=(row.value/8).toFixed(1)+' MB/s';button.append(meta);if(row.utilization!==null&&row.utilization!==undefined){const utilization=document.createElement('small');utilization.className='levels-rate-meta';utilization.textContent=row.utilization.toFixed(1)+'% of link';button.append(utilization);}}
  button.onclick=()=>{hidden.has(row.id)?hidden.delete(row.id):hidden.add(row.id);update(...lastData,false);};
  return button;
 }
+const openHealth=new Map();
 function networkLegend(legend){
  const machines=new Map();
  for(const row of latest){
@@ -68,8 +70,21 @@ function networkLegend(legend){
    if(first.interface||first.disk){const link=document.createElement('p');link.className='levels-interface-link';link.textContent=first.linkLabel;link.title=first.disk?first.basis:'Current negotiated Ethernet speed or reported Wi-Fi PHY rates. Payload throughput is lower; Wi-Fi rates change with radio conditions.';card.append(link);}
    const controls=document.createElement('div');controls.className='levels-interface-directions';
    rows.sort((a,b)=>(['send','read'].includes(a.direction)?0:1)-(['send','read'].includes(b.direction)?0:1));
-   for(const row of rows)controls.append(legendButton(row,true));card.append(controls);group.append(card);
+   for(const row of rows)controls.append(legendButton(row,true));card.append(controls);
+   if(first.interface){
+    const health=document.createElement('details');health.className='levels-interface-health';health.open=openHealth.get(first.deviceId||first.id)||false;
+    if(first.health&&['rx_errors_delta','tx_errors_delta','rx_dropped_delta','tx_dropped_delta','carrier_changes_delta'].some(k=>Number.isFinite(first.health[k])&&first.health[k]>0))health.classList.add('has-events');
+    health.ontoggle=()=>openHealth.set(first.deviceId||first.id,health.open);
+    const summary=document.createElement('summary');summary.textContent=first.healthLabel;health.append(summary);
+    const text=document.createElement('p');const h=first.health;
+    const counter=(field)=>Number.isFinite(h?.[field])?h[field]:'Unavailable';
+    text.textContent=`Current counter window: ${h?.window_seconds?.toFixed(1)??'unknown'} s. Since interface started — RX/TX errors: ${counter('rx_errors_total')} / ${counter('tx_errors_total')}; RX/TX drops: ${counter('rx_dropped_total')} / ${counter('tx_dropped_total')}; CRC errors: ${counter('rx_crc_errors_total')}; link down events: ${counter('carrier_down_count_total')}.`;
+    if(h?.last_link_change_at)text.textContent+=' Last link transition observed '+new Date(h.last_link_change_at*1000).toLocaleTimeString()+'.';
+    text.textContent+=' Interface traffic includes all applications. Ethernet utilization is separate per direction; Wi-Fi PHY rates are not usable payload capacity.';health.append(text);card.append(health);
+   }
+   group.append(card);
   }
+  if(mode==='network'){const transfers=document.createElement('p');transfers.className='levels-task-transfers';const host=lastData?.[1]?.hosts?.find(h=>h.host===machine);transfers.textContent=host?taskTransferLabel(host.task_transfers||[]):'Task-transfer telemetry unavailable';transfers.title='Instrumented payload received by this machine, excluding unrelated traffic. Historical averages are not current throughput.';group.append(transfers);}
   legend.append(group);
  }
 }
@@ -154,8 +169,11 @@ async function refresh(){
   if(root.dataset.source){
    const snapshot=await read(root.dataset.source);
    document.dispatchEvent(new CustomEvent('test-context',{detail:{run:snapshot.run}}));
-   update(snapshot.network,snapshot.metrics);
-  }else update(...await Promise.all(['/api/devices?resolve=0','/api/cpu'].map(read)));
+   update(snapshot.network,mergeNetworkMeasurements(snapshot.metrics,snapshot.resources));
+  }else{
+   const [network,metrics,resources]=await Promise.all([read('/api/devices?resolve=0'),read('/api/cpu'),read('/api/resources').catch(()=>({hosts:[]}))]);
+   update(network,mergeNetworkMeasurements(metrics,resources));
+  }
  }catch(error){
   if(root.dataset.source)document.dispatchEvent(new CustomEvent('test-context',{detail:{run:null}}));
   if(error.status===401){

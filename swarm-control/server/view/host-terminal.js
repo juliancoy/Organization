@@ -13,7 +13,8 @@ const containersTitle=document.createElement('h3'),containerGrid=document.create
 const hint=document.createElement('p');hint.className='preview-hint';
 const machineCrumbs=breadcrumbNav('Machine inspection');
 heading.textContent='Machine details';hint.textContent='Select a machine to inspect its CPU, containers and test output.';
-panel.append(heading,machineCrumbs,hint,cpuSummary,grid,legend,containersTitle,containerGrid,status,output);
+const workerControls=document.createElement('a');workerControls.href='/workers.html';workerControls.textContent='Manage worker jobs';
+panel.append(heading,workerControls,machineCrumbs,hint,cpuSummary,grid,legend,containersTitle,containerGrid,status,output);
 const anchor=document.getElementById('topology')?.closest('section');
 if(anchor)anchor.after(panel);else (document.querySelector('main')||document.querySelector('.layout')||document.body).append(panel);
 function render(){

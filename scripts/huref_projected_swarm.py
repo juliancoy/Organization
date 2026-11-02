@@ -15,6 +15,24 @@ class ProjectedComparison(Followup):
         super().__init__(folder,original)
         self.worker_source=(ROOT/'scripts/huref_compare_worker.py').read_text().split("if __name__=='__main__':")[0]+'\n'+(ROOT/'scripts/huref_evidence.py').read_text()+'\n'+(ROOT/'scripts/huref_projected_worker.py').read_text()
 
+    def compatible_worker(self):
+        """Reuse a previous algorithm only under an explicit signed migration."""
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        from cryptography.exceptions import InvalidSignature
+        try:
+            value=self.w.verified(self.w.load(self.folder/'worker-compatibility.json'),Ed25519PublicKey.from_public_bytes(bytes.fromhex(self.config['controller_public_key'])))
+            if (value.get('schema')=='huref-worker-compatibility.v1' and value.get('run')==self.state['id']
+                and value.get('to_worker_sha256')==hashlib.sha256(self.worker_source.encode()).hexdigest()
+                and value.get('from_worker_sha256')==digest(self.folder/'previous-worker.py')):
+                return value['from_worker_sha256']
+        except (OSError,ValueError,KeyError,InvalidSignature):pass
+        return None
+
+    def reusable(self,job):
+        if super().reusable(job):return True
+        previous=self.compatible_worker()
+        return bool(previous and super().reusable(job,worker_sha256=previous))
+
     def prepare(self):
         prepared=self.folder/'prepared';prepared.mkdir(mode=0o700,exist_ok=True)
         original=json.loads((self.original/'prepared/ready.json').read_text())
@@ -88,10 +106,16 @@ class ProjectedComparison(Followup):
         save(self.folder/'owner-report.json',report)
         save(self.folder/'public-summary.json',{'generated':report['generated'],'completed_shards':len(receipts),'total_shards':len(self.jobs),'scope':report['scope'],'limitations':limitations})
         archive={'report_sha256':digest(self.folder/'owner-report.json'),'public_summary_sha256':digest(self.folder/'public-summary.json'),'receipts':receipts,'time':time.time()}
+        archive['validation_policies']={name:digest(self.folder/name) for name in ('approved-execution.json','worker-compatibility.json','previous-worker.py') if (self.folder/name).exists()}
         save(self.folder/'archive.receipt.json',__import__('scripts.run_manager',fromlist=['sign']).sign(archive,self.w))
         self.state['report_ready']=len(receipts)==len(self.jobs);self.publish()
 
     def run(self):
+        revision=hashlib.sha256(self.worker_source.encode()).hexdigest()
+        if self.state.get('execution_worker_sha256')!=revision and self.compatible_worker():
+            for row in self.state['jobs'].values():
+                if row['status']=='failed':row.update(status='queued',attempts=0,retry_after=0,detail='Requeued after validated ambiguous-reference normalization fix')
+        self.state['execution_worker_sha256']=revision
         super().run()
         if all(row['status']=='completed' for row in self.state['jobs'].values()):self.report()
         elif any(row['status']=='failed' for row in self.state['jobs'].values()):raise RuntimeError('Projected comparison shards failed validation')

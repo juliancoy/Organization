@@ -1,5 +1,5 @@
 """Durable signed-lease coordinator for a private persistent Vulkan QC worker."""
-import argparse,base64,hashlib,json,signal,subprocess,threading,time,uuid
+import argparse,base64,hashlib,json,signal,subprocess,threading,time,uuid,tempfile
 from pathlib import Path
 from . import genomics_distributed as distributed
 from .gpu_qc_benchmark import SETUP
@@ -17,6 +17,20 @@ def main():
     hosts=json.loads(args.hosts.read_text()) if args.hosts else distributed.discover();host=next(h for h in hosts if h['host']==args.host and h.get('eligible'))
     setup=SETUP.replace("gpu-dna-qc","gpu-qc")
     payload={'machine':host['machine'],'assets':{n:base64.b64encode((assets/n).read_bytes()).decode() for n in names}}
+    tools=subprocess.run(distributed.shell_command(host,['sh','-c','command -v glslangValidator']),capture_output=True,text=True,timeout=15)
+    precompiled=tools.returncode!=0
+    if precompiled:
+        # Supply a private build kit rather than install packages or alter host
+        # permissions. SPIR-V is portable; compile the C adapter on its host ABI.
+        with tempfile.TemporaryDirectory() as tmp:
+            for source,target in [('qc_engine.comp','qc_engine.spv'),('genome_masks.comp','genome_masks.spv')]:
+                output=Path(tmp)/target
+                subprocess.run(['glslangValidator','-V',str(assets/source),'-o',str(output)],check=True,stdout=subprocess.DEVNULL)
+                payload['assets'][target]=base64.b64encode(output.read_bytes()).decode()
+        for directory in ('vulkan','vk_video'):
+            for header in (Path('/usr/include')/directory).rglob('*.h'):
+                payload['assets']['include/'+str(header.relative_to('/usr/include'))]=base64.b64encode(header.read_bytes()).decode()
+        setup=setup.replace("for name,value in job['assets'].items():(p/name).write_bytes(base64.b64decode(value))", "for name,value in job['assets'].items():\n target=p/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(base64.b64decode(value))")
     result=subprocess.run(distributed.shell_command(host,['python3','-c',setup]),input=json.dumps(payload),capture_output=True,text=True,check=True,timeout=25);runtime=json.loads(result.stdout)
     root=runtime['work'];lease=uuid.uuid4().hex;name='genomics-'+lease;client=AgentClient(host);done=threading.Event();process=None;acquired=False;renew_errors=[]
     try:
@@ -38,7 +52,17 @@ def main():
             finally:other.close()
         if 'docker-workers' not in status.get('capabilities',[]):threading.Thread(target=renew,daemon=True).start()
         command='cd /gpu-qc && glslangValidator -V qc_engine.comp -o qc_engine.spv && glslangValidator -V genome_masks.comp -o genome_masks.spv && gcc -O3 -march=native qc_engine.c -lvulkan -o qc_engine && exec python3 qc_server.py'
+        if precompiled:command='cd /gpu-qc && gcc -I/gpu-qc/include -O3 -march=native qc_engine.c -l:libvulkan.so.1 -o qc_engine && exec python3 qc_server.py'
         argv=['docker','run','--rm','--pull=never','--name',name,'--label','org.lifetech.gpu-qc-service=true','--label','org.lifetech.worker=true','--label','org.lifetech.job='+name.removeprefix('genomics-'),'--label','org.lifetech.group='+'gpu-qc-service','--network','none','--read-only','--cpus','1','--memory',str(memory)+'m','--memory-swap',str(memory)+'m','--pids-limit','32','--cap-drop','ALL','--security-opt','no-new-privileges','--user',host.get('container_user',str(runtime['uid'])+':'+str(runtime['gid'])),'--group-add',str(runtime['render_gid']),'--device',runtime['render'],'-e','TMPDIR=/work/tmp','-e','XDG_CACHE_HOME=/work/tmp','-e','GPU_QC_ROOT=/gpu-qc','-e','GPU_QC_HOST_ROOT='+root,'-e','GPU_QC_VERSION='+version,'-e','GPU_QC_MAX_BATCH='+str(max_batch),'--mount','type=bind,src=/usr,dst=/usr,readonly','--mount','type=bind,src='+root+',dst=/work','--mount','type=bind,src='+root+',dst=/gpu-qc','-w','/work',host['image'],'bash','-o','pipefail','-c',command]
+        # NVIDIA Vulkan also requires its character devices; a DRI render node
+        # alone exposes no physical NVIDIA GPU in the rootless Inspiron container.
+        probe="import pathlib,json;print(json.dumps([str(p) for p in pathlib.Path('/dev').glob('nvidia*') if p.is_char_device()]))"
+        devices=json.loads(subprocess.check_output(distributed.shell_command(host,['python3','-c',probe]),text=True,timeout=15))
+        if devices:
+            extra=[]
+            for device in devices:extra+=['--device',device]
+            extra+=['-e','VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json']
+            position=argv.index(host['image']);argv[position:position]=extra
         save(status='starting',memory_mb=memory,cpus=1,container=name,socket=root+'/service.sock',max_batch_bytes=max_batch)
         process=subprocess.Popen(distributed.shell_command(host,argv));next_scan=0
         while process.poll() is None and not STOP.wait(1):

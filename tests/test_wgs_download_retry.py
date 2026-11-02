@@ -48,6 +48,39 @@ def test_resumed_lan_copy_requires_full_sha256(tmp_path,monkeypatch,corrupt_pref
         assert not partial.exists()
 
 
+def test_incomplete_lan_transfer_retains_prefix_and_resumes_without_wall_timeout(tmp_path,monkeypatch):
+    import hashlib,subprocess
+    from scripts import wgs_recall_swarm as swarm
+    class Client:
+        def __init__(self,host):pass
+        def call(self,*args,**kwargs):return {'machine':'source-machine'}
+        def close(self):pass
+    monkeypatch.setattr(swarm,'AgentClient',Client)
+    data=b'verified public reads'*1000;source_file=tmp_path/'source.gz';source_file.write_bytes(data[:123])
+    digest=hashlib.sha256(data).hexdigest()
+    source={'host':'source','local':True,'machine':'source-machine'}
+    target={'host':'target','local':True,'cache':str(tmp_path/'target')}
+    receipt={'path':str(source_file),'bytes':len(data),'sha256':digest}
+    original_popen=subprocess.Popen;waits=[]
+    def popen(*args,**kwargs):
+        p=original_popen(*args,**kwargs)
+        if kwargs.get('stdout')==subprocess.DEVNULL and kwargs.get('stdin') is not None:
+            communicate=p.communicate
+            def wait(*a,**kw):
+                waits.append(kw);return communicate(*a,**kw)
+            p.communicate=wait
+        return p
+    monkeypatch.setattr(swarm.subprocess,'Popen',popen)
+    with pytest.raises(RuntimeError,match='partial retained'):swarm.copy_receipt(source,target,receipt,resume=True)
+    partial=tmp_path/'target/incoming'/digest/'source.gz.partial'
+    assert partial.read_bytes()==data[:123]
+    assert not list(partial.parent.glob('*.mismatch-*'))
+    source_file.write_bytes(data)
+    swarm.copy_receipt(source,target,receipt,resume=True)
+    assert (tmp_path/'target/incoming'/digest/'source.gz').read_bytes()==data
+    assert all('timeout' not in wait for wait in waits)
+
+
 def test_archive_exhaustion_remains_retryable_but_http_denial_does_not():
     from scripts.wgs_single_copy_worker import retryable_download_error
     from urllib.error import HTTPError

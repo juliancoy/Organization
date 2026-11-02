@@ -229,3 +229,35 @@ collisions for each evidence class separately. Docker integration tests in
 HuRef VCF; those tests run locally in the genome-tools image. Existing running
 comparison jobs retain their signed worker recipes; source changes apply to
 subsequent recipe versions rather than silently mixing results.
+
+
+RAM streaming finalization for the whole-genome Julian/HuRef read alignment:
+`scripts/julian_finalize.py` prepares mate metadata within each paired-read
+batch using a streamed collate/fixmate/sort pipeline. Sort buffers use the
+reserved RAM; temporary files use a bounded container tmpfs with swap disabled.
+Prepared batches remain coordinate sorted. Their final sorted merge streams
+into one genome-wide duplicate-marking pass, so duplicates spanning batches are
+still detected. No genome-sized name collation or coordinate re-sort is needed.
+The final BAM, index, verification summaries and restart checkpoints remain on
+disk. The space guard budgets a final output with 25% size headroom, one batch
+replacement allowance and 10 GiB reserve, rather than a second full-genome sort.
+RAM admission is sampled after alignment; at most 24 GiB is reserved and the
+sort-per-thread allocation plus tmpfs and tool overhead fit within that budget.
+Each batch is validated for primary/secondary/supplementary/total read counts,
+checksummed and checkpointed before atomic replacement. Only known generated
+aliases of its previous inode are retired; source reads remain unchanged.
+Original and prepared checksums are retained in owner-only per-batch receipts.
+Interrupted replacement/publication resumes from those checkpoints.
+Validation: synthetic Docker tools test cross-batch duplicate detection, and
+host tests cover memory/disk planning, interrupted replacement, final publication
+recovery and resource accounting. No VM or private data is required for tests.
+
+Launcher/application boundary: the reusable execution, resource limits, tmpfs,
+streaming/cache permissions, checkpoint persistence and scoped cleanup mechanisms
+belong to `swarm-node` (see `swarm-control/server/README.md`, “Runtime boundary”).
+This run retains the paired-batch invariant, samtools pipeline, buffer sizing,
+space estimates, primary/nonprimary accounting, cross-batch duplicate checks,
+reference/variant/haplotype semantics and scientific report logic. In particular,
+the 24 GiB cap and current output-space formula are application settings, not
+universal launcher defaults. The launcher enforces the selected resource plan;
+it does not choose a genome algorithm or infer biological certainty.

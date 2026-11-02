@@ -163,3 +163,6 @@ main{max-width:1440px;margin:auto;padding:28px}a{color:#b7e4cf}.intro,.panel-hea
 
 .task-manager #device-levels .levels-controls>label:first-child{display:none}
 @media(max-width:760px){.task-manager .resource-tabs{grid-template-columns:repeat(3,minmax(0,1fr))}}
+
+.levels-rate-meta{font-size:11px;line-height:1.5;color:#b4cbd7;font-variant-numeric:tabular-nums;white-space:normal}.levels-interface-health{margin-top:10px;border-top:1px solid #ffffff18;font-size:12px;line-height:1.6;color:#a9bfcd}.levels-interface-health>summary{cursor:pointer;min-height:36px;padding:9px 0 2px;overflow-wrap:anywhere}.levels-interface-health>p{margin:8px 0 0;overflow-wrap:anywhere}.levels-task-transfers{font-size:12px;line-height:1.6;color:#b7ccd9;margin:0;overflow-wrap:anywhere}
+.levels-interface-health>summary{min-height:44px}.levels-interface-health.has-events>summary{color:#ffd28c}

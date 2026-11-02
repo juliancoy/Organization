@@ -47,7 +47,7 @@ def eligible(status):
                 status.get('worker_policy',{}).get('accepting_jobs'))
 
 
-def discover(require_python_image=True):
+def discover(require_python_image=True, names=None):
     from concurrent.futures import ThreadPoolExecutor
     sys.path.insert(0,str(ROOT/'swarm-control/server'))
     from agent_client import AgentClient,CONFIG
@@ -83,7 +83,9 @@ def discover(require_python_image=True):
         finally:
             if client:client.close()
         return host
-    with ThreadPoolExecutor(max_workers=min(8,len(config['peers']))) as pool:return list(pool.map(check,config['peers'].items()))
+    peers=[item for item in config['peers'].items() if names is None or item[0] in names]
+    if not peers:return []
+    with ThreadPoolExecutor(max_workers=min(8,len(peers))) as pool:return list(pool.map(check,peers))
 
 
 def batches(path,kind,limit=50000):

@@ -23,7 +23,7 @@ export function groupRows(children){
   const measured=rows.every(c=>Number.isFinite(c.total_units)&&c.total_units>0&&c.unit===rows[0].unit);
   const total=measured?rows.reduce((n,c)=>n+c.total_units,0):null;
   const done=measured?rows.reduce((n,c)=>n+(success(c)?c.total_units:(c.completed_units||0)),0):null;
-  return {name,children:rows,status:rows.every(success)?'completed':rows.some(c=>statusClass(c.status)==='status-failed')?'failed':rows.some(c=>statusClass(c.status)==='status-running')?'running':'queued',
+  return {name,children:rows,status:rows.every(success)?'completed':rows.some(c=>statusClass(c.status)==='status-running')?'running':rows.some(c=>statusClass(c.status)==='status-failed')?'failed':'queued',
    percent:total?Math.round(1000*done/total)/10:Math.round(100*rows.filter(success).length/rows.length),total_units:total,completed_units:done,unit:rows[0].unit,
    detail:`${rows.filter(success).length}/${rows.length} verified complete`+(measured?' · input scan progress':' · work-item completion'),worker:[...new Set(rows.map(c=>c.worker))].join(', ')};
  });
@@ -33,6 +33,7 @@ export function groupRows(children){
 export function readEta(row, observedAt){
  if(success(row))return {text:'Verified complete',seconds:0};
  if(row.stale)return {text:'ETA unavailable · stale observation'};
+ if(statusClass(row.status)==='status-queued'&&row.waiting_label)return {text:row.waiting_label};
  if(['failed','error','conflict','timed_out','interrupted'].includes(row.status)&&!row.children?.length)return {text:'ETA unavailable · failed: '+(row.detail||row.name||'worker error')};
  if(row.status==='partial')return {text:row.input_blockers?.length?'Partial results · waiting for required inputs':'Partial results · full scope incomplete'};
  if(row.status==='waiting_inputs')return {text:'Waiting for required inputs'};

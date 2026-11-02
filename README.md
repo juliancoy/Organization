@@ -42,6 +42,15 @@ Give your AI agent this prompt:
 > pushing and submit its pull request separately. Verify that the application
 > works and report any remaining problems.
 
+## QCash testnet
+
+The `pqcoin/` checkout comes from [QCash](https://github.com/juliancoy/QCash).
+It contains the experimental native chain and its supervised testnet gateway;
+OrgPortal owns the separate browser wallet and send/receive integration.
+See `pqcoin/DEPLOYMENT.md` for the testnet service lifecycle and
+`OrgPortal/docs/finance/QCASH_PROFILE_LINKS.md` for the separate database review.
+Private wallets, node homes and genomic inputs are excluded from publication.
+
 ## Get started
 
 Requires Git, Python 3.10+, and Docker with a running local Unix-socket daemon.

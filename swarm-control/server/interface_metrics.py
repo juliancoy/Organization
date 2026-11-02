@@ -15,6 +15,12 @@ for device in sorted(Path('/sys/class/net').iterdir()):
    'rx_bytes':int((device/'statistics/rx_bytes').read_text()),'tx_bytes':int((device/'statistics/tx_bytes').read_text())}
  except (OSError,ValueError):continue
  row=interfaces[device.name]
+ for field in ('rx_errors','tx_errors','rx_dropped','tx_dropped','rx_crc_errors'):
+  try:row[field]=int((device/'statistics'/field).read_text())
+  except (OSError,ValueError):pass
+ for field in ('carrier_changes','carrier_down_count','carrier_up_count'):
+  try:row[field]=int((device/field).read_text())
+  except (OSError,ValueError):pass
  try:
   speed=int((device/'speed').read_text())
   if speed>0:row['link_speed_mbps']=speed
@@ -36,7 +42,7 @@ print(json.dumps({'monotonic':time.monotonic(),'sampled_at':time.time(),
 '''
 
 
-def capture(target,script=SCRIPT):
+def capture(target,script=SCRIPT,timeout=5):
     if target.get('local'):
         command=[sys.executable,'-c',script];payload=None
     else:
@@ -52,7 +58,7 @@ def capture(target,script=SCRIPT):
         if key.exists():command+=['-i',str(key)]
         if accounts.get(alias):command+=['-l',accounts[alias]]
         command += [alias,'python3 -'];payload=script
-    result=subprocess.run(command,input=payload,capture_output=True,text=True,timeout=5,check=True)
+    result=subprocess.run(command,input=payload,capture_output=True,text=True,timeout=timeout,check=True)
     if len(result.stdout)>65536:raise ValueError('Interface response exceeds limit')
     return json.loads(result.stdout)
 
@@ -82,14 +88,31 @@ class InterfaceSampler:
                 if min(changes)>=0:
                     rx,tx=[round(change*8/elapsed/1000000,4) for change in changes]
                     row.update(status='live',rx_mbps=rx,tx_mbps=tx,network_mbps=round(rx+tx,4))
+            # Counter deltas, including zero, require a continuous sample.
+            for field in ('rx_errors','tx_errors','rx_dropped','tx_dropped','rx_crc_errors','carrier_changes','carrier_down_count','carrier_up_count'):
+                value=counters.get(field)
+                if type(value) is int and value>=0:row[field+'_total']=value
+                older=before.get(field) if before else None
+                row[field+'_delta']=value-older if valid and before and before.get('ifindex')==counters.get('ifindex') and type(value) is int and type(older) is int and value>=older>=0 else None
+            previous_seen=self.seen.get(name,{})
+            row['last_link_change_at']=previous_seen.get('last_link_change_at') if valid else None
+            if valid and before and (row.get('carrier_changes_delta',0) or before.get('state')!=counters.get('state')):
+                row['last_link_change_at']=current['sampled_at']
+            speed=row.get('link_speed_mbps')
+            for direction in ('rx','tx'):
+                rate=row.get(direction+'_mbps')
+                row[direction+'_utilization_percent']=round(rate*100/speed,2) if speed and rate is not None else None
             if row['state'] in ('down','lowerlayerdown','notpresent'):
-                row.update(status='disconnected',rx_mbps=None,tx_mbps=None,network_mbps=None)
+                row.update(status='disconnected',rx_mbps=None,tx_mbps=None,network_mbps=None,rx_utilization_percent=None,tx_utilization_percent=None)
             rows.append(row)
             self.seen[name]=dict(row)
         present={row['name'] for row in rows}
         for name,row in self.seen.items():
             if name not in present and len(rows)<32:
-                rows.append({**row,'state':'notpresent','status':'disconnected','sampled_at':current['sampled_at'],
-                             'rx_mbps':None,'tx_mbps':None,'network_mbps':None})
+                absent={**row,'state':'notpresent','status':'disconnected','sampled_at':current['sampled_at'],
+                        'rx_mbps':None,'tx_mbps':None,'network_mbps':None,'rx_utilization_percent':None,'tx_utilization_percent':None}
+                for field in list(absent):
+                    if field.endswith('_delta'):absent[field]=None
+                rows.append(absent)
         self.seen={row['name']:dict(row) for row in rows}
         return rows

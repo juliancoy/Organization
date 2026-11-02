@@ -786,3 +786,78 @@ run in one transaction. One focused child run prepares those immutable sources
 and shares the selected file queue across the enrolled workers. Dispatch records
 all tickets atomically; results, attempt limits and backoff remain per task. The
 chart separates pending retries, attention-required retries and recovered history.
+
+
+## Worker controls
+
+Open **http://map.local/workers.html**, or use **Worker controls** in the map,
+Task Manager, jobs, or resource-monitor header. Machine details also links there.
+On the LAN no website login is required.
+
+- **Pause new jobs** saves `worker-policy.json` in paused mode; admitted work may finish.
+- **Stop swarm work now** also stops labelled compute containers, the scoped Venter
+  QC service, and the machine's GPU lease supervisor. Audio and conversation
+  services are left running. An interrupted alignment batch is requeued.
+- **Resume jobs** restores automatic admission and restarts the GPU lease
+  supervisor and any Venter QC service stopped through these controls. It never
+  restarts an old alignment container or a GPU container with an expired lease.
+
+The LAN-only nginx endpoint proxies to the independent loopback resource service;
+writes require a same-origin JSON request and an enrolled host. Unknown status
+stays unavailable. Repeated pause/stop actions keep the machine paused.
+
+## Runtime boundary: swarm-node and application workflows
+
+Decision (2026-11-01): `swarm-node` owns reusable execution, resource enforcement,
+and authorized data movement. Applications own their algorithms, dependency
+plans, domain evidence, and estimates of the resources those algorithms need.
+Keep one node runtime; this boundary does not introduce another daemon.
+
+The node runtime owns:
+
+- Admission against measured CPU, RAM, GPU/VRAM, storage and network capabilities;
+  enforcement of the admitted container limits and accounting for all concurrent
+  stages, including RAM scratch and transfer buffers. Applications declare their
+  needs; the runtime waits or rejects incompatible plans.
+- Authenticated input streaming, integrity checks and bounded reusable caches,
+  using the application's declared data-access, persistence and locality policy.
+  Prefer streaming for single-pass data. RAM caching and SSD spill are explicit
+  choices; RAM is not automatically the right cache for every workload.
+- Container creation, bounded tmpfs, swap policy, permitted scratch tiers and
+  budgets, disk-space reserves, ownership, cleanup, and durable operational
+  events. A RAM-only job cannot silently spill to disk. The runtime cleans only
+  declared disposable artifacts; application results and source data are retained.
+- Worker discovery, hardware/backend capabilities, owner pause/resume, graceful
+  draining, compatible updates, connection recovery, and bounded execution
+  retries. Scientific validation failures are reported to the application rather
+  than retried indefinitely or reclassified as infrastructure failures.
+- Generic checkpoint storage/publication and progress reporting, including
+  measured rates, active siblings and failures together, and appropriately scoped
+  ETAs. Applications supply units, dependency boundaries and validation hooks;
+  the runtime cannot infer an end-to-end estimate from a stage estimate.
+
+The genome application owns reference/assembly selection, chromosome coordinates,
+read pairing and partitioning, aligner/tool selection and parameters, RAM/buffer
+sizing formulas, the collate/fixmate/sort/merge/markdup sequence, and the proof
+that per-batch mate preparation permits a genome-wide sorted merge. It owns
+read-count validation, cross-batch duplicate correctness, genotype/phase/callable
+region semantics, uncertainty attribution, evidence reconciliation and reports.
+It defines which checkpoint is scientifically valid and which generated BAM
+aliases may be retired after a verified replacement. The runtime provides the
+atomic publication and scoped cleanup mechanism, not that biological decision.
+
+A job declaration should identify its immutable image/command and authorized
+inputs, CPU/RAM/GPU requirements, bounded RAM scratch, permitted disk spill and
+space requirements, durable outputs, retry category, and checkpoint/progress
+hooks. Do not encode sample names, genome formats or samtools subcommands into
+this generic contract. RAM-only private inputs, public reusable references and
+durable outputs can have different policies within the same job.
+
+Current placement: `scripts/wgs_recall_swarm.py:leased_run` contains reusable
+execution machinery that belongs in the shared node runtime. Its genomics callers
+should eventually become adapters to that common implementation.
+`scripts/julian_finalize.py` remains application code: it chooses the batch-sized
+algorithm and computes its resource and storage needs. Other controllers should
+use the same execution primitive rather than duplicate Docker command builders.
+Move these responsibilities incrementally with compatibility adapters and pinned
+recipes so already running jobs keep their admitted behavior.

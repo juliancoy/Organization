@@ -250,7 +250,7 @@ class Comparison:
         source_files=self.stage_public_origin(ready,origin)
         auth={'schema':'venter-stream-offload.v1','id':self.state['id'],'parent_run':m['id'],'worker':self.peer.name,'source':origin,
               'created':time.time()-5,'expires':m['expires'],'jobs':ready['jobs'],'source_files':source_files,
-              'source_address':m['nodes'][origin]['address'],'source_port':28981,
+              'source_address':m['nodes'][origin]['address'],'source_port':getattr(self,'source_port',28981),
               'input_cache':{'tier':'ram','budget_bytes':512*1024**2},
               'source_module_sha256':self.w.digest(ROOT/'scripts/run_input_source.py'),
               'cache_module_sha256':self.w.digest(ROOT/'scripts/run_input_cache.py'),
@@ -258,22 +258,24 @@ class Comparison:
               'comparison_worker_sha256':hashlib.sha256(worker.encode()).hexdigest(),
               'comparison_image_ids':{h['host']:h['compare_image'] for h in self.hosts},
               'comparison_image_fingerprints':{h['host']:self.image_fingerprint for h in self.hosts},
-              'cache_peers':{h['host']:{'address':m['nodes'][h['host']]['address'],'port':38981} for h in self.hosts if h['host']!=origin}}
-        envelope=rm.sign(auth,self.w);self.auth=auth;self.delegation='comparison-delegation.json'
+              'cache_peers':{h['host']:{'address':m['nodes'][h['host']]['address'],'port':getattr(self,'cache_port',38981)} for h in self.hosts if h['host']!=origin}}
+        envelope=rm.sign(auth,self.w);self.auth=auth;self.delegation=getattr(self,'delegation_file','comparison-delegation.json')
         files={name:__import__('base64').b64encode((ROOT/'scripts'/name).read_bytes()).decode() for name in ('run_input_source.py','run_input_cache.py')}
         payload={**files,'stream-delegation.json':__import__('base64').b64encode(self.w.canonical(envelope)).decode(),'delegation_file':self.delegation}
-        for host in self.hosts:
-            name=host['host'];p={**payload,'root':m['nodes'][name]['root'],'unit':'run-input-comparison-origin.service' if name==origin else 'run-input-comparison-cache.service','cache_only':name!=origin}
+        participants=list(self.hosts)
+        if not any(h['host']==origin for h in participants):participants.append(self.source_host(origin))
+        for host in participants:
+            name=host['host'];p={**payload,'root':m['nodes'][name]['root'],'unit':getattr(self,'source_unit','run-input-comparison-origin.service') if name==origin else getattr(self,'cache_unit','run-input-comparison-cache.service'),'cache_only':name!=origin}
             subprocess.run(self.updater.command(host,rm.INSTALL_SOURCE),input=self.w.canonical(p),stdout=subprocess.DEVNULL,check=True,timeout=60)
             restart='import subprocess;subprocess.run('+repr(['systemctl','--user','restart'])+'+'+repr([p['unit']])+',check=True)'
             subprocess.run(self.updater.command(host,restart),check=True,timeout=30)
             obsolete='run-input-comparison-cache.service' if name==origin else 'run-input-comparison-origin.service'
-            subprocess.run(self.updater.command(host,'import subprocess;subprocess.run('+repr(['systemctl','--user','disable','--now',obsolete])+',stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)'),check=True,timeout=30)
+            if not getattr(self,'source_unit',None):subprocess.run(self.updater.command(host,'import subprocess;subprocess.run('+repr(['systemctl','--user','disable','--now',obsolete])+',stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)'),check=True,timeout=30)
         return auth
 
     def stage_public_origin(self,ready,origin):
         """Place only checksum-pinned public bundles on the Latitude source SSD."""
-        host=next(h for h in self.hosts if h['host']==origin)
+        host=self.source_host(origin)
         specs={job['spec']['source_md5']:job['spec'] for job in ready['jobs']}
         rows={key:{'bytes':specs[key]['bytes'],'sha256':specs[key]['sha256']} for key in ready['source_files']}
         code=r'''import hashlib,json,os,pathlib,shutil,sys
@@ -316,6 +318,12 @@ print(json.dumps(receipts),flush=True)
             return receipts
         finally:
             if process.poll() is None:process.kill();process.wait()
+
+    def source_host(self,origin):
+        # A public input server need not have free compute slots or accept jobs.
+        # Identity and SSH access still come from the enrolled controller config.
+        return next((h for h in self.hosts if h['host']==origin),
+                    {'host':origin,'local':origin==self.config['name'],'lan_address':self.config['peers'][origin]})
 
     def execute(self,host,job):
         if host.get('_image_error'):raise RuntimeError(host['_image_error'])
@@ -384,13 +392,14 @@ print(json.dumps(receipts),flush=True)
                 if not cleanup_container(host,name):raise RuntimeError('Container cleanup unconfirmed; lease retained')
             client.call('resource.release',{'id':lease});client.close()
 
-    def reusable(self,job):
+    def reusable(self,job,worker_sha256=None):
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        from cryptography.exceptions import InvalidSignature
         try:
             value=self.w.verified(self.w.load(self.folder/(job['id']+'.receipt.json')),
                                  Ed25519PublicKey.from_public_bytes(bytes.fromhex(self.config['controller_public_key'])))
             spec=job['spec']
-            expected={'run':self.state['id'],'job':job['id'],'worker_sha256':self.auth['comparison_worker_sha256'],
+            expected={'run':self.state['id'],'job':job['id'],'worker_sha256':worker_sha256 or self.auth['comparison_worker_sha256'],
                       'public_sha256':spec['sha256'],'private_sha256':spec['private_sha256'],
                       'query_start':spec['query_start'],'query_end':spec['query_end'],
                       'output_sha256':digest(self.folder/(job['id']+'.result.json'))}
@@ -399,8 +408,23 @@ print(json.dumps(receipts),flush=True)
             # Engine-specific image IDs may differ despite verified identical contents.
             for host in self.hosts:
                 if host['host']==value.get('worker') and host['_image_ready'].is_set():images.add(host['compare_image'])
+            # Finished work remains verifiable when its machine is offline. A
+            # signed execution authorization binds the exact job, code and image;
+            # it is not permission to launch new work on an unavailable machine.
+            if value.get('image') not in images:
+                try:
+                    history=self.w.verified(self.w.load(self.folder/'approved-execution.json'),
+                        Ed25519PublicKey.from_public_bytes(bytes.fromhex(self.config['controller_public_key'])))
+                    approved=next(j for j in history['jobs'] if j['id']==job['id'])
+                    if (history['id']==self.state['id'] and history['comparison_worker_sha256']==value['worker_sha256']
+                        and history['created']<=value['time']<=history['expires']
+                        and history['comparison_image_ids'].get(value['worker'])==value['image']
+                        and history['comparison_image_fingerprints'].get(value['worker'])==self.image_fingerprint
+                        and hashlib.sha256(self.w.canonical(approved['spec'])).hexdigest()==value.get('job_spec_sha256')):
+                        images.add(value['image'])
+                except (OSError,ValueError,KeyError,StopIteration,InvalidSignature):pass
             return all(value.get(k)==v for k,v in expected.items()) and value.get('image') in images
-        except (OSError,ValueError,KeyError):return False
+        except (OSError,ValueError,KeyError,InvalidSignature):return False
 
     def publish(self):
         rows=[{'id':ident,'name':'GRCh38 region mapping and reported-SNP comparison — '+ident,

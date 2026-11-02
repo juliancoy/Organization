@@ -25,6 +25,8 @@ export function deviceLevels(data,metrics,mode,now=Date.now()) {
    const recent=now/1000-iface.sampled_at<15,disconnected=recent&&(iface.status==='disconnected'||['down','lowerlayerdown','notpresent'].includes(iface.state));
    const fresh=recent&&iface.status==='live'&&!disconnected;
    rows.push({id:`${host.host}:interface:${iface.ifindex}:${iface.name}`,name:`${host.host} · ${iface.name}`,machine:host.host,interface:iface.name,linkLabel:networkLinkLabel(iface,recent,disconnected),
+    utilization:fresh&&valid(iface.link_speed_mbps)&&iface.link_speed_mbps>0&&['send','receive'].includes(mode)&&valid(iface[field])?100*iface[field]/iface.link_speed_mbps:null,
+    healthLabel:networkHealthLabel(iface,recent),health:recent?iface:null,
     sampleTime:iface.sampled_at*1000,value:fresh&&valid(iface[field])?iface[field]:null,throughput:fresh&&valid(iface.network_mbps)?iface.network_mbps:null,disconnected,unavailableLabel:disconnected?'Not connected':'No data',basis:`Physical interface ${iface.name} · ${iface.state||'unknown state'} · ${iface.window_seconds??'unknown'}s counter interval`});
   }
  }
@@ -63,4 +65,30 @@ export function networkLinkLabel(iface,recent=true,disconnected=false){
  if(valid(iface.link_speed_mbps)&&iface.link_speed_mbps>0)return `Link: ${rate(iface.link_speed_mbps)}${['full','half'].includes(iface.link_duplex)?' · '+iface.link_duplex+' duplex':''}`;
  const wifi=['rx','tx'].filter(direction=>valid(iface['link_'+direction+'_mbps'])&&iface['link_'+direction+'_mbps']>0).map(direction=>direction.toUpperCase()+' '+rate(iface['link_'+direction+'_mbps']));
  return wifi.length?'Wi-Fi PHY: '+wifi.join(' · '):'Link speed unavailable';
+}
+
+export function networkHealthLabel(iface,recent=true){
+ if(!recent)return 'Health data stale';
+ const fields=['rx_errors_delta','tx_errors_delta','rx_dropped_delta','tx_dropped_delta'];
+ if(!fields.every(k=>valid(iface[k])))return 'Health counters warming or unavailable';
+ const errors=iface.rx_errors_delta+iface.tx_errors_delta,drops=iface.rx_dropped_delta+iface.tx_dropped_delta;
+ return `${errors} new errors · ${drops} new drops`+(valid(iface.carrier_changes_delta)&&iface.carrier_changes_delta?` · ${iface.carrier_changes_delta} link changes`:'');
+}
+
+export function taskTransferLabel(rows,now=Date.now()/1000){
+ const fresh=rows.filter(r=>now-r.sampled_at>=0&&now-r.sampled_at<15&&r.status==='running'&&valid(r.bytes_per_second));
+ if(fresh.length)return `Task payload: ${(fresh.reduce((n,r)=>n+r.bytes_per_second,0)/1e6).toFixed(1)} MB/s · ${fresh.length} incoming transfer${fresh.length===1?'':'s'}`;
+ const latest=rows.filter(r=>now-r.sampled_at>=0&&now-r.sampled_at<900).sort((a,b)=>b.sampled_at-a.sampled_at)[0];
+ if(latest&&['stale','failed','interrupted'].includes(latest.status))return latest.status==='stale'?'Task-transfer telemetry stale':latest.status==='failed'?'Last task transfer failed validation':'Last task transfer interrupted';
+ const last=rows.filter(r=>r.status==='complete'&&now-r.sampled_at>=0&&now-r.sampled_at<900&&valid(r.average_bytes_per_second)).sort((a,b)=>b.sampled_at-a.sampled_at)[0];
+ return last?`${last.task_id==='network-transfer-validation'?'Transfer check':'Last task transfer'}: ${(last.average_bytes_per_second/1e6).toFixed(1)} MB/s average · completed ${Math.floor((now-last.sampled_at)/60)} min ago`:'No task-transfer data';
+}
+
+export function mergeNetworkMeasurements(metrics,resources,now=Date.now()/1000){
+ const supplemental=new Map((resources?.hosts||[]).map(h=>[h.host,h]));
+ return {...metrics,hosts:(metrics.hosts||[]).map(host=>{
+  const extra=supplemental.get(host.host);if(!extra)return host;
+  const fresh=(extra.network_interfaces||[]).filter(r=>now-r.sampled_at>=0&&now-r.sampled_at<15&&r.status!=='warming');
+  return fresh.length?{...host,network_interfaces:fresh,task_transfers:extra.task_transfers||[]}:host;
+ })};
 }

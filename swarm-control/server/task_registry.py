@@ -28,10 +28,10 @@ def task_view(task):
         states = [c.get('status') for c in children]
         if all(s in ('completed', 'passed', 'reused', 'verified') for s in states):
             result['status'] = 'partial' if task.get('status')=='partial' else 'completed'
+        elif any(s in ('running', 'active', 'preparing', 'transferring', 'starting', 'streaming', 'stopping') for s in states):
+            result['status'] = 'running'
         elif any(s in ('failed', 'error', 'conflict', 'timed_out', 'interrupted') for s in states):
             result['status'] = 'failed'
-        elif any(s in ('running', 'active', 'transferring', 'starting', 'streaming') for s in states):
-            result['status'] = 'running'
         elif all(s == 'not scheduled' for s in states):
             result['status'] = 'not scheduled'
         elif any(s=='waiting_inputs' for s in states) and all(s in ('completed','passed','reused','verified','waiting_inputs','partial') for s in states):
@@ -40,6 +40,10 @@ def task_view(task):
             result['status']='partial'
         elif task.get('status') not in ('failed', 'interrupted', 'partial', 'preparing', 'not scheduled'):
             result['status'] = 'waiting' if any(s in ('waiting', 'blocked', 'waiting_capacity') for s in states) else 'queued'
+        # Count leaves so a running workflow can still expose failed work,
+        # without counting the same failure again at every parent level.
+        result['active_work_items']=sum(c.get('active_work_items',0) if c.get('children') else int(c.get('status') in ('running','active','preparing','transferring','starting','streaming','stopping')) for c in children)
+        result['failed_work_items']=sum(c.get('failed_work_items',0) if c.get('children') else int(c.get('status') in ('failed','error','conflict','timed_out','interrupted')) for c in children)
         blockers=[]
         for child in children:
             blockers.extend(child.get('input_blockers',[]))

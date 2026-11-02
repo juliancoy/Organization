@@ -107,3 +107,39 @@ def test_failed_attempt_keeps_oom_evidence_across_retry(tmp_path):
     for p in attempts:
         assert json.loads(p.read_text())['container_state']['OOMKilled'] is True
         assert p.with_suffix('.stderr').exists()
+
+
+def test_owner_stop_requeues_stage_without_alignment_failure(tmp_path):
+    from unittest.mock import MagicMock
+    import pytest
+    from scripts.wgs_recall_swarm import leased_run
+    from scripts.genomics_distributed import CapacityWait
+    def call(op,*args,**kwargs):
+        if op=='status':return {'machine':'id','capabilities':['renewable-resources']}
+        if op=='resource.capacity':return {'available_mb':4096,'available_cpus':4}
+        if op=='worker.policy':return {'accepting_jobs':False,'mode':'paused'}
+        return {'acquired':True}
+    transport=MagicMock();transport.wait.return_value=143;transport.poll.return_value=143
+    with patch('scripts.wgs_recall_swarm.AgentClient') as client,patch('scripts.wgs_recall_swarm.distributed.eligible',return_value=True),patch('scripts.wgs_recall_swarm.subprocess.Popen',return_value=transport),patch('scripts.wgs_recall_swarm.subprocess.run',return_value=__import__('subprocess').CompletedProcess([],0,'{}','')),patch('scripts.wgs_recall_swarm.cleanup_container',return_value=True):
+        client.return_value.call.side_effect=call
+        with pytest.raises(CapacityWait,match='Owner paused'):
+            leased_run({'host':'worker.local','local':True,'machine':'id'},'sha256:pinned','align',[],str(tmp_path),1,1024,tmp_path/'status.json')
+        assert any(c.args[0]=='resource.release' for c in client.return_value.call.call_args_list)
+        assert json.loads((tmp_path/'status.json').read_text())['phase']=='interrupted'
+
+
+def test_ram_scratch_is_bounded_inside_the_reserved_non_swapping_container(tmp_path):
+    from unittest.mock import MagicMock,patch
+    from scripts.wgs_recall_swarm import leased_run
+    def call(op,*args,**kwargs):
+        if op=='status':return {'machine':'id','capabilities':['renewable-resources','docker-workers']}
+        if op=='resource.capacity':return {'available_mb':16384,'available_cpus':8}
+        return {'acquired':True}
+    transport=MagicMock();transport.wait.return_value=0;transport.poll.return_value=0
+    with patch('scripts.wgs_recall_swarm.AgentClient') as client,patch('scripts.wgs_recall_swarm.distributed.eligible',return_value=True),patch('scripts.wgs_recall_swarm.subprocess.Popen',return_value=transport) as launched,patch('scripts.wgs_recall_swarm.cleanup_container',return_value=True):
+        client.return_value.call.side_effect=call
+        leased_run({'host':'local','local':True,'machine':'id'},'sha256:pinned','true',[],str(tmp_path),2,8192,tmp_path/'status.json',tmpfs={'/ram':2048})
+        argv=launched.call_args.args[0]
+        assert argv[argv.index('--memory')+1]=='8192m'
+        assert argv[argv.index('--memory-swap')+1]=='8192m'
+        assert argv[argv.index('--tmpfs')+1]=='/ram:rw,nosuid,nodev,noexec,size=2048m,mode=1777'

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readEta} from '../view/task-display.js';
+import {readEta,groupRows} from '../view/task-display.js';
 test('parallel ETA follows slowest unfinished input, ignoring completed work',()=>{
  const row={children:[{status:'completed'},{status:'running',read_eta_seconds:60},{status:'running',read_eta_seconds:180}]};
  assert.equal(readEta(row,1000).seconds,180);
@@ -32,4 +32,17 @@ test('missing evidence and preparation are explicit rather than generic queue ET
  assert.equal(readEta({status:'waiting_inputs'},100).text,'Waiting for required inputs');
  assert.equal(readEta({status:'partial',input_blockers:['confidence evidence']},100).text,'Partial results · waiting for required inputs');
  assert.match(readEta({status:'preparing',children:[{name:'old placeholder',status:'queued'}]},100).text,/Preparing workers/);
+});
+
+test('a grouped failure does not conceal running sibling work',()=>{
+ const rows=[{group:'Mapping',name:'Failed shard',status:'failed'},{group:'Mapping',name:'Active shard',status:'running'}];
+ const group=groupRows(rows)[0];
+ assert.equal(group.status,'running');
+ assert.equal(group.children[0].status,'failed');
+ rows[1].status='completed';
+ assert.equal(groupRows(rows)[0].status,'failed');
+});
+
+test('dependency waits explain the prerequisite rather than imply a stalled task',()=>{
+ assert.equal(readEta({status:'waiting_dependency',waiting_label:'Queued until all alignment batches complete'},100).text,'Queued until all alignment batches complete');
 });

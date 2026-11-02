@@ -64,3 +64,32 @@ class InterfaceMetricsTests(unittest.TestCase):
         self.assertNotIn('link_speed_mbps',row)
         self.assertNotIn('link_rx_mbps',row)
         self.assertNotIn('link_tx_mbps',row)
+
+class InterfaceHealthTests(unittest.TestCase):
+    def test_error_deltas_and_directional_utilization(self):
+        a=capture(1);b=capture(6,eth=(100000100,200000200))
+        a['interfaces']['enp1s0'].update(rx_errors=10,tx_errors=2,rx_dropped=5,tx_dropped=0,carrier_changes=2,link_speed_mbps=1000)
+        b['interfaces']['enp1s0'].update(rx_errors=11,tx_errors=2,rx_dropped=5,tx_dropped=0,carrier_changes=3,link_speed_mbps=1000)
+        values=iter([a,b]);sampler=InterfaceSampler(lambda _:next(values));first=sampler.sample({})[0];row=sampler.sample({})[0]
+        self.assertIsNone(first['rx_errors_delta']);self.assertEqual(row['rx_errors_delta'],1)
+        self.assertEqual(row['tx_errors_delta'],0);self.assertEqual(row['last_link_change_at'],6)
+        self.assertEqual(row['rx_utilization_percent'],16);self.assertEqual(row['tx_utilization_percent'],32)
+        projected=project_host({'host':'worker','network_interfaces':[row]})['network_interfaces'][0]
+        self.assertEqual(projected['rx_errors_delta'],1);self.assertEqual(projected['carrier_changes_total'],3)
+
+    def test_reboot_or_counter_reset_does_not_report_old_health_as_zero(self):
+        a=capture(1);b=capture(6);a['interfaces']['enp1s0']['rx_errors']=10;b['interfaces']['enp1s0']['rx_errors']=0
+        values=iter([a,b]);sampler=InterfaceSampler(lambda _:next(values));sampler.sample({});self.assertIsNone(sampler.sample({})[0]['rx_errors_delta'])
+        b['boot_id']='new-boot';values=iter([a,b]);sampler=InterfaceSampler(lambda _:next(values));sampler.sample({});self.assertIsNone(sampler.sample({})[0]['rx_errors_delta'])
+
+    def test_embedded_launcher_sampler_matches_host_sampler(self):
+        import ast,subprocess
+        from pathlib import Path
+        source=Path(__file__).resolve().parents[3]/'scripts/launcher_agent.py'
+        node=next(n for n in ast.parse(source.read_text()).body if isinstance(n,ast.ClassDef) and n.name=='InterfaceSampler')
+        ns={'subprocess':subprocess};exec(compile(ast.Module(body=[node],type_ignores=[]),str(source),'exec'),ns)
+        a=capture(1);b=capture(6,eth=(1000100,2000200))
+        for frame in (a,b):frame['interfaces']['enp1s0'].update(rx_errors=2,tx_errors=0,rx_dropped=1,tx_dropped=0,link_speed_mbps=1000,carrier_changes=2)
+        readers=[iter([a,b]),iter([a,b])];samplers=[InterfaceSampler(lambda _:next(readers[0])),ns['InterfaceSampler'](lambda _:next(readers[1]))]
+        for s in samplers:s.sample({})
+        self.assertEqual(samplers[0].sample({}),samplers[1].sample({}))

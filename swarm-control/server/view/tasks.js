@@ -13,27 +13,55 @@ function meter(value,label,eta){const n=el('div');n.className='progress-track';n
 function workerName(name,row){if(row.status==='waiting_inputs')return 'Required inputs missing';return name&&name!=='unassigned'?name.replaceAll('.local',''):row.children?.length?'Workers shown in steps':statusClass(row.status)==='status-completed'?'Verified evidence':row.status==='not scheduled'?'Not scheduled':'Awaiting worker';}
 function renderTask(task,changes){
  const box=el('article');box.className='job-card '+statusClass(task.status);box.dataset.task=task.id;
- const header=el('div');header.className='job-header';const title=el('div');title.className='job-title';title.append(el('h3',task.name));header.append(title,badge(task.status));box.append(header);
- const p=task.progress,percent=pct(p?.work_percent??p?.percent);const observedAt=task.updated||latest?.sampled_at;const metrics=el('div');metrics.className='job-metrics';
- if(p){const count=el('span');count.append(el('strong',`${p.completed} of ${p.total}`),document.createTextNode(' work items verified'));metrics.append(count);if(percent!=null)metrics.append(el('strong',percent+'%'));}else metrics.append(el('span','Completion not yet measured'));
- box.append(metrics,meter(percent,(p?.work_percent!=null?'Input scan: ':'Verified completion: ')+task.name,readEta(task,observedAt)));
- if(p?.work_percent!=null&&statusClass(task.status)!=='status-completed'){const scan=el('p');scan.className='scan-summary';scan.append(el('strong',p.work_percent+'% input scanned'),document.createTextNode(' · '+progressText(p)));box.append(scan);}
- if(task.stale){const stale=el('p','Observation is stale — awaiting a fresh worker report');stale.className='warning';box.append(stale);}
- const rows=groupRows(task.children||[]);
- if(rows.length||task.detail){const details=el('details');details.className='job-details';details.open=openCards.get(task.id)??statusClass(task.status)==='status-running';details.ontoggle=()=>openCards.set(task.id,details.open);const summary=el('summary','Steps & details');summary.dataset.focus='summary:'+task.id;details.append(summary);if(task.detail){const desc=el('p',task.detail);desc.className='job-description';details.append(desc);}const tree=el('div');tree.className='step-tree';
- function add(child,path,depth=0){if(!visible(child))return null;const key=task.id+':'+path;const branch=el('div');branch.className='step '+statusClass(child.status);const row=el('div');row.className='step-row';const name=el('div');name.className='step-name';const nested=child.children?.length;
- const disclosure=el('details');disclosure.className='step-disclosure';disclosure.open=openCards.get(key)??(statusClass(child.status)==='status-running');disclosure.ontoggle=()=>openCards.set(key,disclosure.open);
- const summary=el('summary');summary.dataset.focus=key;name.append(el('span',child.name));if(child.input){const file=el('small',child.input);file.className='step-file';name.append(file);}const state=badge(child.status);const info=el('div');info.className='step-progress';const value=pct(child.progress?.work_percent??child.progress?.percent??child.percent);info.append(el('strong',value==null?'—':value+'%'));const worker=el('span',workerName(child.worker,child));worker.className='worker';row.append(name,state,info,worker);summary.append(row,meter(value,child.name,readEta(child,observedAt)));disclosure.append(summary);
- const content=el('div');content.className='step-content';if(child.input){const input=el('p',child.input);input.className='file-name';content.append(input);}for(const text of [child.detail,progressText(child),child.basis,child.evidence?'Evidence: '+child.evidence:null,child.depends_on?.length?'Requires: '+child.depends_on.join(', '):null,child.retry?.next_due?'Retry after '+new Date(child.retry.next_due*1000).toLocaleTimeString():null])if(text)content.append(el('p',text));
- for(const [i,c] of (child.children||[]).entries()){const item=add(c,path+'/'+i,depth+1);if(item)content.append(item);}if(!content.children.length)content.append(el('p','No additional details recorded.'));disclosure.append(content);branch.append(disclosure);return branch;}
- for(const [i,child] of rows.entries()){const item=add(child,String(i));if(item)tree.append(item);}details.append(tree);box.append(details);}
+ const header=el('div');header.className='job-header';header.append(el('h3',task.name),badge(task.status));box.append(header);
+ const p=task.primary_progress||task.progress,percent=pct(p?.work_percent??p?.percent),observedAt=task.updated||latest?.sampled_at;
+ const eta=readEta(task,observedAt),metrics=el('dl');metrics.className='task-facts';
+ const fact=(label,value)=>{const item=el('div');item.append(el('dt',label),el('dd',value));metrics.append(item);};
+ fact(task.primary_progress?'Input aligned':'Verified',percent==null?'Measuring':percent+'%');
+ fact(task.primary_progress?'Batches complete':'Work items complete',p?String(p.completed)+(task.primary_progress?'':' / '+p.total):'—');
+ fact('Estimate',eta.text.replace(' · rough observed rate','').replace('Alignment ETA ~','~'));
+ box.append(metrics,meter(percent,(p?.label||'Verified completion')+': '+task.name));
+ if(p?.work_percent!=null){const text=el('p',progressText(p));text.className='scan-summary';box.append(text);}
+ if(task.bottleneck){const signal=el('div');signal.className='limiting-stage';signal.append(el('span','Limiting stage'),el('strong',task.bottleneck.label));box.append(signal);}
+ if(task.stale){const warning=el('p','Awaiting a fresh worker report');warning.className='warning';box.append(warning);}
+ let children=task.children||[];
+ if(task.primary_progress){const workers=children.filter(c=>c.id?.startsWith('worker-'));children=children.filter(c=>!c.id?.startsWith('worker-'));if(workers.length)children.push({id:'workers',name:'Workers ('+workers.length+')',status:workers.some(c=>statusClass(c.status)==='status-running')?'running':'queued',children:workers,detail:'Expand a machine for current phase and resource measurements.'});}
+ const rows=groupRows(children);
+ if(rows.length||task.detail){
+  const details=el('details');details.className='job-details';details.open=openCards.get(task.id)??false;details.ontoggle=()=>openCards.set(task.id,details.open);
+  const summary=el('summary','Stages, workers and evidence');summary.dataset.focus='summary:'+task.id;details.append(summary);
+  if(task.bottleneck){const evidence=el('p',task.bottleneck.evidence);evidence.className='job-description';details.append(evidence);}
+  if(task.fleet_constraint){const fleet=el('p','Fleet: '+task.fleet_constraint);fleet.className='job-description';details.append(fleet);}
+  if(task.phase_timing?.sample_count){
+   const timing=el('section');timing.className='phase-timing';timing.setAttribute('aria-label','Measured batch phases');timing.append(el('h4','Typical mapper batch'));
+   const labels={reference_setup:'Reference setup',mapping_pipeline:'Read mapping',mapper_cleanup:'Mapper cleanup'},seconds=task.phase_timing.median_seconds,total=Object.values(seconds).reduce((a,b)=>a+b,0);
+   for(const [key,value] of Object.entries(seconds)){const row=el('div');row.className='phase-timing-row';row.append(el('span',labels[key]||key),meter(total?100*value/total:0,labels[key]),el('strong',value.toFixed(1)+' s'));timing.append(row);}
+   timing.append(el('p',task.phase_timing.sample_count+' recent batches. '+task.phase_timing.scope));details.append(timing);
+  }
+  if(task.detail){const desc=el('p',task.detail);desc.className='job-description';details.append(desc);}
+  const tree=el('div');tree.className='step-tree';
+  function add(child,path){
+   if(!visible(child))return null;const key=task.id+':'+path,branch=el('div');branch.className='step '+statusClass(child.status);
+   const disclosure=el('details');disclosure.className='step-disclosure';disclosure.open=openCards.get(key)??false;disclosure.ontoggle=()=>openCards.set(key,disclosure.open);
+   const summary=el('summary');summary.dataset.focus=key;const row=el('div');row.className='step-row';const name=el('div');name.className='step-name';name.append(el('span',child.name));
+   const secondary=child.current_phase||child.waiting_label||((child.bottleneck?.confidence!=='unavailable')?child.bottleneck?.label:null);
+   if(secondary&&statusClass(child.status)!=='status-completed'){const note=el('small',secondary);note.className='step-file';name.append(note);}
+   const value=pct(child.progress?.work_percent??child.progress?.percent??child.percent),info=el('span',value==null?'':value+'%');info.className='step-progress';row.append(name,badge(child.status),info);summary.append(row);disclosure.append(summary);
+   const content=el('div');content.className='step-content';
+   const texts=[child.bottleneck?.evidence,child.worker?'Worker: '+workerName(child.worker,child):null,child.detail,progressText(child),child.basis,child.input,child.evidence?'Evidence: '+child.evidence:null,child.waiting_for?.length?'Requires: '+child.waiting_for.join(', '):null];
+   for(const text of texts)if(text)content.append(el('p',text));
+   for(const [i,c] of (child.children||[]).entries()){const item=add(c,path+'/'+i);if(item)content.append(item);}
+   if(!content.children.length)content.append(el('p','No additional measurements recorded.'));disclosure.append(content);branch.append(disclosure);return branch;
+  }
+  for(const [i,child] of rows.entries()){const item=add(child,String(i));if(item)tree.append(item);}details.append(tree);box.append(details);
+ }
  return box;
 }
 function render(data,changes){if(!data)return;const focus=document.activeElement?.dataset.focus;const all=[...data.tasks,...data.planned];const finished=t=>statusClass(t.status)==='status-completed';const rank=t=>({'status-failed':0,'status-running':1,'status-queued':2}[statusClass(t.status)]??3);const active=data.tasks.filter(t=>!finished(t)).filter(visible).sort((a,b)=>rank(a)-rank(b)||(b.priority||0)-(a.priority||0));
  $('tasks').replaceChildren(...active.map(t=>renderTask(t,changes)));if(!active.length)$('tasks').append(el('p','No current jobs match this view.'));
  $('planned').replaceChildren(...data.planned.filter(t=>!finished(t)).filter(visible).map(t=>renderTask(t,changes)));$('planned-section').hidden=!$('planned').children.length;
  const completed=all.filter(finished).filter(visible);$('completed').replaceChildren(...completed.map(t=>renderTask(t,changes)));$('completed-count').textContent=completed.length;$('completed-section').hidden=!completed.length;
- $('overview').replaceChildren(...[['running','Running'],['queued','Waiting'],['failed','Need attention'],['completed','Completed']].map(([state,label])=>{const item=el('div');item.className='overview-item status-'+state;item.append(el('strong',String(all.filter(t=>statusClass(t.status)==='status-'+state).length)),el('span',label));return item;}));
+ $('overview').replaceChildren(...[['running','Running'],['queued','Waiting'],['failed','Need attention'],['completed','Completed']].map(([state,label])=>{const item=el('div');item.className='overview-item status-'+state;item.append(el('strong',String(all.filter(t=>statusClass(t.status)==='status-'+state||(state==='failed'&&t.failed_work_items>0)).length)),el('span',label));return item;}));
  $('updated').textContent='Updated '+new Date(data.sampled_at*1000).toLocaleTimeString();$('errors').textContent=data.errors.join(' · ');const retries=data.retry_jobs||[],pending=retries.filter(r=>['backoff','claiming','running'].includes(r.state)),recovered=retries.filter(r=>r.state==='completed'),attention=retries.filter(r=>['blocked','exhausted'].includes(r.state));
  $('retry-count').textContent=pending.length+' pending';$('retry-summary').textContent=`${pending.filter(r=>r.state==='running').length} active · ${pending.filter(r=>r.state!=='running').length} waiting · ${attention.length} need attention · ${recovered.length} recovered`;
  const retryStatus=r=>r.state==='completed'?'completed':r.state==='running'?'running':['blocked','exhausted'].includes(r.state)?'failed':'queued';

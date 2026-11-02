@@ -9,7 +9,7 @@ GPU_FIELDS = 'pci_id vendor name backend utilization_percent utilization_basis m
 
 
 def project_interfaces(rows):
-    fields='name ifindex state status sampled_at window_seconds rx_mbps tx_mbps network_mbps link_speed_mbps link_rx_mbps link_tx_mbps link_duplex'
+    fields='name ifindex state status sampled_at window_seconds rx_mbps tx_mbps network_mbps link_speed_mbps link_rx_mbps link_tx_mbps link_duplex rx_utilization_percent tx_utilization_percent last_link_change_at rx_errors_total rx_errors_delta tx_errors_total tx_errors_delta rx_dropped_total rx_dropped_delta tx_dropped_total tx_dropped_delta rx_crc_errors_total rx_crc_errors_delta carrier_changes_total carrier_changes_delta carrier_down_count_total carrier_down_count_delta carrier_up_count_total carrier_up_count_delta'
     return [{key:deepcopy(row[key]) for key in fields.split() if key in row} for row in rows[:32]]
 
 

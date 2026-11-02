@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Renewable, authenticated execution for private WGS worker stages."""
 import json
+import re
 import shutil
 from pathlib import Path
 import subprocess
@@ -22,13 +23,14 @@ def cleanup_container(host,name):
     return inspected.returncode==1 and ('No such object:' in inspected.stderr or 'No such container:' in inspected.stderr)
 
 
-def leased_run(host,image,command,mounts,work,cpus,memory_mb,report,wait_for_capacity=False,on_admitted=None):
-    """All Docker CPU/RAM bounds exactly match the acquired signed lease."""
+def leased_run(host,image,command,mounts,work,cpus,memory_mb,report,wait_for_capacity=False,on_admitted=None,tmpfs=None):
+    """Docker RAM, including bounded tmpfs scratch, fits the acquired lease."""
     lease=uuid.uuid4().hex;name='genomics-'+lease
     client=AgentClient(host);done=threading.Event();errors=[];process=None
     try:
         status=client.call('status')
-        if not distributed.eligible(status) or status.get('machine')!=host['machine']:raise RuntimeError('Worker identity/policy changed')
+        if status.get('machine')!=host['machine']:raise RuntimeError('Worker identity changed')
+        if not distributed.eligible(status):raise distributed.CapacityWait('Worker is declining new work')
         if 'renewable-resources' not in status.get('capabilities',[]):raise RuntimeError('Renewable leases unavailable')
         capacity=client.call('resource.capacity',{'group':GROUP})
         if not wait_for_capacity and (capacity['available_mb']<memory_mb or capacity.get('available_cpus',0)<cpus):raise distributed.CapacityWait('Insufficient current signed capacity')
@@ -62,11 +64,15 @@ def leased_run(host,image,command,mounts,work,cpus,memory_mb,report,wait_for_cap
             finally:other.close()
         if 'docker-workers' not in status.get('capabilities',[]):threading.Thread(target=renew,daemon=True).start()
         argv=['docker','run','--pull=never','--name',name,'--label','org.lifetech.genomics=true','--label','org.lifetech.worker=true','--label','org.lifetech.job='+name.removeprefix('genomics-'),'--label','org.lifetech.group='+GROUP,'--network','none','--read-only','--log-driver','none','--cpus',str(cpus),'--memory',str(memory_mb)+'m','--memory-swap',str(memory_mb)+'m','--pids-limit','32','--cap-drop','ALL','--security-opt','no-new-privileges','--ulimit','core=0:0','--ulimit','nofile=65536:65536','--user',host.get('container_user','1000:1000'),'-e','TMPDIR=/work/tmp','-w','/work']
+        for target,size_mb in (tmpfs or {}).items():
+            if not re.fullmatch(r'/[a-zA-Z0-9_/-]+',target) or type(size_mb) is not int or not 0<size_mb<memory_mb:
+                raise ValueError('Invalid bounded RAM scratch mount')
+            argv+=['--tmpfs',target+':rw,nosuid,nodev,noexec,size='+str(size_mb)+'m,mode=1777']
         for source,target,readonly in mounts:
             argv+=['--mount','type=bind,src='+str(source)+',dst='+target+(',readonly' if readonly else '')]
         argv +=[image,'bash','-o','pipefail','-c',command]
         report.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
-        atomic_json(report,{'phase':'running','host':host['host'],'container':name,'lease_id':lease,'cpus':cpus,'memory_mb':memory_mb,'started':stamp(),'command':command,'image':image})
+        atomic_json(report,{'phase':'running','host':host['host'],'container':name,'lease_id':lease,'cpus':cpus,'memory_mb':memory_mb,'started':stamp(),'command':command,'image':image,'ram_scratch_mounts':tmpfs or {}})
         with report.with_suffix('.stdout').open('wb') as stdout,report.with_suffix('.stderr').open('wb') as stderr:
             process=subprocess.Popen(distributed.shell_command(host,argv),stdout=stdout,stderr=stderr)
             code=process.wait()
@@ -78,7 +84,11 @@ def leased_run(host,image,command,mounts,work,cpus,memory_mb,report,wait_for_cap
                 detail={k:state.get(k) for k in ('Status','ExitCode','OOMKilled','Error','FinishedAt')}
             except (OSError,ValueError,subprocess.SubprocessError):
                 detail={'inspection':'unavailable'}
-        result={'phase':'complete' if code==0 and not errors else 'failed','host':host['host'],'container':name,'exit_code':code,'finished':stamp(),'command':command,'image':image,'container_state':detail,'lease_errors':errors}
+        owner_paused=False
+        if code or errors:
+            try:owner_paused=client.call('worker.policy').get('accepting_jobs') is False
+            except (OSError,RuntimeError,ValueError):pass
+        result={'phase':'interrupted' if owner_paused else 'complete' if code==0 and not errors else 'failed','host':host['host'],'container':name,'exit_code':code,'finished':stamp(),'command':command,'image':image,'container_state':detail,'lease_errors':errors,'ram_scratch_mounts':tmpfs or {}}
         attempt=report.parent/'attempts'/(report.stem+'-'+name)
         attempt.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
         result['attempt_report']=str(attempt.with_suffix('.json'))
@@ -87,6 +97,9 @@ def leased_run(host,image,command,mounts,work,cpus,memory_mb,report,wait_for_cap
             shutil.copyfile(report.with_suffix(suffix),attempt.with_suffix(suffix))
         atomic_json(report,result)
         if code or errors:
+            # Owner stop/pause is a scheduling event, not a bad input or failed assay.
+            if owner_paused:
+                raise distributed.CapacityWait('Owner paused worker; requeue interrupted stage')
             raise RuntimeError('Worker stage failed: exit='+str(code)+' OOM='+str(detail.get('OOMKilled','unknown'))+'; evidence '+str(attempt.with_suffix('.json')))
     finally:
         done.set()
@@ -175,33 +188,61 @@ def copy_receipt(source,destination,receipt,resume=False):
         if not 0<=offset<=receipt['bytes']:raise ValueError('Invalid partial transfer size')
     writer="""import hashlib,json,os,pathlib,sys,time
 path=pathlib.Path(sys.argv[1]);size=int(sys.argv[2]);expected=sys.argv[3]
+metadata=json.loads(sys.argv[5]) if len(sys.argv)>5 else {};started=time.monotonic();last=started;last_bytes=0
+progress=pathlib.Path.home()/'.local/state/lifetech-launcher/transfers'/metadata.get('id','unattributed')
+progress=progress.with_suffix('.json')
+try:progress.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+except OSError:progress=None
+def publish(status,count,offset=0,force=False):
+ global last,last_bytes
+ now=time.monotonic();sent=max(0,count-offset)
+ if progress is None or not force and now-last<1:return
+ elapsed=max(.000001,now-started)
+ row={**metadata,'status':status,'sampled_at':time.time(),'completed_bytes':count,'total_bytes':size,'transferred_bytes':sent,'bytes_per_second':max(0,sent-last_bytes)/max(.000001,now-last) if status=='running' else 0,'average_bytes_per_second':sent/elapsed,'elapsed_seconds':elapsed}
+ try:
+  tmp=progress.with_suffix('.tmp');tmp.write_text(json.dumps(row));tmp.chmod(0o600);tmp.replace(progress)
+ except OSError:return
+ last=now;last_bytes=sent
+publish('preparing',0,force=True)
 path.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
 if path.exists() and path.stat().st_size==size:
  h=hashlib.sha256()
  with path.open('rb') as s:
   for block in iter(lambda:s.read(8388608),b''):h.update(block)
- if h.hexdigest()==expected:sys.exit(0)
+ if h.hexdigest()==expected:publish('cached',size,size,force=True);sys.exit(0)
 partial=path.with_suffix(path.suffix+'.partial');h=hashlib.sha256();n=0;offset=int(sys.argv[4])
 if offset:
  if not partial.exists() or partial.stat().st_size!=offset:raise RuntimeError('Partial transfer changed before resume')
  with partial.open('rb') as prefix:
   for block in iter(lambda:prefix.read(8388608),b''):h.update(block);n+=len(block)
+started=last=time.monotonic()
+publish('running',n,offset,force=True)
 with partial.open('ab' if offset else 'wb') as s:
- while block:=sys.stdin.buffer.read(8388608):
+ while block:=sys.stdin.buffer.read(1048576):
   n+=len(block)
   if n>size:raise RuntimeError('Read transfer exceeded declared size')
-  h.update(block);s.write(block)
-if n!=size or h.hexdigest()!=expected:
+  h.update(block);s.write(block);publish('running',n,offset)
+if n!=size:
+ publish('interrupted',n,offset,force=True)
+ raise ConnectionError('Read transfer incomplete; partial retained for final full-checksum validation on resume')
+if h.hexdigest()!=expected:
+ publish('failed',n,offset,force=True)
  partial.rename(partial.with_name(partial.name+'.mismatch-'+str(time.time_ns())))
  raise RuntimeError('Read transfer SHA256 mismatch')
 partial.chmod(0o600);partial.replace(path)
+publish('complete',n,offset,force=True)
+# Keep bounded recent operational receipts; never retain genomic paths here.
+if progress is not None:
+ try:
+  for old in sorted(progress.parent.glob('*.json'),key=lambda p:p.stat().st_mtime)[:-512]:old.unlink(missing_ok=True)
+ except OSError:pass
 """
     reader="import shutil,sys;s=open(sys.argv[1],'rb');s.seek(int(sys.argv[2]));shutil.copyfileobj(s,sys.stdout.buffer,8388608)"
     source_command=['python3','-c',reader,receipt['path'],str(offset)] if offset else ['cat','--',receipt['path']]
     producer=subprocess.Popen(distributed.shell_command(source,source_command),stdout=subprocess.PIPE,stderr=subprocess.PIPE)
     consumer=None
     try:
-        consumer=subprocess.Popen(distributed.shell_command(destination,['python3','-c',writer,target,str(receipt['bytes']),receipt['sha256'],str(offset)]),stdin=producer.stdout,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+        consumer=subprocess.Popen(distributed.shell_command(destination,['python3','-c',writer,target,str(receipt['bytes']),receipt['sha256'],str(offset),json.dumps({'id':uuid.uuid4().hex,'task_id':receipt.get('task_id') if isinstance(receipt.get('task_id'),str) and re.fullmatch(r'[A-Za-z0-9_-]{1,100}',receipt['task_id']) else None,'source':source['host'],'destination':destination['host']})]),stdin=producer.stdout,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
         producer.stdout.close()
         # Large verified genomes can take hours on a healthy LAN. SSH keepalives
         # detect broken transports; total elapsed time is not a transfer failure.
