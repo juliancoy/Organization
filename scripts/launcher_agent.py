@@ -210,7 +210,12 @@ class ResourceLease:
     def try_acquire(self):
         with self.guard():
             if self.row['active']:return True
-            limits=self.capacity();rows=self.rows();active=[r for r in rows if r['active']]
+            try:limits=self.capacity();rows=self.rows()
+            except subprocess.TimeoutExpired:
+                # Unknown Docker state cannot admit work, but is not a failed job.
+                # Keep the queued reservation and retry when the daemon responds.
+                return False
+            active=[r for r in rows if r['active']]
             keys=('cpus','memory_mb')+(('pids',) if 'pids' in limits else ())
             free={k:limits[k]-sum(r.get(k,512) for r in active) for k in keys}
             free['memory_mb']=max(0,min(limits['memory_mb'],limits.get('available_mb',limits['memory_mb']))-sum(r['memory_mb'] for r in active))

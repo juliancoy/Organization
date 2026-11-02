@@ -73,3 +73,24 @@ class NetworkEvidenceTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+
+def test_browser_admission_retries_authenticated_docker_inspection_timeout(monkeypatch,tmp_path):
+    import agent_client
+    import p2p_network
+    starts=[]
+    class Client:
+        def __init__(self,host):pass
+        def upload(self,*args):return 'upload-id'
+        def call(self,op,args,**kwargs):
+            if op=='p2p.start':
+                starts.append(args)
+                if len(starts)==1:raise RuntimeError("TimeoutExpired: Command ['docker', 'inspect', 'worker'] timed out")
+                return {'started':True}
+            if op=='p2p.webdriver':return {'value':{'ready':True}}
+    monkeypatch.setattr(agent_client,'AgentClient',Client)
+    monkeypatch.setattr(p2p_network.time,'sleep',lambda _:None)
+    monkeypatch.setattr(p2p_network,'Browser',lambda *a:__import__('types').SimpleNamespace(version='fixture'))
+    network=NetworkP2P([], 'test-run');network.report['browser_images']={'peer':{p2p_network.IMAGE:'sha256:pinned'}}
+    network.prepare({'host':'peer'},tmp_path/'fixture.tgz')
+    assert len(starts)==2 and starts[0]==starts[1]

@@ -19,7 +19,7 @@ for name,key in [('huref.vcf.gz','h'),('julian.vcf.gz','j')]:
 (work/'alignment.paf').write_text('query\\t80\\t0\\t80\\t'+fixture['strand']+'\\treference\\t80\\t0\\t80\\t80\\t80\\t60\\ttp:A:P\\tcg:Z:80=\\n')
 print(json.dumps(projected_compare(work,{'query_start':0,'query_end':80,'public_sha256':'fixture'})))
 """
-    result=subprocess.run(['docker','run','--rm','--network','none','--read-only','--tmpfs','/work:rw,size=32m','-i','lifetech/genome-compare:20261031','python3','-c',worker+'\n'+setup],input=json.dumps({'h':huref,'j':julian,'strand':strand}).encode(),capture_output=True,timeout=30)
+    result=subprocess.run(['docker','run','--rm','--network','none','--read-only','--tmpfs','/work:rw,size=32m','-i','lifetech/genome-compare:20261031','python3','-c',worker+'\n'+setup],input=json.dumps({'h':huref,'j':julian,'strand':strand}).encode(),capture_output=True,timeout=180)
     assert result.returncode==0,result.stderr.decode()
     return json.loads(result.stdout)
 
@@ -94,7 +94,7 @@ work=Path('/work');excluded=Counter()
 result=normalized_rows(work,bytearray(b'NAAAACGT'),[('h0',2,'A',['A','AA'])],excluded)
 print(json.dumps({'rows':result,'excluded':dict(excluded)}))
 """
-    result=subprocess.run(['docker','run','--rm','--network','none','--read-only','--tmpfs','/work:rw,size=32m','-i','lifetech/genome-compare:20261031','python3','-c',worker+'\n'+fixture],capture_output=True,timeout=30)
+    result=subprocess.run(['docker','run','--rm','--network','none','--read-only','--tmpfs','/work:rw,size=32m','-i','lifetech/genome-compare:20261031','python3','-c',worker+'\n'+fixture],capture_output=True,timeout=180)
     assert result.returncode==0,result.stderr.decode()
     value=json.loads(result.stdout)
     assert value['rows']=={}

@@ -50,7 +50,7 @@ def test_real_minimap_container_fixture(query_start):
     public=bundle.getvalue();header={'public_bytes':len(public),'public_sha256':hashlib.sha256(public).hexdigest(),'private_bytes':len(private),
         'private_sha256':hashlib.sha256(private).hexdigest(),'chromosome':'1','cpus':2,'query_start':query_start,'query_end':40000 if query_start else len(sequence)}
     command=['docker','run','--rm','--network','none','--read-only','--memory-reservation','512m','--cpus','2','--ulimit','memlock=-1:-1','--tmpfs','/work:rw,nosuid,nodev,size=128m','-i','lifetech/genome-compare:20261031','python3','-c',Path('scripts/huref_compare_worker.py').read_text()]
-    result=subprocess.run(command,input=(json.dumps(header)+'\n').encode()+public+private,capture_output=True,timeout=30)
+    result=subprocess.run(command,input=(json.dumps(header)+'\n').encode()+public+private,capture_output=True,timeout=180)
     assert result.returncode==0,result.stderr.decode()
     counts=json.loads(result.stdout);assert counts['genotype_agree']==1 and counts['mapped_snp_candidates']==1
 

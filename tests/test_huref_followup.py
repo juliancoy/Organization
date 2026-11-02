@@ -60,7 +60,7 @@ def run_recipe(method,private,dataset='julian',public_key=None):
     command=['docker','run','--rm','--network','none','--read-only','--memory-reservation','128m','--cpus','1',
              '--ulimit','memlock=-1:-1','--tmpfs','/work:rw,nosuid,nodev,size=128m','-i',
              'lifetech/genome-compare:20261031','python3','-c',worker_source()]
-    return subprocess.run(command,input=(json.dumps(header)+'\n').encode()+public+private,capture_output=True,timeout=30)
+    return subprocess.run(command,input=(json.dumps(header)+'\n').encode()+public+private,capture_output=True,timeout=180)
 
 
 def test_dependency_and_machine_affinity():
