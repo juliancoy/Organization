@@ -76,7 +76,7 @@ class Browser:
     def __init__(self,base,transport=None):
         self.base=base;self.transport=transport;self.session=None
         value=self.call('/session',{'capabilities':{'alwaysMatch':{'browserName':'chrome','goog:chromeOptions':{'args':[
-            '--headless=new','--host-resolver-rules=MAP localhost 127.0.0.2','--no-sandbox','--disable-dev-shm-usage','--disable-features=WebRtcHideLocalIpsWithMdns',
+            '--headless=new','--disable-gpu','--host-resolver-rules=MAP localhost 127.0.0.2','--no-sandbox','--disable-dev-shm-usage','--disable-features=WebRtcHideLocalIpsWithMdns',
             '--force-webrtc-ip-handling-policy=default_public_and_private_interfaces']}}}})
         self.session=value['sessionId'];self.version=value['capabilities']['browserVersion']
         self.command('/timeouts',{'script':120000,'pageLoad':120000})
