@@ -236,3 +236,5 @@
 # RAM-bounded, resumable whole-genome finalization.
 !/scripts/julian_finalize.py
 !/tests/test_julian_finalize.py
+
+!tests/test_worker_event_journal.py
