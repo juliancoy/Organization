@@ -219,8 +219,16 @@ class NetworkP2P:
         def stop(resource):
             # Removing the owned container also closes its browser session.
             # A dead WebDriver must not add a session timeout before removal.
-            try:resource['client'].call('p2p.stop',{'id':self.ident},timeout=10)
-            except Exception:return resource['host']['host']
+            # Removal is idempotent. A timed-out acknowledgement must be
+            # retried on a fresh connection before claiming cleanup failed.
+            for attempt in range(2):
+                try:
+                    result=resource['client'].call('p2p.stop',{'id':self.ident},timeout=40)
+                    if result.get('acknowledged') is not True:raise RuntimeError('Cleanup not acknowledged')
+                    return
+                except Exception:
+                    resource['client'].close()
+            return resource['host']['host']
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(1,len(self.resources))) as pool:
             errors=[host for host in pool.map(stop,self.resources) if host]
         if errors:self.report.setdefault('cleanup_errors',[]).extend(errors)

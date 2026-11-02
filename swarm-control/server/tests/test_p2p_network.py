@@ -11,10 +11,12 @@ class NetworkEvidenceTests(unittest.TestCase):
     def test_cleanup_removes_owned_containers_concurrently_even_if_one_fails(self):
         network=NetworkP2P([], 'run')
         barrier=threading.Barrier(2)
-        def stop(*args,**kwargs):barrier.wait(timeout=2)
+        def stop(*args,**kwargs):barrier.wait(timeout=2);return {'acknowledged':True}
         healthy=Mock();healthy.call.side_effect=stop
+        attempts=[]
         def offline(*args,**kwargs):
-            barrier.wait(timeout=2)
+            if not attempts:barrier.wait(timeout=2)
+            attempts.append(1)
             raise OSError('offline')
         dead=Mock();dead.call.side_effect=offline
         browsers=[Mock(),Mock()]
@@ -22,9 +24,18 @@ class NetworkEvidenceTests(unittest.TestCase):
                            for name,client,browser in zip(['healthy','dead'],[healthy,dead],browsers)]
         network.cleanup()
         self.assertEqual(network.report['cleanup_errors'],['dead'])
-        for client,browser in zip([healthy,dead],browsers):
-            client.call.assert_called_once_with('p2p.stop',{'id':'run'},timeout=10)
-            browser.close.assert_not_called()
+        healthy.call.assert_called_once_with('p2p.stop',{'id':'run'},timeout=40)
+        self.assertEqual(dead.call.call_count,2)
+        for browser in browsers:browser.close.assert_not_called()
+
+    def test_cleanup_retries_an_uncertain_acknowledgement_without_losing_success(self):
+        client=Mock();client.call.side_effect=[TimeoutError('slow removal'),{'acknowledged':True}]
+        network=NetworkP2P([], 'run')
+        network.resources=[{'host':{'host':'peer'},'client':client,'browser':None}]
+        network.cleanup()
+        self.assertNotIn('cleanup_errors',network.report)
+        self.assertEqual(client.call.call_count,2)
+        client.close.assert_called_once()
 
     def fixture(self):
         participants=[{'host':'a.local','machine':'machine-a','peer':'a','addresses':['10.42.0.10']},
