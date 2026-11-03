@@ -20,6 +20,21 @@ class DependencySetupTests(unittest.TestCase):
                 self.assertEqual({call.args[3]['cwd'] for call in run.call_args_list},
                                  {'OrgPortal/chat-worker','OrgPortal/org-worker'})
 
+    def test_only_bundle_stages_public_data_with_sufficient_memory(self):
+        with tempfile.TemporaryDirectory() as folder:
+            setup=Dependencies(Path(folder),{'id':'run'}, {})
+            spec={'base':'web','image':'immutable-node','cwd':'OrgPortal/web','memory_mb':1024}
+            with patch('granular_worker.run',return_value=0) as run, patch('granular_worker.emit'):
+                self.assertEqual(setup.ensure('web--unit',spec),0)
+                self.assertEqual(run.call_count,2)
+                self.assertEqual(setup.ensure('web--build-bundle',spec),0)
+                self.assertEqual(run.call_count,3)
+                staging=run.call_args.args[3]
+                self.assertEqual(staging['memory_mb'],3072)
+                self.assertIn('scripts/stage-ecosystem-build.mjs',staging['prepare'])
+                self.assertEqual(setup.ensure('web--build-bundle',spec),0)
+                self.assertEqual(run.call_count,3)
+
     def test_failed_install_is_reported_to_every_dependent_file(self):
         with tempfile.TemporaryDirectory() as folder:
             setup=Dependencies(Path(folder),{'id':'run'}, {})
