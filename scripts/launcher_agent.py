@@ -21,6 +21,21 @@ import time
 import urllib.request
 import urllib.error
 
+def required_test_repositories(suites, jobs=None):
+    """Select only reviewed application source dependencies for an owned suite."""
+    application={'org-api':('OrgPortal',),'chat':('OrgPortal',),'web':('OrgPortal',),
+                 'visual':('OrgPortal',),'identity':('PIdP',),'identity-python':('PIdP',),
+                 'usajobs':('CodeCollective',),'lifetech':('BmoreMedTech','OrgPortal')}
+    known=set(application)|{'monitor','map','workspace','p2p','swarm-web'}
+    needed={'.'}
+    for suite in suites:
+        suite=suite.split('--',1)[0]
+        if suite not in known:raise ValueError('Unknown suite source requirements: '+suite)
+        if (jobs or {}).get(suite,{}).get('status')=='reused':continue
+        needed.update(application.get(suite,()))
+    return needed
+
+
 def sha256_stream(stream):
     """Keep hashing available in the standalone worker bundle on Python 3.10."""
     digest=hashlib.sha256()
@@ -1692,15 +1707,7 @@ class Agent:
         target=next(host for host in manifest['hosts'] if host['host']==json.loads(self.config.read_text())['name'])
         # The runner always comes from Organization; application repositories are
         # selected by the actual shard, not by the whole fleet's manifest.
-        application={'org-api':'OrgPortal','chat':'OrgPortal','web':'OrgPortal',
-                     'visual':'OrgPortal','identity':'PIdP','identity-python':'PIdP','usajobs':'CodeCollective'}
-        known=set(application)|{'monitor','map','workspace','p2p','swarm-web'}
-        needed={'.'}
-        for suite in target['suites']:
-            suite=suite.split('--',1)[0]
-            if suite not in known:raise ValueError('Unknown suite source requirements: '+suite)
-            if target.get('jobs',{}).get(suite,{}).get('status')=='reused':continue
-            if suite in application:needed.add(application[suite])
+        needed=required_test_repositories(target['suites'],target.get('jobs'))
         cache_root=self.root/'git-cache'
         cache_root.mkdir(exist_ok=True,mode=0o700)
 
