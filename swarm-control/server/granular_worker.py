@@ -59,7 +59,7 @@ class Dependencies:
                         if package in ('chat', 'org-api', 'identity'):
                             command += ' && npm run build:metadata'
                         if package == 'web':
-                            command += ' && npm run prebuild'
+                            command += ' && npm run prebuild && node scripts/stage-ecosystem-build.mjs /work/.ecosystem-build-snapshot.json'
                         setup['prepare'] = ['sh', '-c', command]
                     else:
                         setup['prepare'] = SUITES[package].get('prepare')
