@@ -1630,7 +1630,7 @@ class Agent:
             repositories=manifest.get('repositories',{})
             if not {'.','OrgPortal','PIdP','CodeCollective'}.issubset(repositories) or len(repositories)>24:raise ValueError('Expected the application GitHub repositories and bounded submodules')
             for name in repositories:
-                if name not in ('.','OrgPortal','PIdP','CodeCollective') and (Path(name).is_absolute() or '..' in Path(name).parts or not name.startswith(('OrgPortal/','PIdP/','CodeCollective/'))):raise ValueError('Invalid nested repository path')
+                if name not in ('.','OrgPortal','PIdP','CodeCollective','BmoreMedTech') and (Path(name).is_absolute() or '..' in Path(name).parts or not name.startswith(('OrgPortal/','PIdP/','CodeCollective/','BmoreMedTech/'))):raise ValueError('Invalid nested repository path')
             for repo in repositories.values():
                 if not re.fullmatch(r'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.git',repo.get('url','')) or not re.fullmatch('[a-f0-9]{40}',repo.get('commit','')):raise ValueError('Invalid GitHub repository or commit')
             refs={name:{key:repo[key] for key in ('url','commit')} for name,repo in repositories.items()}
