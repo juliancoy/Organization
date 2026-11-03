@@ -9,6 +9,13 @@ import time
 from distributed_worker import SUITES, emit, run, clean, prepare_package
 
 
+def check_command(spec):
+    command=['npm','--ignore-scripts','run',spec['check']]
+    if spec.get('base')=='web' and spec['check']=='build:bundle':
+        return ['env','ORGPORTAL_ECOSYSTEM_BUILD_SNAPSHOT=/work/.ecosystem-build-snapshot.json',*command]
+    return command
+
+
 def capacity():
     memory = {}
     for line in Path('/proc/meminfo').read_text().splitlines():
@@ -106,6 +113,8 @@ def execute(work, manifest, target, env, specs):
         timings={'waiting_for_dependencies':0.0,'prepare':0.0}
         try:
             code = preparation.results[spec.get('base',task)] if preparation else dependencies.ensure(task, spec, timings)
+            if not code and task == 'web--build-bundle':
+                code=dependencies.ensure(task,spec,timings)
             if not code:
                 if spec.get('base') == 'web' and spec.get('file'):
                     # Vitest CLI paths are substring filters; an exact include
@@ -117,7 +126,7 @@ def execute(work, manifest, target, env, specs):
                                       json.dumps([spec['file']])+",maxWorkers:1}};\n")
                 if spec.get('check'):
                     # Metadata was generated in setup; don't rewrite it under readers.
-                    spec['test'] = ['npm', '--ignore-scripts', 'run', spec['check']]
+                    spec['test'] = check_command(spec)
                 testing=time.monotonic()
                 try:code = run(work, task, 'test', spec, manifest['id'], env)
                 finally:timings['test']=time.monotonic()-testing

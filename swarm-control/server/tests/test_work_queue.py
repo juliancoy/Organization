@@ -47,7 +47,7 @@ class FileQueueTests(unittest.TestCase):
         self.assertIn('web--build-bundle', tasks)
         self.assertIn('web--typecheck', tasks)
         self.assertEqual(specs['web--build-bundle']['check'], 'build:bundle')
-        self.assertEqual(specs['web--build-bundle']['test'], ['sh', '-c', 'ORGPORTAL_ECOSYSTEM_BUILD_SNAPSHOT=/work/.ecosystem-build-snapshot.json npm run build:bundle'])
+        self.assertEqual(specs['web--build-bundle']['test'], ['npm', 'run', 'build:bundle'])
         self.assertEqual(specs['web--typecheck']['test'], ['npm', 'run', 'typecheck'])
         self.assertIn('org-api--check-bundle', tasks)
         frontend = next(specs[t] for t in tasks if specs[t].get('file') == 'src/root.test.ts')

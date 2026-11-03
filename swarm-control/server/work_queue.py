@@ -69,8 +69,6 @@ def catalog(root, specs, repositories=None, bases=None):
             specs[ident] = {**specs[base], 'base': base, 'check': check,
                             'test': ['npm', 'run', check], 'name': specs[base]['name'] + ' · ' + check,
                             'cpus': 2, 'memory_mb': 1536 if base == 'web' and check == 'typecheck' else 3072}
-            if base == 'web' and check == 'build:bundle':
-                specs[ident]['test']=['sh','-c','ORGPORTAL_ECOSYSTEM_BUILD_SNAPSHOT=/work/.ecosystem-build-snapshot.json npm run build:bundle']
             tasks.append(ident)
     whole=[base for base,spec in list(specs.items()) if '--' not in base and base not in FILES and not spec.get('coordinated')]
     for base in whole:specs[base].update(base=base,cpus=2,memory_mb=3072 if base=='visual' else 1536)

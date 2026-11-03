@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from granular_worker import Dependencies, capacity
+from granular_worker import Dependencies, capacity, check_command
 
 
 class DependencySetupTests(unittest.TestCase):
@@ -53,3 +53,8 @@ class CapacityTests(unittest.TestCase):
             with patch('granular_worker.os.sched_getaffinity',return_value=set(range(32))):
                 self.assertEqual(capacity()['cpus'],4)
                 self.assertEqual(capacity()['memory_mb'],7168)
+
+
+def test_bundle_execution_keeps_offline_snapshot_and_suppresses_metadata_rewrites():
+    assert check_command({'base':'web','check':'build:bundle'})==['env','ORGPORTAL_ECOSYSTEM_BUILD_SNAPSHOT=/work/.ecosystem-build-snapshot.json','npm','--ignore-scripts','run','build:bundle']
+    assert check_command({'base':'web','check':'typecheck'})==['npm','--ignore-scripts','run','typecheck']
