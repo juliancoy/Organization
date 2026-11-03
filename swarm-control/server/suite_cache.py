@@ -8,6 +8,7 @@ import subprocess
 COMMON=('docker_utils/','swarm-control/server/distributed_worker.py','swarm-control/server/suite_cache.py','swarm-control/server/work_queue.py','swarm-control/server/granular_worker.py','swarm-control/server/worker_preparation.py','swarm-control/server/granular_dispatch.py','swarm-control/server/agent_updates.py','swarm-control/server/snapshot_staging.py','swarm-control/server/visual_artifacts.py',
         'scripts/launcher_agent.py','scripts/launcher_registry.py','requirements.txt','pyproject.toml')
 INPUTS={
+ 'lifetech':{'BmoreMedTech':('*',),'OrgPortal':('*',)},
  'swarm-web':{'.':('swarm-control/server/view/','swarm-control/server/scripts/','swarm-control/package.json','swarm-control/package-lock.json')},
  'monitor':{'.':('swarm-control/server/*.py','swarm-control/server/requirements*.txt','swarm-control/server/tests/')},
  'map':{'.':('swarm-control/server/*.js','swarm-control/server/view/','swarm-control/server/package.json','swarm-control/server/package-lock.json','swarm-control/server/tests/*.js')},

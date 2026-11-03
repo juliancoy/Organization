@@ -2,7 +2,7 @@
 from pathlib import PurePosixPath
 from work_queue import FILES
 
-BASES = set(FILES) | {'visual', 'p2p', 'mobile','swarm-web','gpu'}
+BASES = set(FILES) | {'visual', 'p2p', 'mobile','swarm-web','gpu','lifetech'}
 
 
 def normalize(paths=None, suites=None):
