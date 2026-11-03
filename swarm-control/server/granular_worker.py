@@ -45,7 +45,9 @@ class Dependencies:
             'web': ['org-api', 'web'], 'visual': ['org-api', 'web'],
             'identity': ['identity'],
         }
-        for package in packages.get(base, [base]):
+        required=list(packages.get(base, [base]))
+        if task == 'web--build-bundle':required.append('ecosystem-build')
+        for package in required:
             with self.guard:
                 lock = self.locks.setdefault(package, threading.Lock())
             emit('phase', suite=task, phase='waiting_for_dependencies')
@@ -53,14 +55,17 @@ class Dependencies:
             with lock:
                 timings['waiting_for_dependencies']=timings.get('waiting_for_dependencies',0)+time.monotonic()-waiting
                 if package not in self.results:
-                    setup = {**spec, 'cwd': SUITES[package]['cwd']}
+                    setup = {**spec, 'cwd': SUITES['web' if package=='ecosystem-build' else package]['cwd']}
                     if package in ('chat', 'org-api', 'web', 'identity'):
                         command = 'npm ci --no-audit --no-fund'
                         if package in ('chat', 'org-api', 'identity'):
                             command += ' && npm run build:metadata'
                         if package == 'web':
-                            command += ' && npm run prebuild && node scripts/stage-ecosystem-build.mjs /work/.ecosystem-build-snapshot.json'
+                            command += ' && npm run prebuild'
                         setup['prepare'] = ['sh', '-c', command]
+                    elif package == 'ecosystem-build':
+                        setup['prepare']=['node','--max-old-space-size=2048','scripts/stage-ecosystem-build.mjs','/work/.ecosystem-build-snapshot.json']
+                        setup['memory_mb']=3072
                     else:
                         setup['prepare'] = SUITES[package].get('prepare')
                     preparing=time.monotonic()
