@@ -1,7 +1,7 @@
 from pathlib import Path
 import tempfile
 import unittest
-from retry_jobs import RetryQueue,blocked,unexecuted
+from retry_jobs import RetryQueue,blocked,unexecuted,retained_parent
 from task_events import EventStore
 
 class RetryQueueTests(unittest.TestCase):
@@ -27,7 +27,24 @@ class RetryQueueTests(unittest.TestCase):
             self.assertEqual({t['state'] for t in queue.rows() if t['id'] in {r['id'] for r in tickets}},{'claiming'})
             queue.dispatched_batch([t['id'] for t in tickets],'shared-child')
             for row in queue.rows():
-                if row['id'] in {t['id'] for t in tickets}:self.assertEqual((row['state'],row['child_run']),('running','shared-child'))
+                if row['id'] in {t['id'] for t in tickets}:
+                    self.assertEqual((row['state'],row['child_run']),('running','shared-child'))
+                    self.assertIsNone(row['reason']);self.assertIsNone(row['next_due'])
+
+    def test_retained_parent_recovery_checks_pinned_identity_and_source(self):
+        import json
+        from github_sources import source_digest
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);store=EventStore(root/'db')
+            repos={'.':{'url':'https://github.com/example/repo.git','commit':'a'*40}}
+            parent={'id':'original','repositories':repos,'source_sha256':source_digest(repos)}
+            path=root/'original.json';path.write_text(json.dumps(parent))
+            self.assertEqual(retained_parent(store,root,'original'),parent)
+            self.assertEqual(store.list_runs('application-tests'),[parent])
+            path.write_text(json.dumps({**parent,'source_sha256':'changed'}))
+            with self.assertRaisesRegex(ValueError,'fingerprint'):retained_parent(store,root,'original')
+            with self.assertRaisesRegex(ValueError,'unavailable'):retained_parent(store,root,'missing')
+            with self.assertRaisesRegex(ValueError,'identity'):retained_parent(store,root,'../original')
 
     def test_batch_retries_combine_files_without_republishing_sources(self):
         from live_distributed import LiveDistributedTests
@@ -55,7 +72,7 @@ class RetryQueueTests(unittest.TestCase):
         parent={'id':'parent','repositories':repos,'source_sha256':source_digest(repos),'task_catalog':['monitor--one','monitor--two'],
                 'hosts':[{'host':'peer','jobs':{'monitor--one':{'suite':'monitor','file':'tests/one.py'}}}]}
         def catalog(root,specs,repositories):
-            self.assertEqual(repositories,repos);specs['monitor--two']={'base':'monitor','file':'tests/two.py'}
+            self.assertEqual(repositories,repos);specs['monitor--two']={'base':'monitor','file':'tests/two.py'};return ['monitor--two']
         tickets=[{'id':'parent:'+task,'task':task,'attempts':attempt} for task,attempt in [('monitor--one',1),('monitor--two',0)]]
         with patch('work_queue.catalog',side_effect=catalog):service.retry_pinned(parent,{**tickets[0],'batch':tickets})
         self.assertEqual(service.create_run.call_args.kwargs['selection']['task_ids'],['monitor--one','monitor--two'])
@@ -99,3 +116,20 @@ class RetryQueueTests(unittest.TestCase):
         parent['source_sha256']='invalid';service.create_run.reset_mock()
         with self.assertRaises(ValueError):service.retry_pinned(parent,{'task':'monitor--one','id':'t','attempts':1})
         service.create_run.assert_not_called()
+
+    def test_retry_child_catalog_does_not_erase_original_pinned_task(self):
+        from live_distributed import LiveDistributedTests
+        from github_sources import source_digest
+        from types import SimpleNamespace
+        from unittest.mock import Mock,patch
+        service=LiveDistributedTests.__new__(LiveDistributedTests);service.runner=SimpleNamespace(root='/workspace')
+        runner=SimpleNamespace(run={},save=Mock());service.create_run=Mock(return_value=runner)
+        repos={'.':{'url':'https://github.com/example/repo.git','commit':'a'*40}}
+        parent={'id':'retry-child','retry_family':'original','repositories':repos,'source_sha256':source_digest(repos),'task_catalog':['monitor--other'],'hosts':[]}
+        def catalog(root,specs,repositories):
+            specs['monitor--original']={'base':'monitor','file':'tests/original.py'}
+            return ['monitor--original']
+        with patch('work_queue.catalog',side_effect=catalog):
+            service.retry_pinned(parent,{'id':'original:monitor--original','task':'monitor--original','attempts':1})
+        self.assertEqual(runner.run['pinned_repositories'],repos)
+        self.assertEqual(service.create_run.call_args.kwargs['selection']['task_ids'],['monitor--original'])

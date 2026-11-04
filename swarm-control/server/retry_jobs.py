@@ -1,6 +1,8 @@
 """Durable bounded retries of already-published application test jobs."""
 import hashlib
 import json
+from pathlib import Path
+import re
 import time
 from task_events import EventStore,encode
 
@@ -36,7 +38,7 @@ class RetryQueue:
         self.dispatched_batch([ident],child)
     def dispatched_batch(self,idents,child):
         with self.store.connect() as db:
-            db.executemany("UPDATE retry_jobs SET state='running',child_run=?,attempts=attempts+1,updated=? WHERE id=? AND state='claiming'",[(child,time.time(),ident) for ident in idents])
+            db.executemany("UPDATE retry_jobs SET state='running',child_run=?,attempts=attempts+1,next_due=NULL,reason=NULL,updated=? WHERE id=? AND state='claiming'",[(child,time.time(),ident) for ident in idents])
     def defer(self,ident,reason):
         with self.store.connect() as db:db.execute("UPDATE retry_jobs SET state='backoff',next_due=?,reason=?,updated=? WHERE id=? AND state='claiming'",(time.time()+30,reason[:300],time.time(),ident))
     def block(self,ident,reason):
@@ -63,6 +65,22 @@ def unexecuted(parent):
     return [task for task in parent.get('pending_tasks',[]) if task in catalog and task not in passed and task.split('--',1)[0] not in ('p2p','mobile','gpu')]
 
 
+def retained_parent(store, folder, ident):
+    """Recover only the original executor's fingerprint-verified retry input."""
+    if not isinstance(ident,str) or not re.fullmatch(r'[A-Za-z0-9_-]+',ident):
+        raise ValueError('Invalid pinned parent identity')
+    try:parent=json.loads((Path(folder)/(ident+'.json')).read_text())
+    except (OSError,ValueError) as error:
+        raise ValueError('Pinned parent record unavailable; restore the retained executor record') from error
+    from github_sources import source_digest
+    if (parent.get('id')!=ident or not parent.get('repositories')
+            or parent.get('source_sha256')!=source_digest(parent['repositories'])):
+        raise ValueError('Retained pinned parent source fingerprint differs')
+    from task_event_collector import import_run
+    import_run(store,parent,'retry-parent-recovery')
+    return parent
+
+
 def run(service):
     queue=RetryQueue();store=queue.store
     # Existing historical failures are retained, not silently rerun months later.
@@ -85,7 +103,7 @@ def run(service):
                         success=any(j.get('status') in ('passed','reused') for j in jobs)
                         # A worker can fail before receiving the selected task.
                         # Such a child cannot describe the next pinned retry.
-                        queue.finish(row['id'],success,any(blocked(j) for j in jobs),None if success else 'Retry failed; history retained',parent_run=child['id'] if jobs else None)
+                        queue.finish(row['id'],success,any(blocked(j) for j in jobs),None if success else 'Retry failed; history retained')
                         store.append(row['parent_run'],'retry-system','retry-completed' if success else 'retry-failed',{'task':row['task'],'child_run':child['id'],'attempt':row['attempts']},'retry-result:'+child['id']+':'+row['task'])
             for parent in records.values():
                 if not parent.get('finished') or parent.get('retry_family') or not parent.get('repositories') or parent.get('stop_requested'):continue
@@ -104,7 +122,7 @@ def run(service):
                     ticket={**tickets[0],'batch':tickets}
                     try:
                         parent=records.get(ticket['parent_run'])
-                        if not parent:raise RuntimeError('Pinned parent record unavailable')
+                        if not parent:parent=retained_parent(store,service.runner.folder,ticket['parent_run'])
                         runner=service.retry_pinned(parent,ticket)
                         queue.dispatched_batch([t['id'] for t in tickets],runner.run['id'])
                         store.append(parent['id'],'retry-system','retry-dispatched',{'tasks':[t['task'] for t in tickets],'child_run':runner.run['id'],'batch_size':len(tickets)})

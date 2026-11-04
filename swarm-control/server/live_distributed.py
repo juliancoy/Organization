@@ -139,12 +139,12 @@ class LiveDistributedTests:
         specs=None
         def recover(ident):
             nonlocal specs
-            if ident not in parent.get('task_catalog',[]):raise ValueError('Pinned failed task no longer exists')
             if specs is None:
                 from work_queue import catalog
                 from distributed_worker import SUITES
-                specs=copy.deepcopy(SUITES);catalog(self.runner.root,specs,parent['repositories'])
-            if ident not in specs:raise ValueError('Pinned failed task no longer exists')
+                specs=copy.deepcopy(SUITES);published=catalog(self.runner.root,specs,parent['repositories'])
+                specs={key:specs[key] for key in published}
+            if ident not in specs:raise ValueError('Pinned task '+ident+' is absent from source '+parent.get('source_sha256','unknown'))
             spec=specs[ident]
             return {'suite':spec.get('base',ident),'file':spec.get('file'),'check':spec.get('check')}
         matches=[(h,j) for h in parent.get('hosts',[]) for key,j in h.get('jobs',{}).items() if key==task]

@@ -37,9 +37,9 @@ SUITES = {
                 'prepare': ['npm', 'install', '--prefix', '/work/.test-deps/usajobs', '--no-save',
                             '--package-lock=false', '--ignore-scripts', 'playwright@1.59.1'],
                 'test': ['node', '--test', 'tests/usajobs-mobile.test.cjs']},
-    'lifetech': {'name': 'LifeTech and MedTech homepage', 'cwd': 'BmoreMedTech', 'image': NODE,
+    'lifetech': {'name': 'LifeTech and MedTech homepage', 'cwd': 'BmoreMedTech', 'image': BROWSER,
                  'prepare': ['npm', 'ci', '--no-audit', '--no-fund'],
-                 'test': ['sh', '-c', 'node --test scripts/*.test.mjs && npm run build:lifetech && npx vite build']},
+                 'test': ['sh', '-c', 'export CHROME_BIN=$(find /ms-playwright -path "*/chrome-linux*/chrome" -type f | head -n 1); node --test scripts/*.test.mjs && npm run build:lifetech && npx vite build']},
     'org-api': {'name': 'Organization API', 'cwd': 'OrgPortal/org-worker', 'image': NODE,
                 'prepare': ['sh', '-c', 'npm ci --prefix ../chat-worker --omit=dev --no-audit --no-fund && npm ci --no-audit --no-fund'],
                 'test': ['sh', '-c', 'npm test && npm run typecheck && npm run check:bundle']},
@@ -243,7 +243,7 @@ def _run(work, suite_id, phase, spec, run_id, env, cancel=None):
         home = temporary / 'home'
         home.mkdir(exist_ok=True, mode=0o700)
         env = {**env, 'HOME':str(home), 'TMPDIR':str(temporary),
-               'PYTHONPATH':str(work/'.test-deps/workspace')+os.pathsep+str(work)}
+               'PYTHONPATH':str(work/'.test-deps/workspace')+os.pathsep+str(work)+os.pathsep+str(work/'scripts')}
     if not native:
         cache=download_cache()
         command = ['docker', 'run', '--pull=never', '--rm', '--name', name, '--label','org.lifetech.worker=true','--label','org.lifetech.job='+name,'--label','org.lifetech.group='+run_id, '--user', env.get('ORGANIZATION_CONTAINER_USER', str(os.getuid()) + ':' + str(os.getgid())), '-e', 'HOME=/tmp', '--cpus', str(spec.get('cpus',2)), '--memory', str(spec.get('memory_mb',3072))+'m',
@@ -253,7 +253,7 @@ def _run(work, suite_id, phase, spec, run_id, env, cancel=None):
                    '--mount', 'type=bind,src=' + str(cache) + ',dst=/cache',
                    '-e','npm_config_cache=/cache/npm','-e','PIP_CACHE_DIR=/cache/pip',
                    '-e','PIP_DISABLE_PIP_VERSION_CHECK=1', '-w', '/work/' + spec['cwd'],
-                   '-e', 'CI=true', '-e', 'PYTHONPATH=/work/.test-deps/' + spec.get('base',suite_id) + ':/work', '-e', 'SECRET_KEY=distributed-tests-only', '-e', 'DATABASE_URL=postgresql+asyncpg://test:test@127.0.0.1/test',
+                   '-e', 'CI=true', '-e', 'PYTHONPATH=/work/.test-deps/' + spec.get('base',suite_id) + ':/work:/work/scripts', '-e', 'SECRET_KEY=distributed-tests-only', '-e', 'DATABASE_URL=postgresql+asyncpg://test:test@127.0.0.1/test',
                    '-e', 'PIDP_BUILD_COMMIT=' + env['PIDP_BUILD_COMMIT'], '-e', 'PIDP_BUILD_DIRTY=false',
                    '-e', 'ORGPORTAL_BUILD_COMMIT=' + env['ORGPORTAL_BUILD_COMMIT'], '-e', 'ORGPORTAL_BUILD_DIRTY=false',
                    spec['image'], *command]
