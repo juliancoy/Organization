@@ -1,0 +1,1 @@
+../GenomeHarbor/tests/test_wgs_distributed_verify.py

@@ -1,4 +1,4 @@
--e .
+-e ./JSwarm
 docker>=7,<8
 cryptography>=43
 boto3>=1.35,<2

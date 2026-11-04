@@ -1,4 +1,6 @@
 # Directory URL (independent repositories, never submodules)
+JSwarm https://github.com/juliancoy/JSwarm.git
+GenomeHarbor https://github.com/juliancoy/GenomeHarbor.git
 CodeCollective https://github.com/juliancoy/CodeCollective.git
 Deism https://github.com/juliancoy/Deism.git
 OrgPortal https://github.com/juliancoy/OrgPortal.git

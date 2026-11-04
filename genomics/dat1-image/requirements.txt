@@ -1,2 +1,0 @@
-networkx==1.11 --hash=sha256:1b229b54fe9ccb009cee4de02a88552191497a542a7d5d34adab216b9f15c1ff
-decorator==4.4.2 --hash=sha256:41fa54c2a0cc4ba648be4fd43cff00aedf5b9465c9bf18d64325bc225f08f760

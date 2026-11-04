@@ -1,0 +1,1 @@
+../GenomeHarbor/tests/test_shared_bwa_reference.py

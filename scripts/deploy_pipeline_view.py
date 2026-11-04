@@ -1,0 +1,1 @@
+../JSwarm/scripts/deploy_pipeline_view.py

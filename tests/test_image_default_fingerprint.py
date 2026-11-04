@@ -1,0 +1,1 @@
+../JSwarm/tests/test_image_default_fingerprint.py

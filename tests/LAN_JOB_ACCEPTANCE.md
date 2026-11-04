@@ -1,0 +1,1 @@
+../JSwarm/tests/LAN_JOB_ACCEPTANCE.md

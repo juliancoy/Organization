@@ -1,0 +1,1 @@
+../JSwarm/scripts/deploy_stream_work.py

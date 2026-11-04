@@ -312,3 +312,7 @@ resource collectors in the node image. `./swarm-node monitor` opens the local TU
 available at **http://map.local/monitor.html** with Memory, CPU, GPU, Disk, Network
 and LAN tabs. Native monitor updates use the existing authenticated enrollment
 and can run alongside busy workers without restarting them.
+
+## Genomic and swarm source ownership
+
+Genomic code now lives in [GenomeHarbor](GenomeHarbor/README.md), an independent local Git repository. Swarm runtime, Docker scripts, node images and fleet control live in [JSwarm](JSwarm/README.md), also an independent local repository. Legacy paths are compatibility symlinks. Keep both directories adjacent in this workspace; private inputs and runtime state retain their existing locations. Remotes are not configured yet.

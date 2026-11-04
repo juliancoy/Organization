@@ -1,0 +1,1 @@
+../JSwarm/scripts/deploy_swarm_bulk.py

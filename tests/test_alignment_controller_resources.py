@@ -1,0 +1,1 @@
+../GenomeHarbor/tests/test_alignment_controller_resources.py
