@@ -116,6 +116,13 @@ volume namespace by default. Use `./run.py --help` for configuration.
 `run.py` runs inside `lifetech-launcher` (or `<prefix>-launcher` for another
 namespace). It stays visible after startup; use `docker logs -f lifetech-launcher`
 for its console and `docker stop lifetech-launcher` to stop the launcher.
+Use `python3 run.py --stop` to stop the local Organization runtime, or
+`python3 run.py --stop --all` to include every enrolled LAN node. This stops
+Organization user services, timers, workers and application containers and
+pauses new worker admission. Containers and stored data are retained. Runtime
+service masks in `$XDG_RUNTIME_DIR/systemd/user.control/` prevent automatic
+restarts until reboot. To resume a unit earlier, remove its mask in that
+directory and run `systemctl --user daemon-reload` before starting it.
 The machine inspector marks launcher containers in biotech gold (`#D4AF37`).
 The image packages the installed Python 3.12 launcher dependencies without package
 downloads. The launcher uses the host Docker CLI and socket, with the workspace mounted at
