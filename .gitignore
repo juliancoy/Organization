@@ -597,3 +597,4 @@
 !/tests/test_worker_maintenance.py
 
 !/scripts/benchmark_reference_memory.py
+!/scripts/node_signon.py
