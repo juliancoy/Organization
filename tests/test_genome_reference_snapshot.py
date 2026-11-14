@@ -1,1 +1,1 @@
-../GenomeHarbor/tests/test_genome_reference_snapshot.py
+../HarborGenetics/tests/test_genome_reference_snapshot.py

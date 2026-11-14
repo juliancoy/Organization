@@ -1,1 +1,1 @@
-../GenomeHarbor/scripts/wgs_preparation_queue.py
+../HarborGenetics/scripts/wgs_preparation_queue.py

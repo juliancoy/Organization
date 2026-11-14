@@ -1,1 +1,1 @@
-../GenomeHarbor/tests/test_network_reference_cache.py
+../HarborGenetics/tests/test_network_reference_cache.py

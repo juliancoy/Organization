@@ -1,1 +1,1 @@
-../GenomeHarbor/tests/test_wgs_download_retry.py
+../HarborGenetics/tests/test_wgs_download_retry.py

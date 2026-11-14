@@ -1,1 +1,1 @@
-../GenomeHarbor/tests/test_wgs_swarm_download.py
+../HarborGenetics/tests/test_wgs_swarm_download.py

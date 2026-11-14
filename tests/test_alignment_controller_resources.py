@@ -1,1 +1,1 @@
-../GenomeHarbor/tests/test_alignment_controller_resources.py
+../HarborGenetics/tests/test_alignment_controller_resources.py

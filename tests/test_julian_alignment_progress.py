@@ -1,1 +1,1 @@
-../GenomeHarbor/tests/test_julian_alignment_progress.py
+../HarborGenetics/tests/test_julian_alignment_progress.py

@@ -1,1 +1,1 @@
-../GenomeHarbor/tests/test_genomics_depth.py
+../HarborGenetics/tests/test_genomics_depth.py

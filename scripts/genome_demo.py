@@ -1,1 +1,1 @@
-../GenomeHarbor/scripts/genome_demo.py
+../HarborGenetics/scripts/genome_demo.py

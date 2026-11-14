@@ -1,1 +1,1 @@
-../GenomeHarbor/tests/test_genomics_distributed.py
+../HarborGenetics/tests/test_genomics_distributed.py

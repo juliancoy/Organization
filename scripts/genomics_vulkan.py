@@ -1,1 +1,1 @@
-../GenomeHarbor/scripts/genomics_vulkan.py
+../HarborGenetics/scripts/genomics_vulkan.py

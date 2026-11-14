@@ -1,1 +1,1 @@
-../GenomeHarbor/tests/test_huref_evidence.py
+../HarborGenetics/tests/test_huref_evidence.py

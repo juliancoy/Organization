@@ -1,1 +1,1 @@
-../GenomeHarbor/scripts/build_vulkan_followup.py
+../HarborGenetics/scripts/build_vulkan_followup.py

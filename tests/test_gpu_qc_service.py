@@ -1,1 +1,1 @@
-../GenomeHarbor/tests/test_gpu_qc_service.py
+../HarborGenetics/tests/test_gpu_qc_service.py

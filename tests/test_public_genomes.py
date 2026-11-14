@@ -1,1 +1,1 @@
-../GenomeHarbor/tests/test_public_genomes.py
+../HarborGenetics/tests/test_public_genomes.py

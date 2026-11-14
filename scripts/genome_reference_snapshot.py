@@ -1,1 +1,1 @@
-../GenomeHarbor/scripts/genome_reference_snapshot.py
+../HarborGenetics/scripts/genome_reference_snapshot.py

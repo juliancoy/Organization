@@ -1,1 +1,1 @@
-../GenomeHarbor/tests/test_shard_qc_deployment.py
+../HarborGenetics/tests/test_shard_qc_deployment.py

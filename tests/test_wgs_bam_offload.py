@@ -1,1 +1,1 @@
-../GenomeHarbor/tests/test_wgs_bam_offload.py
+../HarborGenetics/tests/test_wgs_bam_offload.py

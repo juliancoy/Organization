@@ -366,6 +366,7 @@
 
 # Independent genomic and swarm repositories; retain legacy path links.
 /GenomeHarbor/
+/HarborGenetics/
 /JSwarm/
 !/genomics
 !/docker_utils

@@ -1,1 +1,1 @@
-../GenomeHarbor/tests/test_wgs_paired_shards.py
+../HarborGenetics/tests/test_wgs_paired_shards.py

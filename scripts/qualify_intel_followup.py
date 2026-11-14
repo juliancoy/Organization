@@ -1,1 +1,1 @@
-../GenomeHarbor/scripts/qualify_intel_followup.py
+../HarborGenetics/scripts/qualify_intel_followup.py

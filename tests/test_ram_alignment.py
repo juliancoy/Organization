@@ -1,1 +1,1 @@
-../GenomeHarbor/tests/test_ram_alignment.py
+../HarborGenetics/tests/test_ram_alignment.py

@@ -1,1 +1,1 @@
-../GenomeHarbor/tests/test_genomics_dat1.py
+../HarborGenetics/tests/test_genomics_dat1.py

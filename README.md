@@ -322,4 +322,4 @@ and can run alongside busy workers without restarting them.
 
 ## Genomic and swarm source ownership
 
-Genomic code now lives in [Harbor Genetics](GenomeHarbor/README.md), an independent local Git repository. Swarm runtime, Docker scripts, node images and fleet control live in [JSwarm](JSwarm/README.md), also an independent local repository. Legacy paths are compatibility symlinks. Keep both directories adjacent in this workspace; private inputs and runtime state retain their existing locations. Git remotes are configured for both repositories.
+Genomic code now lives in [Harbor Genetics](HarborGenetics/README.md), an independent local Git repository. Swarm runtime, Docker scripts, node images and fleet control live in [JSwarm](JSwarm/README.md), also an independent local repository. Legacy paths are compatibility symlinks. Keep both directories adjacent in this workspace; private inputs and runtime state retain their existing locations. Git remotes are configured for both repositories.

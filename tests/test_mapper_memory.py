@@ -1,1 +1,1 @@
-../GenomeHarbor/tests/test_mapper_memory.py
+../HarborGenetics/tests/test_mapper_memory.py

@@ -1,1 +1,1 @@
-../GenomeHarbor/tests/test_alignment_oom_recovery.py
+../HarborGenetics/tests/test_alignment_oom_recovery.py

@@ -1,1 +1,1 @@
-../GenomeHarbor/tests/test_wgs_single_copy_worker.py
+../HarborGenetics/tests/test_wgs_single_copy_worker.py

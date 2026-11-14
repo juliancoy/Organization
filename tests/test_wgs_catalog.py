@@ -1,1 +1,1 @@
-../GenomeHarbor/tests/test_wgs_catalog.py
+../HarborGenetics/tests/test_wgs_catalog.py

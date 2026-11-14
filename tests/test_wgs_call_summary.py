@@ -1,1 +1,1 @@
-../GenomeHarbor/tests/test_wgs_call_summary.py
+../HarborGenetics/tests/test_wgs_call_summary.py

@@ -1,1 +1,1 @@
-../GenomeHarbor/tests/test_alignment_phase_timing.py
+../HarborGenetics/tests/test_alignment_phase_timing.py

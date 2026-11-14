@@ -1,1 +1,1 @@
-../GenomeHarbor/tests/test_genome_composition.py
+../HarborGenetics/tests/test_genome_composition.py

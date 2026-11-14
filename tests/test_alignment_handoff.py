@@ -1,1 +1,1 @@
-../GenomeHarbor/tests/test_alignment_handoff.py
+../HarborGenetics/tests/test_alignment_handoff.py

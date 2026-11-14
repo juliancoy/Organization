@@ -1,1 +1,1 @@
-../GenomeHarbor/tests/test_huref_compare_worker.py
+../HarborGenetics/tests/test_huref_compare_worker.py

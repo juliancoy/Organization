@@ -1,1 +1,1 @@
-../GenomeHarbor/tests/test_julian_huref_align.py
+../HarborGenetics/tests/test_julian_huref_align.py

@@ -1,1 +1,1 @@
-../GenomeHarbor/tests/test_alignment_scratch.py
+../HarborGenetics/tests/test_alignment_scratch.py

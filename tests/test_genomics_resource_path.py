@@ -1,1 +1,1 @@
-../GenomeHarbor/tests/test_genomics_resource_path.py
+../HarborGenetics/tests/test_genomics_resource_path.py
