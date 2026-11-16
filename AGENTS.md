@@ -1,5 +1,11 @@
 # Workspace instructions
 
+## LifeTech email campaigns
+
+- Maintain LifeTech's private OrgPortal organization mailing list (`ef646755-9443-4c7b-ba4b-a7a29754f666`) as the source for future campaign audiences. Import authorized external audiences with their source recorded, using live organizer permissions and the exact preview/apply receipts. Preserve existing opt-outs, suppressions and bounces; do not create accounts or memberships for email-only contacts.
+- Every future campaign email must include a working recipient-specific unsubscribe link that updates LifeTech's private email preferences. Prefer the managed campaign sender, which checks preferences before delivery and adds unsubscribe headers. For an explicitly authorized external send, use `prepare_email_contact_link` for the exact recipient and verify current subscription, suppression and bounce eligibility before sending. Never reuse another recipient's link or send an unresolved unsubscribe placeholder.
+- Keep audience addresses, unsubscribe tokens and send receipts private and outside public repositories, Pages and organization directories. Honor unsubscribe replies as well as link-based opt-outs. Sending still requires user authorization; a list import never authorizes email delivery.
+
 ## Network
 
 - This is a mixed IPv4/IPv6 network. Support for both address families is required because of the `xfinitywifi` upstream link; fleet connectivity must not assume IPv4-only operation.
