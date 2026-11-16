@@ -1,1 +1,0 @@
-../JSwarm/scripts/onboard_node.py
